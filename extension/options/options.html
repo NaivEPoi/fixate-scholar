@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FixatePDF settings</title>
+  <style>
+    body {
+      max-width: 560px;
+      margin: 24px auto;
+      padding: 0 16px;
+      font: 14px/1.5 system-ui, sans-serif;
+      color: light-dark(#1a1a1a, #e8e8e8);
+      background: light-dark(#ffffff, #202124);
+    }
+    h1 { font-size: 18px; }
+    h2 { font-size: 15px; margin-top: 24px; }
+    label { display: block; margin: 10px 0; }
+    .hint { color: light-dark(#5f6368, #9aa0a6); font-size: 12px; margin: 2px 0 0; }
+    textarea { width: 100%; min-height: 90px; font: 13px/1.4 monospace; }
+    input[type="number"] { width: 70px; }
+    output { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>FixatePDF settings</h1>
+
+  <h2>Typography</h2>
+  <label>
+    <input type="checkbox" id="enabled"> Enable fixation typography by default
+  </label>
+  <label>
+    Emphasis fraction <output id="fractionOut"></output><br>
+    <input type="range" id="fraction" min="0.2" max="0.6" step="0.05">
+    <p class="hint">How much of each word's start is bolded.</p>
+  </label>
+  <label>
+    <input type="checkbox" id="smartSyllable"> Syllable-aware emphasis
+    <p class="hint">Caps the bolded prefix at the first syllable boundary.</p>
+  </label>
+  <label>
+    Bold weight
+    <input type="number" id="boldWeight" min="500" max="900" step="100">
+  </label>
+  <label>
+    Emphasize every Nth word
+    <input type="number" id="saccade" min="1" max="4" step="1">
+    <p class="hint">1 = every word. Higher values create a sparser rhythm.</p>
+  </label>
+
+  <h2>PDF interception</h2>
+  <label>
+    Bypassed sites (one hostname per line) — PDFs from these open in Chrome's native viewer:
+    <textarea id="bypassOrigins" placeholder="example.com&#10;intranet.mycompany.org"></textarea>
+  </label>
+
+  <p class="hint">
+    Local files: enable “Allow access to file URLs” for this extension in
+    chrome://extensions to read file:// PDFs.
+  </p>
+
+  <script src="options.mjs" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "FixatePDF — Guided-Reading PDF Viewer",
+  "version": "0.1.0",
+  "description": "Read PDFs with fixation-guided typography: leading word emphasis that guides the eye, plus reference lookup for academic papers.",
+  "minimum_chrome_version": "128",
+  "permissions": [
+    "declarativeNetRequestWithHostAccess",
+    "webNavigation",
+    "storage",
+    "contextMenus",
+    "tabs"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background/service-worker.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "FixatePDF"
+  },
+  "options_page": "options/options.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["vendor/pdfjs/web/viewer.html"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

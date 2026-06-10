@@ -1,0 +1,7 @@
+node_modules/
+TRADEMARKS.md
+extension/vendor/
+dist/
+*.zip
+test/fixtures/*.pdf
+test/out/

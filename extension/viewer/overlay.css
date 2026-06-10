@@ -1,0 +1,85 @@
+/* FixatePDF overlay styles. Loaded after the stock PDF.js viewer.css. */
+
+:root {
+  /* These match the rendered PDF page (canvas), which is independent of the
+     browser color scheme — pages are white unless the document says otherwise. */
+  --fx-text-color: #1a1a1a;
+  --fx-mask-bg: #ffffff;
+  --fx-bold-weight: 700;
+}
+
+/* With the mode on, the text layer becomes the visible text. */
+#viewerContainer.fx-on .textLayer :is(span, br) {
+  color: var(--fx-text-color) !important;
+}
+
+#viewerContainer.fx-on .textLayer .fx-b {
+  font-weight: var(--fx-bold-weight);
+}
+
+/* Per-span masks covering the duplicate canvas glyphs. Sits between the
+   canvasWrapper and the textLayer (same stacking context, earlier sibling). */
+.fx-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: clip;
+  pointer-events: none;
+  display: none;
+}
+
+#viewerContainer.fx-on .fx-mask {
+  display: block;
+}
+
+.fx-mask > div {
+  position: absolute;
+  background: var(--fx-mask-bg);
+}
+
+/* Toolbar toggle button */
+#fxToggleButton::before {
+  content: "";
+  -webkit-mask-image: var(--fx-icon);
+  mask-image: var(--fx-icon);
+}
+
+#fxToggleButton.toggled {
+  background-color: var(--toggled-btn-bg-color);
+}
+
+/* Citation links and hover popup (references feature) */
+.fx-cite {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.fx-cite-popup {
+  position: absolute;
+  z-index: 10000;
+  max-width: 420px;
+  padding: 10px 12px;
+  font: 12px/1.45 system-ui, sans-serif;
+  color: light-dark(#1a1a1a, #e8e8e8);
+  background: light-dark(#ffffff, #2a2a2e);
+  border: 1px solid light-dark(#c0c0c6, #52525e);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+}
+
+.fx-cite-popup .fx-cite-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 12px;
+}
+
+.fx-cite-popup a {
+  color: light-dark(#0b57d0, #8ab4f8);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.fx-cite-popup a:hover {
+  text-decoration: underline;
+}

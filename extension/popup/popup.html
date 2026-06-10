@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>FixatePDF</h1>
+
+  <label class="row switch">
+    <span>Fixation typography</span>
+    <input type="checkbox" id="enabled">
+  </label>
+
+  <label class="row">
+    <span>Emphasis <output id="fractionOut">40%</output></span>
+    <input type="range" id="fraction" min="0.2" max="0.6" step="0.05">
+  </label>
+
+  <label class="row">
+    <span>Bold weight <output id="weightOut">700</output></span>
+    <input type="range" id="boldWeight" min="500" max="900" step="100">
+  </label>
+
+  <label class="row switch">
+    <span>Syllable-aware emphasis</span>
+    <input type="checkbox" id="smartSyllable">
+  </label>
+
+  <label class="row switch" title="Don't open this site's PDFs in FixatePDF">
+    <span>Bypass current site</span>
+    <input type="checkbox" id="bypassSite">
+  </label>
+
+  <div class="row footer">
+    <a href="#" id="openOptions">All settings</a>
+  </div>
+
+  <script src="popup.mjs" type="module"></script>
+</body>
+</html>

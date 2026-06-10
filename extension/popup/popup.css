@@ -1,0 +1,44 @@
+body {
+  width: 260px;
+  margin: 0;
+  padding: 12px 14px;
+  font: 13px/1.4 system-ui, sans-serif;
+  color: light-dark(#1a1a1a, #e8e8e8);
+  background: light-dark(#ffffff, #2a2a2e);
+}
+
+h1 {
+  font-size: 14px;
+  margin: 0 0 10px;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.row.switch {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.row span {
+  display: flex;
+  justify-content: space-between;
+}
+
+input[type="range"] {
+  width: 100%;
+}
+
+.footer {
+  margin: 4px 0 0;
+}
+
+.footer a {
+  color: light-dark(#0b57d0, #8ab4f8);
+  text-decoration: none;
+}

@@ -1,0 +1,13 @@
+{
+  "name": "fixate-pdf",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension: academic PDF viewer with fixation-guided typography and reference lookup",
+  "type": "module",
+  "scripts": {
+    "fetch-pdfjs": "node scripts/fetch-pdfjs.mjs",
+    "test": "node scripts/check-naming.mjs && node --test \"test/unit/*.test.mjs\"",
+    "package": "node scripts/package.mjs"
+  },
+  "license": "Apache-2.0"
+}
