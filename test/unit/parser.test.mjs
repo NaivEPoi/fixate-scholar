@@ -136,3 +136,23 @@ test("guessTitle falls back to raw prefix", () => {
   const t = guessTitle("short unparseable entry text");
   assert.equal(t, "short unparseable entry text");
 });
+
+test("extracts DOI from entry, stripping trailing punctuation", () => {
+  const doc = lines([
+    "References",
+    "[1] A. Author. Some paper title here. Journal, 2021. doi:10.1234/abc.def-5.",
+    "[2] B. Author. Another fine paper title. In CHI, 2022.",
+    "[3] C. Author. A third paper title here. In CHI, 2023.",
+  ]);
+  const entries = parseReferences(doc);
+  assert.equal(entries[0].doi, "10.1234/abc.def-5");
+  assert.equal(entries[1].doi, null);
+});
+
+test("findCitations matches across reassembled line wraps", () => {
+  // Spans concatenate without spaces; a wrapped citation reassembles like:
+  const joined = "as shown (Smith et al.,2020) and in [12,13] elsewhere";
+  const found = findCitations(joined);
+  assert.equal(found.length, 2);
+  assert.deepEqual(found.flatMap((f) => f.keys).sort(), ["12", "13", "Smith-2020"]);
+});

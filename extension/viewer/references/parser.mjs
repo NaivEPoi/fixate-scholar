@@ -124,11 +124,14 @@ function buildEntry(group) {
   }
   const surname = /\p{Lu}[\p{L}'’-]+/u.exec(raw)?.[0] ?? null;
   const year = YEAR.exec(raw)?.[0] ?? null;
+  const doi =
+    /\b10\.\d{4,9}\/[^\s"',;]+/.exec(raw)?.[0].replace(/[).,;]+$/, "") ?? null;
   return {
     number,
     label: number !== null ? String(number) : surname && year ? `${surname}-${year}` : null,
     surname,
     year,
+    doi,
     raw,
     title: guessTitle(raw),
     page: first.page,

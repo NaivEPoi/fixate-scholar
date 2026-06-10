@@ -114,3 +114,31 @@ app.eventBus.on("textlayerrendered", async (evt) => {
 app.eventBus.on("documentloaded", () => {
   references.onDocumentLoaded(app.pdfDocument);
 });
+
+// Auth-gated or otherwise unfetchable PDFs: offer the native viewer, which
+// re-navigates with the page's own cookies/session semantics.
+app.eventBus.on("documenterror", () => {
+  if (document.getElementById("fxLoadError")) return;
+  const search = window.location.search;
+  if (!search.startsWith("?file=") || !chrome.runtime?.sendMessage) return;
+  let url;
+  try {
+    url = decodeURIComponent(search.slice(6));
+  } catch {
+    return;
+  }
+  if (!/^(https?|file):/.test(url)) return;
+  const banner = document.createElement("div");
+  banner.id = "fxLoadError";
+  banner.className = "fx-load-error";
+  banner.append("FixatePDF couldn't load this document. ");
+  const link = document.createElement("a");
+  link.textContent = "Open in the browser's native viewer";
+  link.href = "#";
+  link.addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.runtime.sendMessage({ type: "fx-bypass-once", url });
+  });
+  banner.append(link);
+  document.getElementById("outerContainer")?.prepend(banner);
+});

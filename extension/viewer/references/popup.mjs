@@ -58,6 +58,14 @@ export class CitationPopup {
       scholar.href = `https://scholar.google.com/scholar?q=${encodeURIComponent(entry.title)}`;
       scholar.target = "_blank";
       scholar.rel = "noopener noreferrer";
+      if (entry.doi) {
+        const doi = document.createElement("a");
+        doi.textContent = "Open DOI";
+        doi.href = `https://doi.org/${encodeURIComponent(entry.doi).replaceAll("%2F", "/")}`;
+        doi.target = "_blank";
+        doi.rel = "noopener noreferrer";
+        actions.append(doi);
+      }
       const jump = document.createElement("a");
       jump.textContent = "Jump to entry";
       jump.addEventListener("click", (e) => {

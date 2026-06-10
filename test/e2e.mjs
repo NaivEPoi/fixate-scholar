@@ -175,6 +175,46 @@ try {
   writeFileSync(join(outDir, "citation-popup.png"), Buffer.from(shotPopup.data, "base64"));
   await cdp.eval(`(() => { document.querySelector('.fx-cite-popup').hidden = true; return 1; })()`);
 
+  // Cross-span citations: scan pages for a regex match in the concatenated
+  // text that straddles a span boundary, and confirm those pages' matches all
+  // received hit-targets. Not every document has one; skip if none exist.
+  const pageProbe = `(pageIndex) => {
+    const pv = window.PDFViewerApplication.pdfViewer.getPageView(pageIndex);
+    const div = pv?.textLayer?.div;
+    if (!div || !div.childElementCount) return null;
+    const spans = [...div.querySelectorAll('span')].filter(s => !s.querySelector('span'));
+    let joined = '';
+    const bounds = [];
+    for (const s of spans) {
+      joined += s.textContent;
+      bounds.push(joined.length);
+    }
+    let total = 0, crossing = 0;
+    for (const m of joined.matchAll(/\\[(\\d{1,3}(?:\\s*[,;\\u2013\\u2014-]\\s*\\d{1,3})*)\\]/g)) {
+      total++;
+      if (bounds.some(b => b > m.index && b < m.index + m[0].length)) crossing++;
+    }
+    return { total, crossing, hits: pv.div.querySelectorAll('.fx-cite-hit').length };
+  }`;
+  let crossResult = null;
+  for (let p = 1; p <= state.pages && !crossResult; p++) {
+    await cdp.eval(`(() => { window.PDFViewerApplication.page = ${p}; return 1; })()`);
+    await sleep(2000);
+    const probe = await cdp.eval(`(${pageProbe})(${p - 1})`);
+    if (probe?.crossing > 0) crossResult = { page: p, ...probe };
+  }
+  if (crossResult) {
+    check(
+      "cross-span citations annotated",
+      crossResult.hits >= crossResult.total,
+      JSON.stringify(crossResult),
+    );
+  } else {
+    console.log("SKIP  cross-span citations — none straddle a span boundary in this document");
+  }
+  await cdp.eval(`(() => { window.PDFViewerApplication.page = 1; return 1; })()`);
+  await sleep(2000);
+
   // Toggle off → pristine restore.
   await cdp.eval(`(() => { document.getElementById('fxToggleButton').click(); return true; })()`);
   await sleep(1500);

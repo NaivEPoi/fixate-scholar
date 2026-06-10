@@ -58,14 +58,29 @@ export class ReferencesFeature {
     textLayerDiv.after(layer);
     const layerRect = layer.getBoundingClientRect();
 
+    // Citations frequently wrap across text-layer spans ("(Smith et al.," /
+    // "2020)"), so match against the concatenated page text and map match
+    // offsets back to the contributing spans. Spans carry no trailing
+    // whitespace, so plain concatenation reassembles split tokens; the
+    // citation regexes already tolerate missing/extra inner whitespace.
+    const segments = [];
+    let joined = "";
     for (const span of textLayerDiv.querySelectorAll("span")) {
-      if (span.childElementCount > 0 && !span.querySelector(".fx-b")) continue;
+      if (span.querySelector("span")) continue; // markedContent wrappers
       const text = span.textContent;
-      if (text.length < 3) continue;
-      for (const cite of findCitations(text)) {
-        const entries = resolveCitation(cite.keys, this.#entries);
-        if (!entries.length) continue;
-        for (const rect of rangeRects(span, cite.start, cite.end)) {
+      if (!text) continue;
+      segments.push({ span, start: joined.length, end: joined.length + text.length });
+      joined += text;
+    }
+
+    for (const cite of findCitations(joined)) {
+      const entries = resolveCitation(cite.keys, this.#entries);
+      if (!entries.length) continue;
+      for (const seg of segments) {
+        if (seg.end <= cite.start || seg.start >= cite.end) continue;
+        const localStart = Math.max(0, cite.start - seg.start);
+        const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
+        for (const rect of rangeRects(seg.span, localStart, localEnd)) {
           const a = document.createElement("a");
           a.className = "fx-cite-hit";
           a.style.cssText =
