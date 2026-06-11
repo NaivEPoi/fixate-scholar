@@ -52,6 +52,9 @@ test("URLs, DOIs, and emails are never emphasized", () => {
   const email = emphasizeParts("contact yilud@psu.edu for details");
   const emailBold = email.parts.filter((p) => p.bold).map((p) => p.text);
   assert.ok(!emailBold.some((t) => /yilud|psu|edu/.test(t)));
+  const braced = emphasizeParts("authors {kjt5562, abdullah.ishtiaq, yiludong, hussain1}@psu.edu wrote this");
+  const bracedBold = braced.parts.filter((p) => p.bold).map((p) => p.text);
+  assert.deepEqual(bracedBold, ["aut", "wr", "th"]); // authors, wrote, this only
   const doi = emphasizeParts("the published version is available at doi.org/10.1145/3576915 online");
   assert.ok(!doi.parts.some((p) => p.bold && /doi|org/.test(p.text)));
   // round-trip safety with links present

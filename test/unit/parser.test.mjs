@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseReferences,
+  findReferencesBody,
   guessTitle,
   findCitations,
   resolveCitation,
@@ -85,6 +86,17 @@ test("APA title extraction", () => {
 
 test("returns empty when no references heading", () => {
   assert.deepEqual(parseReferences(lines(["Introduction", "Some text"])), []);
+});
+
+test("findReferencesBody returns heading and body lines, stopping at appendix", () => {
+  const doc = [
+    ...NUMERIC_DOC,
+    ...lines(["A Appendix", "Appendix prose that should be processed normally."], { startY: 500 }),
+  ];
+  const { heading, body } = findReferencesBody(doc);
+  assert.equal(heading.text, "References");
+  assert.equal(body.length, 6); // the six bibliography lines only
+  assert.ok(body.every((l) => !/Appendix/.test(l.text)));
 });
 
 test("stops at appendix", () => {

@@ -69,12 +69,13 @@ export async function extractLines(pdfDocument) {
     lines.sort((a, b) => a.column - b.column || b.y - a.y || a.x - b.x);
     allLines.push(...lines);
   }
-  return allLines.map(({ text, x, y, page, h, column }) => ({
+  return allLines.map(({ text, x, y, page, h, column, endX }) => ({
     text: text.trim(),
     x,
     y,
     page,
     h,
     column,
+    endX,
   }));
 }

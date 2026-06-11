@@ -47,22 +47,40 @@ export class TypographyEngine {
   #enabled = false;
   #pristine = new WeakMap(); // span -> { html, scaleX, fontFamily }
   #pending = new Map(); // pageNumber -> cancel flag holder
-  #skipAfter = null; // { page, y } — References heading; nothing below it is touched
+  #refsBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — bibliography region
+  #contentStart = null; // { page, y } — the Abstract heading; front matter above it
 
   constructor(app, settings) {
     this.#app = app;
     this.#settings = settings;
   }
 
-  /** References start here — leave the bibliography as the author set it.
-   *  Re-processes already-rendered pages at/after the heading. */
-  setSkipAfter(pos) {
-    this.#skipAfter = pos;
-    globalThis.__fxSkipAfter = pos; // test introspection
+  /** The article body starts here (Abstract heading). Cover pages and the
+   *  title/authors/emails block before it stay untouched. */
+  setContentStart(pos) {
+    this.#contentStart = pos;
+    globalThis.__fxContentStart = pos; // test introspection
     if (!this.#enabled || !pos) return Promise.resolve();
     const promises = [];
     this.#eachRenderedPage((pv) => {
-      if (pv.id >= pos.page) {
+      if (pv.id <= pos.page) {
+        this.#restorePage(pv);
+        promises.push(this.#processPage(pv));
+      }
+    });
+    return Promise.all(promises);
+  }
+
+  /** The bibliography occupies exactly these line boxes (PDF coordinates,
+   *  column-aware) — leave them as the author set them. Text after the
+   *  region (appendices) is still processed. Re-processes affected pages. */
+  setRefsRegion(boxesByPage) {
+    this.#refsBoxes = boxesByPage;
+    globalThis.__fxRefPages = boxesByPage ? [...boxesByPage.keys()] : []; // test introspection
+    if (!this.#enabled || !boxesByPage?.size) return Promise.resolve();
+    const promises = [];
+    this.#eachRenderedPage((pv) => {
+      if (boxesByPage.has(pv.id)) {
         this.#restorePage(pv);
         promises.push(this.#processPage(pv));
       }
@@ -246,32 +264,47 @@ export class TypographyEngine {
     //    caption lines,
     //  - larger-than-body text (paper title, section headings),
     //  - math/symbol faces,
+    //  - running headers/footers and the left/right margins (page numbers,
+    //    proceedings lines, arXiv watermarks),
     //  - the page-1 header block (title/authors/emails) above "Abstract",
-    //  - everything from the References heading on (setSkipAfter).
+    //  - the bibliography region (setRefsRegion) — appendices after it are
+    //    processed normally.
     const dominant = this.#dominantHeight(allPairs);
     const fontCache = new Map();
-    const abstractIdx =
-      pageNumber === 1
-        ? allPairs.findIndex((p) => p.item && ABSTRACT.test(p.item.str))
-        : -1;
-    const headerBlock =
-      abstractIdx > 0
-        ? new Set(allPairs.slice(0, abstractIdx + 1).map((p) => p.div))
-        : null;
+    const [vx0, vy0, vx1, vy1] = pageView.pdfPage.view;
+    const pageW = vx1 - vx0;
+    const pageH = vy1 - vy0;
+    // Document-level cut from setContentStart; until it arrives, a per-page
+    // fast path keeps the common single-cover case (Abstract on page 1) right.
+    // y grows upward in PDF coordinates: "above the heading" means y greater.
+    let contentStart = this.#contentStart;
+    if (!contentStart && pageNumber === 1) {
+      const abstractPair = allPairs.find((p) => p.item && ABSTRACT.test(p.item.str));
+      if (abstractPair) {
+        contentStart = { page: 1, y: abstractPair.item.transform[5] };
+      }
+    }
+    const refsBoxes = this.#refsBoxes?.get(pageNumber);
     const pairs = allPairs.filter(({ div, item }) => {
       if (!div?.isConnected || div.dataset.fxDone) return false;
       const text = div.textContent;
       if (!text || text.trim().length < 2) return false;
       if (CAPTION.test(text)) return false;
-      if (headerBlock?.has(div)) return false;
       if (dominant && item?.height) {
         if (item.height < dominant * 0.85) return false;
         if (item.height > dominant * 1.15) return false;
       }
       if (this.#isSpecialFont(pageView, item?.fontName, fontCache)) return false;
-      if (this.#skipAfter && item?.transform) {
-        if (pageNumber > this.#skipAfter.page) return false;
-        if (pageNumber === this.#skipAfter.page && item.transform[5] <= this.#skipAfter.y + 2) {
+      if (item?.transform) {
+        const x = item.transform[4];
+        const y = item.transform[5];
+        if (y - vy0 < pageH * 0.06 || y - vy0 > pageH * 0.94) return false;
+        if (x - vx0 < pageW * 0.04) return false;
+        if (contentStart) {
+          if (pageNumber < contentStart.page) return false;
+          if (pageNumber === contentStart.page && y >= contentStart.y - 1) return false;
+        }
+        if (refsBoxes?.some((b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2)) {
           return false;
         }
       }

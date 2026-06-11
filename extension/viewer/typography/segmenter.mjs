@@ -57,8 +57,10 @@ export function emphasisLength(word, { fraction = 0.4, smartSyllable = false } =
   return Math.min(n, letters - 1 || 1);
 }
 
-// Character ranges that must never be emphasized: URLs, DOIs, emails.
-const LINKLIKE = /(?:https?:\/\/|www\.|doi\.org\/|ftp:\/\/)[^\s]+|[^\s@]+@[^\s@]+\.[A-Za-z]{2,}/g;
+// Character ranges that must never be emphasized: URLs, DOIs, emails —
+// including brace-grouped academic address lists like {a, b.c, d}@psu.edu.
+const LINKLIKE =
+  /(?:https?:\/\/|www\.|doi\.org\/|ftp:\/\/)[^\s]+|\{[^{}]*\}@[^\s@]+\.[A-Za-z]{2,}|[^\s@{}]+@[^\s@]+\.[A-Za-z]{2,}/g;
 
 function linkRanges(text) {
   const ranges = [];
