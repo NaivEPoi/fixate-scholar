@@ -158,15 +158,23 @@ try {
         const median = sizes[Math.floor(sizes.length / 2)];
         out.headingOk = sizes.every(s => s <= median * 1.3);
 
-        // Page-1 header block: nothing processed above the Abstract heading.
+        // Front matter: nothing processed before the Abstract heading —
+        // neither on cover pages nor in the title/authors/emails block.
         out.headerOk = true;
-        const page1 = document.querySelector('.page[data-page-number="1"]');
-        const abstract = [...(page1?.querySelectorAll('.textLayer span') ?? [])]
-          .find(s => /^\\s*abstract\\s*$/i.test(s.textContent));
-        if (abstract) {
-          const cut = abstract.getBoundingClientRect().top;
-          out.headerOk = !done().some(s =>
-            s.closest('.page') === page1 && s.getBoundingClientRect().bottom < cut);
+        const cs = globalThis.__fxContentStart;
+        if (cs) {
+          const abstractPage = document.querySelector('.page[data-page-number="' + cs.page + '"]');
+          const abstract = [...(abstractPage?.querySelectorAll('.textLayer span') ?? [])]
+            .find(s => /^\\s*abstract\\s*$/i.test(s.textContent));
+          const cut = abstract?.getBoundingClientRect().top ?? null;
+          out.headerOk = !done().some(s => {
+            const n = parseInt(s.closest('.page')?.dataset.pageNumber ?? '0', 10);
+            if (n < cs.page) return true;
+            if (n === cs.page && cut !== null) {
+              return s.getBoundingClientRect().bottom < cut;
+            }
+            return false;
+          });
         }
 
         // URLs/emails inside processed spans must carry no <b> in the link.
@@ -185,18 +193,40 @@ try {
           }
         }
 
-        // References section: render its pages and expect them untouched
-        // below the heading.
+        // Running headers/footers: nothing processed in the outer 5.5% bands.
+        out.footerOk = !done().some(s => {
+          const page = s.closest('.page');
+          if (!page) return false;
+          const pr = page.getBoundingClientRect();
+          const r = s.getBoundingClientRect();
+          const band = pr.height * 0.055;
+          return r.top < pr.top + band || r.bottom > pr.bottom - band;
+        });
+
+        // Bibliography region: render its pages; no span that looks like a
+        // reference entry start ("[18] Name ...") may be processed. Then the
+        // last page (appendices, when present) must still be processed.
         out.refsOk = null;
-        const skip = globalThis.__fxSkipAfter;
-        if (skip) {
-          const app = window.PDFViewerApplication;
-          app.page = Math.min(skip.page + 1, app.pagesCount);
-          await sleep(3500);
-          out.refsOk = ![...document.querySelectorAll('.page')].some(p => {
-            const n = parseInt(p.dataset.pageNumber, 10);
-            return n > skip.page && p.querySelector('.textLayer span[data-fx-done]');
-          });
+        out.appendixOk = null;
+        const refPages = globalThis.__fxRefPages ?? [];
+        const app = window.PDFViewerApplication;
+        if (refPages.length) {
+          for (const p of refPages.slice(0, 3)) {
+            app.page = p;
+            await sleep(3000);
+          }
+          out.refsOk = !done().some(s =>
+            /^\\[\\d{1,3}\\]\\s+\\p{Lu}/u.test(s.textContent) && s.textContent.length > 30);
+          const last = app.pagesCount;
+          if (!refPages.includes(last)) {
+            app.page = last;
+            await sleep(3500);
+            const lastDiv = document.querySelector('.page[data-page-number="' + last + '"]');
+            const lastSpans = lastDiv?.querySelectorAll('.textLayer span') ?? [];
+            if (lastSpans.length > 40) {
+              out.appendixOk = !!lastDiv.querySelector('.textLayer span[data-fx-done]');
+            }
+          }
           app.page = 1;
         }
         return out;
@@ -210,7 +240,7 @@ try {
     const checksOk =
       !!checks && !checks.error &&
       checks.fontOk && checks.headingOk && checks.headerOk && checks.linkOk &&
-      checks.refsOk !== false;
+      checks.footerOk && checks.refsOk !== false && checks.appendixOk !== false;
     const ok = !!state && state.pages > 0 && state.fxOn && state.bolded > 100 && checksOk;
     if (!ok) failures++;
     const warn =

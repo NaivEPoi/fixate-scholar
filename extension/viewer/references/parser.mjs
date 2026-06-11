@@ -13,14 +13,7 @@ const YEAR = /\b(19|20)\d{2}[a-z]?\b/;
  *           title:string, page:number, y:number}>} or empty list
  */
 export function parseReferences(lines) {
-  const start = findHeadingIndex(lines);
-  if (start === -1) return [];
-  const body = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (SECTION_AFTER.test(line.text) || HEADING.test(line.text)) break;
-    body.push(line);
-  }
+  const { body } = findReferencesBody(lines);
   if (body.length < 2) return [];
 
   const numericStarts = body.filter((l) => NUMERIC_MARKER.test(l.text)).length;
@@ -44,10 +37,38 @@ function findHeadingIndex(lines) {
   return -1;
 }
 
-/** Position of the References heading, for leaving the bibliography as-is. */
-export function findReferencesHeading(lines) {
-  const idx = findHeadingIndex(lines);
-  return idx === -1 ? null : { page: lines[idx].page, y: lines[idx].y };
+/**
+ * Where the article's body begins: the Abstract heading. Everything before
+ * it (branding/cover pages, title, authors, emails) is front matter that
+ * should be left as set. Null when the document has no Abstract.
+ */
+export function findContentStart(lines) {
+  const line = lines.find((l) => l.page <= 5 && /^abstract\.?$/i.test(l.text));
+  return line ? { page: line.page, y: line.y } : null;
+}
+
+/**
+ * The References heading line plus every line of the bibliography body
+ * (stopping at the next section, e.g. an appendix). These lines carry
+ * geometry (page, x..endX, y, h), so callers can leave exactly this region
+ * untouched while appendices after it are still processed.
+ */
+export function findReferencesBody(lines) {
+  const start = findHeadingIndex(lines);
+  if (start === -1) return { heading: null, body: [] };
+  const heading = lines[start];
+  // A following section may not say "appendix" (USENIX uses bare "B Title"
+  // headings), so also stop at any heading-sized line: at least as large as
+  // the References heading itself and clearly larger than the entries.
+  const entryH = lines[start + 1]?.h ?? heading.h;
+  const body = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (SECTION_AFTER.test(line.text) || HEADING.test(line.text)) break;
+    if (line.h >= heading.h * 0.9 && line.h >= entryH * 1.15) break;
+    body.push(line);
+  }
+  return { heading, body };
 }
 
 function splitByMarker(body, marker) {

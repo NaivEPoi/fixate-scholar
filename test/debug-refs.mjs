@@ -80,11 +80,26 @@ try {
       const around = last
         ? lines.slice(last.i, last.i + 12).map(l => ({ page: l.page, col: l.column, x: Math.round(l.x), text: l.text.slice(0, 90) }))
         : [];
+      const { findReferencesBody } = await import('/viewer/references/parser.mjs');
+      const { body } = findReferencesBody(lines);
+      const lastBody = body.at(-1);
+      const startIdx = lines.lastIndexOf(lines.find((l, i) => /^references$/i.test(l.text) && i > lines.length / 2) ?? null);
+      const breakZone = startIdx >= 0
+        ? lines.slice(startIdx + body.length - 1, startIdx + body.length + 5).map(l =>
+            ({ page: l.page, col: l.column, y: Math.round(l.y), h: Math.round(l.h * 100) / 100, text: l.text.slice(0, 60) }))
+        : [];
+      const afterBody = lines.filter(l =>
+        lastBody && (l.page > lastBody.page || (l.page === lastBody.page && l.y < lastBody.y - 5)));
       return {
         totalLines: lines.length,
         entries: parseReferences(lines).length,
+        refPages: globalThis.__fxRefPages,
+        bodyLines: body.length,
+        lastBodyLine: lastBody ? { page: lastBody.page, y: Math.round(lastBody.y), text: lastBody.text.slice(0, 70) } : null,
+        breakZone,
+        firstAfterBody: afterBody.slice(0, 10).map(l => ({ page: l.page, y: Math.round(l.y), text: l.text.slice(0, 70) })),
         candidates: cands.slice(-8),
-        around,
+        around: around.slice(0, 4),
       };
     })()`,
   });

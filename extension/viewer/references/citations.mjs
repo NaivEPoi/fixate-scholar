@@ -5,7 +5,8 @@
 import { extractLines } from "./extractor.mjs";
 import {
   parseReferences,
-  findReferencesHeading,
+  findReferencesBody,
+  findContentStart,
   findCitations,
   resolveCitation,
 } from "./parser.mjs";
@@ -17,8 +18,11 @@ export class ReferencesFeature {
   #popup;
   #ready = null;
 
-  /** Called with the References heading position once known. */
-  onHeadingFound = null;
+  /** Called with the bibliography line boxes (Map<page, boxes>) once known. */
+  onRefsRegion = null;
+
+  /** Called with the Abstract heading position (front matter ends there). */
+  onContentStart = null;
 
   constructor(app) {
     this.#app = app;
@@ -32,8 +36,23 @@ export class ReferencesFeature {
         const lines = await extractLines(pdfDocument);
         this.#entries = parseReferences(lines);
         globalThis.__fxRefCount = this.#entries.length; // test introspection
-        const heading = findReferencesHeading(lines);
-        if (heading) await this.onHeadingFound?.(heading);
+        const contentStart = findContentStart(lines);
+        if (contentStart) await this.onContentStart?.(contentStart);
+        const { heading, body } = findReferencesBody(lines);
+        if (heading && body.length) {
+          const boxes = new Map();
+          for (const line of [heading, ...body]) {
+            const pad = line.h * 0.7;
+            if (!boxes.has(line.page)) boxes.set(line.page, []);
+            boxes.get(line.page).push({
+              x0: line.x,
+              x1: line.endX ?? line.x + 1000,
+              y0: line.y - pad,
+              y1: line.y + pad,
+            });
+          }
+          await this.onRefsRegion?.(boxes);
+        }
         // Pages rendered before extraction finished need annotating now.
         this.reannotateRendered();
       } catch (e) {
