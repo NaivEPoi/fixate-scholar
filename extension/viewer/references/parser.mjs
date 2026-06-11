@@ -44,6 +44,12 @@ function findHeadingIndex(lines) {
   return -1;
 }
 
+/** Position of the References heading, for leaving the bibliography as-is. */
+export function findReferencesHeading(lines) {
+  const idx = findHeadingIndex(lines);
+  return idx === -1 ? null : { page: lines[idx].page, y: lines[idx].y };
+}
+
 function splitByMarker(body, marker) {
   const groups = [];
   let cur = null;

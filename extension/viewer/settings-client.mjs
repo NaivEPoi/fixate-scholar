@@ -4,11 +4,11 @@
 
 export const DEFAULTS = Object.freeze({
   enabled: true,
-  fraction: 0.4,
-  smartSyllable: false,
+  fraction: 0.4, // used when smartSyllable is off
+  smartSyllable: true, // bold the first syllable of each word
   saccade: 1,
   boldWeight: 600,
-  fontMode: "original", // "original" | "sans" | "serif"
+  fontMode: "original", // "original" | "atkinson" | "inter" | "literata"
   bypassOrigins: [],
 });
 

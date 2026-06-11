@@ -31,12 +31,30 @@ test("emphasisLength never bolds the whole multi-char word", () => {
   assert.equal(emphasisLength("abcdef", { fraction: 1 }), 5);
 });
 
-test("emphasisLength smart syllable caps at first syllable", () => {
-  // "comprehension": first syllable ~ "com" (c-o-m)
-  const plain = emphasisLength("comprehension", { fraction: 0.5 });
-  const smart = emphasisLength("comprehension", { fraction: 0.5, smartSyllable: true });
-  assert.ok(smart <= plain);
-  assert.equal(smart, 3);
+test("emphasisLength smart syllable bolds exactly the first syllable", () => {
+  // "comprehension": first syllable "com" (consonant, vowel, one consonant)
+  assert.equal(emphasisLength("comprehension", { smartSyllable: true }), 3);
+  // "reading": "read" (r + ea cluster + d)
+  assert.equal(emphasisLength("reading", { smartSyllable: true }), 4);
+  // syllable mode ignores the fraction entirely
+  assert.equal(
+    emphasisLength("comprehension", { fraction: 0.6, smartSyllable: true }),
+    3,
+  );
+  // never the whole word
+  assert.equal(emphasisLength("the", { smartSyllable: true }), 2);
+});
+
+test("non-Latin and mixed words are never emphasized", () => {
+  const greek = emphasizeParts("the αβγ decay");
+  assert.deepEqual(
+    greek.parts.filter((p) => p.bold).map((p) => p.text),
+    ["t", "de"],
+  );
+  const mixed = emphasizeParts("see x2 and H2O here");
+  const bolded = mixed.parts.filter((p) => p.bold).map((p) => p.text);
+  assert.ok(!bolded.some((t) => /\d/.test(t)));
+  assert.ok(bolded.includes("s")); // "see"
 });
 
 test("emphasizeParts splits words into bold prefix + rest", () => {

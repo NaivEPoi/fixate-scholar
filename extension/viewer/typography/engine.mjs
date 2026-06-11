@@ -19,10 +19,17 @@ import { emphasizeParts } from "./segmenter.mjs";
 
 const CHUNK = 150;
 const CAPTION = /^\s*(?:Fig(?:ure)?\.?|Table|TABLE|FIGURE)\s*\d/;
+const ABSTRACT = /^\s*abstract\s*$/i;
+// TeX/Type1 math and symbol faces — anything set in these stays as-is.
+const MATH_FONT = /CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|Math|Symbol|cmmi|cmsy|cmex|stmary|rsfs|eufm|eusm|wasy|esint|MnSymbol|AMSa|AMSb/;
 
+// Bundled reading fonts (SIL OFL, vendored by scripts/fetch-pdfjs.mjs);
+// @font-face rules live in overlay.css. These ship real 700 weights, so
+// emphasis uses true bold instead of the original-mode hairline stroke.
 const FONT_STACKS = {
-  sans: '"Segoe UI", Roboto, "Noto Sans", Arial, sans-serif',
-  serif: 'Georgia, "Noto Serif", "Times New Roman", serif',
+  atkinson: '"FX Atkinson Hyperlegible", sans-serif',
+  inter: '"FX Inter", sans-serif',
+  literata: '"FX Literata", serif',
 };
 
 export class TypographyEngine {
@@ -31,10 +38,26 @@ export class TypographyEngine {
   #enabled = false;
   #pristine = new WeakMap(); // span -> { html, transform, fontFamily }
   #pending = new Map(); // pageNumber -> cancel flag holder
+  #skipAfter = null; // { page, y } — References heading; nothing below it is touched
 
   constructor(app, settings) {
     this.#app = app;
     this.#settings = settings;
+  }
+
+  /** References start here — leave the bibliography as the author set it.
+   *  Re-processes already-rendered pages at/after the heading. */
+  setSkipAfter(pos) {
+    this.#skipAfter = pos;
+    if (!this.#enabled || !pos) return Promise.resolve();
+    const promises = [];
+    this.#eachRenderedPage((pv) => {
+      if (pv.id >= pos.page) {
+        this.#restorePage(pv);
+        promises.push(this.#processPage(pv));
+      }
+    });
+    return Promise.all(promises);
   }
 
   get enabled() {
@@ -166,6 +189,22 @@ export class TypographyEngine {
     return null; // keep whatever PDF.js set
   }
 
+  /** True when the item is set in a TeX math/symbol face. The font objects
+   *  are already resolved in commonObjs once the canvas has rendered. */
+  #isMathFont(pageView, fontName, cache) {
+    if (!fontName) return false;
+    if (cache.has(fontName)) return cache.get(fontName);
+    let mathy = false;
+    try {
+      const font = pageView.pdfPage.commonObjs.get(fontName);
+      mathy = MATH_FONT.test(font?.name ?? "");
+    } catch {
+      /* font not resolved — assume regular text */
+    }
+    cache.set(fontName, mathy);
+    return mathy;
+  }
+
   async #processPage(pageView) {
     const pageNumber = pageView.id;
     // A re-render (zoom) replaces the text layer DOM; drop any stale run.
@@ -191,15 +230,40 @@ export class TypographyEngine {
     mask.setAttribute("aria-hidden", "true");
     textLayerDiv.before(mask);
 
-    // Main-text filter: smaller-than-body text (tables, figure labels,
-    // captions, footnotes) and caption lines are left to the canvas.
+    // Main-text filter. Left to the canvas untouched:
+    //  - smaller-than-body text (tables, figure labels, footnotes) and
+    //    caption lines,
+    //  - larger-than-body text (paper title, section headings),
+    //  - math/symbol faces,
+    //  - the page-1 header block (title/authors/emails) above "Abstract",
+    //  - everything from the References heading on (setSkipAfter).
     const dominant = this.#dominantHeight(allPairs);
+    const fontCache = new Map();
+    const abstractIdx =
+      pageNumber === 1
+        ? allPairs.findIndex((p) => p.item && ABSTRACT.test(p.item.str))
+        : -1;
+    const headerBlock =
+      abstractIdx > 0
+        ? new Set(allPairs.slice(0, abstractIdx + 1).map((p) => p.div))
+        : null;
     const pairs = allPairs.filter(({ div, item }) => {
       if (!div?.isConnected || div.dataset.fxDone) return false;
       const text = div.textContent;
       if (!text || text.trim().length < 2) return false;
       if (CAPTION.test(text)) return false;
-      if (dominant && item?.height && item.height < dominant * 0.85) return false;
+      if (headerBlock?.has(div)) return false;
+      if (dominant && item?.height) {
+        if (item.height < dominant * 0.85) return false;
+        if (item.height > dominant * 1.15) return false;
+      }
+      if (this.#isMathFont(pageView, item?.fontName, fontCache)) return false;
+      if (this.#skipAfter && item?.transform) {
+        if (pageNumber > this.#skipAfter.page) return false;
+        if (pageNumber === this.#skipAfter.page && item.transform[5] <= this.#skipAfter.y + 2) {
+          return false;
+        }
+      }
       return true;
     });
 

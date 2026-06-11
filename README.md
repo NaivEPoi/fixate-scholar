@@ -10,12 +10,14 @@ code, fonts, or assets.
 
 ## Features
 
-- **Fixation typography**: per-word emphasis with a configurable fraction (30/40/50%)
-  and weight, optional syllable-aware "smart mode", optional word-skip (saccade)
-  interval. Text renders in the document's own embedded fonts at the original size by
-  default (sans/serif replacements available), and only the main body text is
-  processed — tables, figures, captions, and footnotes are left untouched. Instant
-  on/off toggle that restores the native rendering pixel-for-pixel.
+- **Fixation typography**: bolds the first syllable of each word by default (a fixed
+  configurable fraction is available instead), with adjustable weight and an optional
+  word-skip (saccade) interval. Text renders in the document's own embedded fonts at
+  the original size and color; bundled open-source reading fonts (Atkinson
+  Hyperlegible, Inter, Literata) are available as replacements. Only main body prose
+  is processed — the paper title, authors and emails, section headings, math, tables,
+  figures, captions, footnotes, and the references section are left exactly as set.
+  Instant on/off toggle that restores the native rendering pixel-for-pixel.
 - **Automatic PDF interception**: any PDF you navigate to (including links from Google
   Scholar) opens in the FixatePDF viewer. Per-site bypass list, per-document
   "open in native viewer" escape hatch, and a context-menu fallback.

@@ -1,5 +1,15 @@
 # Third-party notices
 
+## Fonts
+
+The optional reading fonts vendored into `extension/vendor/fonts/` by
+`scripts/fetch-pdfjs.mjs` are licensed under the SIL Open Font License 1.1
+(https://openfontlicense.org):
+
+- **Atkinson Hyperlegible** — Copyright Braille Institute of America, Inc.
+- **Inter** — Copyright The Inter Project Authors (rsms.me/inter)
+- **Literata** — Copyright The Literata Project Authors
+
 ## PDF.js
 
 This extension vendors the prebuilt generic viewer of

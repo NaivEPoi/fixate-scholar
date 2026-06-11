@@ -29,23 +29,25 @@
     <input type="checkbox" id="enabled"> Enable fixation typography by default
   </label>
   <label>
+    <input type="checkbox" id="smartSyllable"> First-syllable emphasis
+    <p class="hint">Bolds exactly the first syllable of each word. Uncheck to bold a
+    fixed fraction instead.</p>
+  </label>
+  <label id="fractionRow">
     Emphasis fraction <output id="fractionOut"></output><br>
     <input type="range" id="fraction" min="0.2" max="0.6" step="0.05">
-    <p class="hint">How much of each word's start is bolded.</p>
+    <p class="hint">How much of each word's start is bolded (fraction mode only).</p>
   </label>
   <label>
     Font
     <select id="fontMode">
       <option value="original">Original (the document's embedded font)</option>
-      <option value="sans">Sans-serif</option>
-      <option value="serif">Serif</option>
+      <option value="atkinson">Atkinson Hyperlegible — designed for low-vision readability</option>
+      <option value="inter">Inter — clean screen sans-serif</option>
+      <option value="literata">Literata — book-style reading serif</option>
     </select>
-    <p class="hint">Original keeps the paper's own typeface, size, and color. Pick a
-    replacement only if a document's font renders poorly.</p>
-  </label>
-  <label>
-    <input type="checkbox" id="smartSyllable"> Syllable-aware emphasis
-    <p class="hint">Caps the bolded prefix at the first syllable boundary.</p>
+    <p class="hint">Original keeps the paper's own typeface, size, and color. The
+    alternatives are bundled open-source (SIL OFL) reading fonts with true bold.</p>
   </label>
   <label>
     Bold weight

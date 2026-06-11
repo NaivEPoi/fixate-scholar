@@ -81,6 +81,8 @@ await app.initializedPromise;
 const settings = await getSettings();
 const engine = new TypographyEngine(app, settings);
 const references = new ReferencesFeature(app);
+// Leave the bibliography exactly as the author set it.
+references.onHeadingFound = (heading) => engine.setSkipAfter(heading);
 
 function applyStyleVars(s) {
   const root = document.documentElement.style;

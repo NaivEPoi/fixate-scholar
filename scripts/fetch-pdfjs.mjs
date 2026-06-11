@@ -83,9 +83,36 @@ function patch(file, anchor, replacement, marker) {
   console.log(`Patched ${file}`);
 }
 
+// Reading-friendly free fonts (all SIL OFL) offered as alternatives to the
+// document's embedded fonts. Vendored from the @fontsource npm packages via
+// jsDelivr; the exact resolved version is logged for traceability.
+const FONTS = [
+  { pkg: "@fontsource/atkinson-hyperlegible", file: "atkinson-hyperlegible-latin-{w}-normal.woff2", out: "atkinson-{w}.woff2" },
+  { pkg: "@fontsource/inter", file: "inter-latin-{w}-normal.woff2", out: "inter-{w}.woff2" },
+  { pkg: "@fontsource/literata", file: "literata-latin-{w}-normal.woff2", out: "literata-{w}.woff2" },
+];
+const FONT_WEIGHTS = ["400", "700"];
+
+async function fetchFonts() {
+  const fontsDir = join(root, "extension", "vendor", "fonts");
+  mkdirSync(fontsDir, { recursive: true });
+  for (const font of FONTS) {
+    const pkgMeta = await (await fetch(`https://cdn.jsdelivr.net/npm/${font.pkg}@5/package.json`)).json();
+    console.log(`${font.pkg}@${pkgMeta.version}`);
+    for (const w of FONT_WEIGHTS) {
+      const url = `https://cdn.jsdelivr.net/npm/${font.pkg}@${pkgMeta.version}/files/${font.file.replace("{w}", w)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Font download failed (${res.status}): ${url}`);
+      writeFileSync(join(fontsDir, font.out.replace("{w}", w)), Buffer.from(await res.arrayBuffer()));
+    }
+  }
+  console.log(`Fonts vendored to ${fontsDir}`);
+}
+
 await download();
 verify();
 extract();
+await fetchFonts();
 
 // Patch 1: don't reject cross-origin ?file= URLs (we run on chrome-extension://).
 patch(

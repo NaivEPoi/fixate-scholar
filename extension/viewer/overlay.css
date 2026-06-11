@@ -1,5 +1,38 @@
 /* FixatePDF overlay styles. Loaded after the stock PDF.js viewer.css. */
 
+/* Bundled reading fonts (SIL OFL), vendored by scripts/fetch-pdfjs.mjs.
+   Prefixed family names so locally installed copies can't interfere. */
+@font-face {
+  font-family: "FX Atkinson Hyperlegible";
+  src: url(../vendor/fonts/atkinson-400.woff2) format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "FX Atkinson Hyperlegible";
+  src: url(../vendor/fonts/atkinson-700.woff2) format("woff2");
+  font-weight: 700;
+}
+@font-face {
+  font-family: "FX Inter";
+  src: url(../vendor/fonts/inter-400.woff2) format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "FX Inter";
+  src: url(../vendor/fonts/inter-700.woff2) format("woff2");
+  font-weight: 700;
+}
+@font-face {
+  font-family: "FX Literata";
+  src: url(../vendor/fonts/literata-400.woff2) format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "FX Literata";
+  src: url(../vendor/fonts/literata-700.woff2) format("woff2");
+  font-weight: 700;
+}
+
 :root {
   /* These match the rendered PDF page (canvas), which is independent of the
      browser color scheme — pages are white unless the document says otherwise. */

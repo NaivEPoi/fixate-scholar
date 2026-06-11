@@ -3,7 +3,12 @@
 // is never modified here, so this composes with the typography engine).
 
 import { extractLines } from "./extractor.mjs";
-import { parseReferences, findCitations, resolveCitation } from "./parser.mjs";
+import {
+  parseReferences,
+  findReferencesHeading,
+  findCitations,
+  resolveCitation,
+} from "./parser.mjs";
 import { CitationPopup } from "./popup.mjs";
 
 export class ReferencesFeature {
@@ -11,6 +16,9 @@ export class ReferencesFeature {
   #entries = [];
   #popup;
   #ready = null;
+
+  /** Called with the References heading position once known. */
+  onHeadingFound = null;
 
   constructor(app) {
     this.#app = app;
@@ -23,6 +31,8 @@ export class ReferencesFeature {
       try {
         const lines = await extractLines(pdfDocument);
         this.#entries = parseReferences(lines);
+        const heading = findReferencesHeading(lines);
+        if (heading) await this.onHeadingFound?.(heading);
         // Pages rendered before extraction finished need annotating now.
         this.reannotateRendered();
       } catch (e) {

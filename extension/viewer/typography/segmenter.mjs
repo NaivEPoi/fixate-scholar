@@ -44,18 +44,16 @@ function firstSyllableEnd(word) {
 
 /**
  * Number of leading characters to embolden for `word`.
- * fraction: 0..1 of the word length (rounded, min 1).
- * smartSyllable: cap at the first syllable boundary.
+ * smartSyllable (the default mode): exactly the first syllable.
+ * Otherwise fraction: 0..1 of the word length (rounded, min 1).
  */
 export function emphasisLength(word, { fraction = 0.4, smartSyllable = false } = {}) {
   const letters = word.length;
   if (letters === 0) return 0;
   if (letters === 1) return 1;
-  let n = Math.max(1, Math.round(letters * fraction));
-  if (smartSyllable) {
-    const syl = firstSyllableEnd(word);
-    if (syl > 0) n = Math.min(n, syl);
-  }
+  const n = smartSyllable
+    ? Math.max(1, firstSyllableEnd(word))
+    : Math.max(1, Math.round(letters * fraction));
   return Math.min(n, letters - 1 || 1);
 }
 
@@ -72,7 +70,9 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0) {
   const parts = [];
   let wordIndex = startWordIndex;
   for (const seg of segment(text)) {
-    if (!seg.isWord || !/\p{L}/u.test(seg.text)) {
+    // Only plain Latin words get emphasis: Greek letters, math symbols,
+    // identifiers with digits, etc. are kept exactly as the author set them.
+    if (!seg.isWord || !/^[A-Za-zÀ-ɏ'’-]+$/.test(seg.text)) {
       parts.push({ text: seg.text, bold: false });
       continue;
     }

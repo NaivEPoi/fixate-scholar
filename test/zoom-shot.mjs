@@ -68,9 +68,29 @@ try {
     awaitPromise: true,
   });
   await sleep(10000);
+  const probe = await send("Runtime.evaluate", {
+    returnByValue: true,
+    expression: `(() => {
+      const container = document.getElementById('viewerContainer');
+      const b = document.querySelector('.textLayer span[data-fx-done] .fx-b');
+      const cs = b ? getComputedStyle(b) : null;
+      const span = b?.closest('span');
+      return {
+        fxFont: container.dataset.fxFont,
+        stroke: cs?.webkitTextStrokeWidth,
+        weight: cs?.fontWeight,
+        color: cs?.color,
+        sampleBold: b?.textContent,
+        sampleSpan: span?.textContent.slice(0, 50),
+        fontFamily: span?.style.fontFamily.slice(0, 40),
+        bolded: document.querySelectorAll('.fx-b').length,
+      };
+    })()`,
+  });
+  console.log(JSON.stringify(probe.result.value, null, 2));
   const shot = await send("Page.captureScreenshot", {
     format: "png",
-    clip: { x: 480, y: 520, width: 620, height: 300, scale: 2 },
+    clip: { x: 480, y: 700, width: 420, height: 160, scale: 3 },
   });
   writeFileSync(join(root, "test", "out", "abstract-zoom.png"), Buffer.from(shot.data, "base64"));
   console.log("saved test/out/abstract-zoom.png");

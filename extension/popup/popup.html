@@ -12,13 +12,18 @@
     <input type="checkbox" id="enabled">
   </label>
 
-  <label class="row">
-    <span>Emphasis <output id="fractionOut">40%</output></span>
+  <label class="row switch" title="Bold the first syllable of each word; otherwise a fixed fraction">
+    <span>First-syllable emphasis</span>
+    <input type="checkbox" id="smartSyllable">
+  </label>
+
+  <label class="row" id="fractionRow">
+    <span>Emphasis fraction <output id="fractionOut">40%</output></span>
     <input type="range" id="fraction" min="0.2" max="0.6" step="0.05">
   </label>
 
   <label class="row">
-    <span>Bold weight <output id="weightOut">700</output></span>
+    <span>Bold weight <output id="weightOut">600</output></span>
     <input type="range" id="boldWeight" min="500" max="900" step="100">
   </label>
 
@@ -26,14 +31,10 @@
     <span>Font</span>
     <select id="fontMode">
       <option value="original">Original (document)</option>
-      <option value="sans">Sans-serif</option>
-      <option value="serif">Serif</option>
+      <option value="atkinson">Atkinson Hyperlegible</option>
+      <option value="inter">Inter</option>
+      <option value="literata">Literata</option>
     </select>
-  </label>
-
-  <label class="row switch">
-    <span>Syllable-aware emphasis</span>
-    <input type="checkbox" id="smartSyllable">
   </label>
 
   <label class="row switch" title="Don't open this site's PDFs in FixatePDF">
