@@ -20,8 +20,17 @@ import { emphasizeParts } from "./segmenter.mjs";
 const CHUNK = 150;
 const CAPTION = /^\s*(?:Fig(?:ure)?\.?|Table|TABLE|FIGURE)\s*\d/;
 const ABSTRACT = /^\s*abstract\s*$/i;
-// TeX/Type1 math and symbol faces — anything set in these stays as-is.
-const MATH_FONT = /CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|Math|Symbol|cmmi|cmsy|cmex|stmary|rsfs|eufm|eusm|wasy|esint|MnSymbol|AMSa|AMSb/;
+// Faces that are never emphasized — they mark intentional special typography:
+// TeX/Type1 math and symbol fonts, monospace/typewriter (code, URLs), small
+// caps (system names), and bold display variants.
+const SPECIAL_FONT = new RegExp(
+  [
+    "CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|Math|Symbol|cmmi|cmsy|cmex|stmary|rsfs|eufm|eusm|wasy|esint|MnSymbol|AMSa|AMSb", // math
+    "cmtt|Typewriter|Mono(?![a-z])|Courier|Consol|Menlo|LMTT|TT(?=[0-9-])", // monospace
+    "cmcsc|SmallCaps|[-+]SC(?![a-z])|Caps(?![a-z])", // small caps
+    "Bold|bold|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])", // bold display variants
+  ].join("|"),
+);
 
 // Bundled reading fonts (SIL OFL, vendored by scripts/fetch-pdfjs.mjs);
 // @font-face rules live in overlay.css. These ship real 700 weights, so
@@ -49,6 +58,7 @@ export class TypographyEngine {
    *  Re-processes already-rendered pages at/after the heading. */
   setSkipAfter(pos) {
     this.#skipAfter = pos;
+    globalThis.__fxSkipAfter = pos; // test introspection
     if (!this.#enabled || !pos) return Promise.resolve();
     const promises = [];
     this.#eachRenderedPage((pv) => {
@@ -189,20 +199,21 @@ export class TypographyEngine {
     return null; // keep whatever PDF.js set
   }
 
-  /** True when the item is set in a TeX math/symbol face. The font objects
-   *  are already resolved in commonObjs once the canvas has rendered. */
-  #isMathFont(pageView, fontName, cache) {
+  /** True when the item is set in a math/symbol/mono/small-caps/bold face.
+   *  The font objects are already resolved in commonObjs once the canvas has
+   *  rendered. */
+  #isSpecialFont(pageView, fontName, cache) {
     if (!fontName) return false;
     if (cache.has(fontName)) return cache.get(fontName);
-    let mathy = false;
+    let special = false;
     try {
       const font = pageView.pdfPage.commonObjs.get(fontName);
-      mathy = MATH_FONT.test(font?.name ?? "");
+      special = SPECIAL_FONT.test(font?.name ?? "");
     } catch {
       /* font not resolved — assume regular text */
     }
-    cache.set(fontName, mathy);
-    return mathy;
+    cache.set(fontName, special);
+    return special;
   }
 
   async #processPage(pageView) {
@@ -257,7 +268,7 @@ export class TypographyEngine {
         if (item.height < dominant * 0.85) return false;
         if (item.height > dominant * 1.15) return false;
       }
-      if (this.#isMathFont(pageView, item?.fontName, fontCache)) return false;
+      if (this.#isSpecialFont(pageView, item?.fontName, fontCache)) return false;
       if (this.#skipAfter && item?.transform) {
         if (pageNumber > this.#skipAfter.page) return false;
         if (pageNumber === this.#skipAfter.page && item.transform[5] <= this.#skipAfter.y + 2) {

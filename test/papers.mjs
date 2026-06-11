@@ -139,16 +139,85 @@ try {
       }
       if (state.bolded > 100 && state.refs > 0 && state.cites > 0) break;
     }
+
+    // Deeper checks: embedded-font rendering, page-1 header exclusion,
+    // heading (font-size) exclusion, URL/email exclusion — then force the
+    // references pages to render and confirm they are left untouched.
+    let checks = null;
+    try {
+      checks = await cdp.eval(`(async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const done = () => [...document.querySelectorAll('.textLayer span[data-fx-done]')];
+        const out = {};
+
+        // Original-font mode: processed spans must use the embedded FontFace.
+        out.fontOk = done().length > 0 && done().every(s => /^"?g_/.test(s.style.fontFamily));
+
+        // No processed span may be much larger than the median (headings).
+        const sizes = done().map(s => parseFloat(getComputedStyle(s).fontSize)).sort((a, b) => a - b);
+        const median = sizes[Math.floor(sizes.length / 2)];
+        out.headingOk = sizes.every(s => s <= median * 1.3);
+
+        // Page-1 header block: nothing processed above the Abstract heading.
+        out.headerOk = true;
+        const page1 = document.querySelector('.page[data-page-number="1"]');
+        const abstract = [...(page1?.querySelectorAll('.textLayer span') ?? [])]
+          .find(s => /^\\s*abstract\\s*$/i.test(s.textContent));
+        if (abstract) {
+          const cut = abstract.getBoundingClientRect().top;
+          out.headerOk = !done().some(s =>
+            s.closest('.page') === page1 && s.getBoundingClientRect().bottom < cut);
+        }
+
+        // URLs/emails inside processed spans must carry no <b> in the link.
+        out.linkOk = true;
+        for (const s of done()) {
+          const text = s.textContent;
+          const m = /(?:https?:\\/\\/|www\\.|doi\\.org\\/)[^\\s]+|[^\\s@]+@[^\\s@]+\\.[A-Za-z]{2,}/.exec(text);
+          if (!m) continue;
+          let pos = 0;
+          for (const node of s.childNodes) {
+            const len = node.textContent.length;
+            if (node.nodeName === 'B' && pos < m.index + m[0].length && pos + len > m.index) {
+              out.linkOk = false;
+            }
+            pos += len;
+          }
+        }
+
+        // References section: render its pages and expect them untouched
+        // below the heading.
+        out.refsOk = null;
+        const skip = globalThis.__fxSkipAfter;
+        if (skip) {
+          const app = window.PDFViewerApplication;
+          app.page = Math.min(skip.page + 1, app.pagesCount);
+          await sleep(3500);
+          out.refsOk = ![...document.querySelectorAll('.page')].some(p => {
+            const n = parseInt(p.dataset.pageNumber, 10);
+            return n > skip.page && p.querySelector('.textLayer span[data-fx-done]');
+          });
+          app.page = 1;
+        }
+        return out;
+      })()`);
+    } catch (e) {
+      checks = { error: String(e.message ?? e) };
+    }
     cdp.close();
     await fetch(`http://127.0.0.1:${PORT}/json/close/${tab.id}`); // plain-text response
 
-    const ok = !!state && state.pages > 0 && state.fxOn && state.bolded > 100;
+    const checksOk =
+      !!checks && !checks.error &&
+      checks.fontOk && checks.headingOk && checks.headerOk && checks.linkOk &&
+      checks.refsOk !== false;
+    const ok = !!state && state.pages > 0 && state.fxOn && state.bolded > 100 && checksOk;
     if (!ok) failures++;
     const warn =
       state && (state.refs === 0 ? " ⚠ no references parsed" : state.cites === 0 ? " ⚠ no citations linked" : "");
     results.push({ paper, state, ok, warn });
     console.log(
-      `${ok ? "PASS" : "FAIL"}  ${paper.template.padEnd(16)} ${JSON.stringify(state)}${warn}`,
+      `${ok ? "PASS" : "FAIL"}  ${paper.template.padEnd(16)} ${JSON.stringify(state)} checks=${JSON.stringify(checks)}${warn}`,
     );
   }
 

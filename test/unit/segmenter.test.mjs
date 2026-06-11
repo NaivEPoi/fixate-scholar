@@ -45,6 +45,19 @@ test("emphasisLength smart syllable bolds exactly the first syllable", () => {
   assert.equal(emphasisLength("the", { smartSyllable: true }), 2);
 });
 
+test("URLs, DOIs, and emails are never emphasized", () => {
+  const url = emphasizeParts("code at https://github.com/SyNSec-den/5GBaseChecker today");
+  const urlBold = url.parts.filter((p) => p.bold).map((p) => p.text);
+  assert.deepEqual(urlBold, ["co", "a", "to"]); // code, at, today only
+  const email = emphasizeParts("contact yilud@psu.edu for details");
+  const emailBold = email.parts.filter((p) => p.bold).map((p) => p.text);
+  assert.ok(!emailBold.some((t) => /yilud|psu|edu/.test(t)));
+  const doi = emphasizeParts("the published version is available at doi.org/10.1145/3576915 online");
+  assert.ok(!doi.parts.some((p) => p.bold && /doi|org/.test(p.text)));
+  // round-trip safety with links present
+  assert.equal(url.parts.map((p) => p.text).join(""), "code at https://github.com/SyNSec-den/5GBaseChecker today");
+});
+
 test("non-Latin and mixed words are never emphasized", () => {
   const greek = emphasizeParts("the αβγ decay");
   assert.deepEqual(

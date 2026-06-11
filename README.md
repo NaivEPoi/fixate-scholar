@@ -19,8 +19,10 @@ code, fonts, or assets.
   figures, captions, footnotes, and the references section are left exactly as set.
   Instant on/off toggle that restores the native rendering pixel-for-pixel.
 - **Automatic PDF interception**: any PDF you navigate to (including links from Google
-  Scholar) opens in the FixatePDF viewer. Per-site bypass list, per-document
-  "open in native viewer" escape hatch, and a context-menu fallback.
+  Scholar, and links served as `attachment` downloads) opens in the FixatePDF viewer —
+  nothing is ever saved to disk just by clicking a link; the toolbar download button
+  saves a copy explicitly. Per-site bypass list, per-document "open in native viewer"
+  escape hatch, and a context-menu fallback.
 - **References & citations** (academic papers): detects the bibliography, links in-text
   citations like `[12]` or `(Smith et al., 2020)` to their entries, and shows a hover
   preview of the entry. Clicking a citation opens a pinned card with a Google Scholar

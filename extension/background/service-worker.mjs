@@ -5,9 +5,8 @@
 
 const VIEWER = chrome.runtime.getURL("vendor/pdfjs/web/viewer.html");
 
-// Rule ids. 1xx = allow/exception rules (higher priority), 2xx = redirects,
-// 3xx+ = per-origin user bypass, 9xx = transient bypass-once.
-const RULE_SKIP_ATTACHMENT = 101;
+// Rule ids. 2xx = redirects, 3xx+ = per-origin user bypass,
+// 9xx = transient bypass-once.
 const RULE_REDIRECT_PDF = 201;
 const RULE_REDIRECT_OCTET = 202;
 const BYPASS_ORIGIN_BASE = 300;
@@ -19,19 +18,10 @@ async function registerRules() {
     .map((r) => r.id)
     .filter((id) => id < BYPASS_ONCE_BASE);
   const rules = [
-    // Downloads stay downloads.
-    {
-      id: RULE_SKIP_ATTACHMENT,
-      priority: 10,
-      condition: {
-        resourceTypes: ["main_frame"],
-        responseHeaders: [
-          { header: "content-disposition", values: ["attachment*"] },
-        ],
-      },
-      action: { type: "allow" },
-    },
-    // The main event: top-level navigations that return a PDF.
+    // Top-level navigations that return a PDF — including ones served with
+    // Content-Disposition: attachment. Nothing is ever saved to disk just by
+    // opening a link; the viewer's toolbar download button is the explicit
+    // way to save a copy.
     {
       id: RULE_REDIRECT_PDF,
       priority: 1,

@@ -57,6 +57,17 @@ export function emphasisLength(word, { fraction = 0.4, smartSyllable = false } =
   return Math.min(n, letters - 1 || 1);
 }
 
+// Character ranges that must never be emphasized: URLs, DOIs, emails.
+const LINKLIKE = /(?:https?:\/\/|www\.|doi\.org\/|ftp:\/\/)[^\s]+|[^\s@]+@[^\s@]+\.[A-Za-z]{2,}/g;
+
+function linkRanges(text) {
+  const ranges = [];
+  for (const m of text.matchAll(LINKLIKE)) {
+    ranges.push([m.index, m.index + m[0].length]);
+  }
+  return ranges;
+}
+
 /**
  * Convert a text-layer string into a list of parts:
  *   {text, bold: true|false}
@@ -67,12 +78,18 @@ export function emphasisLength(word, { fraction = 0.4, smartSyllable = false } =
 export function emphasizeParts(text, opts = {}, startWordIndex = 0) {
   if (!text || MATHY(text)) return null;
   const { saccade = 1 } = opts;
+  const links = linkRanges(text);
   const parts = [];
   let wordIndex = startWordIndex;
+  let offset = 0;
   for (const seg of segment(text)) {
+    const start = offset;
+    offset += seg.text.length;
     // Only plain Latin words get emphasis: Greek letters, math symbols,
-    // identifiers with digits, etc. are kept exactly as the author set them.
-    if (!seg.isWord || !/^[A-Za-zÀ-ɏ'’-]+$/.test(seg.text)) {
+    // identifiers with digits, URLs/emails, etc. are kept exactly as the
+    // author set them.
+    const inLink = links.some(([a, b]) => start < b && offset > a);
+    if (!seg.isWord || inLink || !/^[A-Za-zÀ-ɏ'’-]+$/.test(seg.text)) {
       parts.push({ text: seg.text, bold: false });
       continue;
     }

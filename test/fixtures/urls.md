@@ -4,7 +4,7 @@
 |---|---|---|
 | Content-type-only PDF (no .pdf extension), numeric citations | https://arxiv.org/pdf/1706.03762 | Opens in FixatePDF, bolding + citation popups |
 | APA author-year citations | any psychology paper PDF, e.g. via Google Scholar | (Author, year) popups resolve |
-| Attachment disposition | a link served with `Content-Disposition: attachment` | Downloads, NOT intercepted |
+| Attachment disposition | a link served with `Content-Disposition: attachment` | Opens in FixatePDF (no auto-download); save via the toolbar download button |
 | Local file | file:///C:/...some.pdf (needs "Allow access to file URLs") | Opens in FixatePDF |
 | Google Scholar results | scholar.google.com → click a [PDF] link | Opens in FixatePDF |
 | Bypass | toggle "Bypass current site" in popup, reload PDF | Native viewer |
