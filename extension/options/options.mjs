@@ -6,17 +6,17 @@ const settings = await getSettings();
 $("enabled").checked = settings.enabled;
 $("fraction").value = settings.fraction;
 $("fractionOut").textContent = `${Math.round(settings.fraction * 100)}%`;
-$("smartSyllable").checked = settings.smartSyllable;
+$("emphasisMode").value = settings.emphasisMode;
 $("fontMode").value = settings.fontMode;
-$("fractionRow").style.display = settings.smartSyllable ? "none" : "";
+$("fractionRow").style.display = settings.emphasisMode === "fraction" ? "" : "none";
 $("boldWeight").value = settings.boldWeight;
 $("saccade").value = settings.saccade;
 $("bypassOrigins").value = settings.bypassOrigins.join("\n");
 
 $("enabled").addEventListener("change", (e) => setSettings({ enabled: e.target.checked }));
-$("smartSyllable").addEventListener("change", (e) => {
-  $("fractionRow").style.display = e.target.checked ? "none" : "";
-  setSettings({ smartSyllable: e.target.checked });
+$("emphasisMode").addEventListener("change", (e) => {
+  $("fractionRow").style.display = e.target.value === "fraction" ? "" : "none";
+  setSettings({ emphasisMode: e.target.value });
 });
 $("fontMode").addEventListener("change", (e) => setSettings({ fontMode: e.target.value }));
 $("fraction").addEventListener("input", (e) => {

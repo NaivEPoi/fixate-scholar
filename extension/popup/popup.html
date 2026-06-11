@@ -12,9 +12,13 @@
     <input type="checkbox" id="enabled">
   </label>
 
-  <label class="row switch" title="Bold the first syllable of each word; otherwise a fixed fraction">
-    <span>First-syllable emphasis</span>
-    <input type="checkbox" id="smartSyllable">
+  <label class="row switch">
+    <span>Emphasis</span>
+    <select id="emphasisMode">
+      <option value="dynamic">Dynamic syllables</option>
+      <option value="syllable">First syllable</option>
+      <option value="fraction">Fixed fraction</option>
+    </select>
   </label>
 
   <label class="row" id="fractionRow">

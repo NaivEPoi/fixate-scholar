@@ -29,9 +29,14 @@
     <input type="checkbox" id="enabled"> Enable fixation typography by default
   </label>
   <label>
-    <input type="checkbox" id="smartSyllable"> First-syllable emphasis
-    <p class="hint">Bolds exactly the first syllable of each word. Uncheck to bold a
-    fixed fraction instead.</p>
+    Emphasis
+    <select id="emphasisMode">
+      <option value="dynamic">Dynamic syllables — whole syllables, up to half the word</option>
+      <option value="syllable">First syllable only</option>
+      <option value="fraction">Fixed fraction of each word</option>
+    </select>
+    <p class="hint">Dynamic gives longer words several bolded syllables while never
+    exceeding half the word.</p>
   </label>
   <label id="fractionRow">
     Emphasis fraction <output id="fractionOut"></output><br>
