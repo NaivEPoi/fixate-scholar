@@ -152,28 +152,35 @@ try {
   const shot1 = await cdp.send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(outDir, "viewer-page1.png"), Buffer.from(shot1.data, "base64"));
 
-  // Citation popup: click a hit-target, expect the popup with a Scholar link.
-  const popupState = await cdp.eval(`(() => {
+  // Citation popup: click a hit-target, expect the pinned card with the
+  // Scholar search action and the See-in-References action. (The rich
+  // Scholar preview itself depends on live scholar.google.com responses, so
+  // only its loading/fallback shell is asserted here.)
+  const popupState = await cdp.eval(`(async () => {
     const hit = document.querySelector('.fx-cite-hit');
     if (!hit) return { clicked: false };
     hit.click();
+    await new Promise(r => setTimeout(r, 4000)); // allow the Scholar fetch
     const popup = document.querySelector('.fx-cite-popup');
-    const link = popup?.querySelector('a[href^="https://scholar.google.com/scholar?q="]');
+    const link = popup?.querySelector('a[href^="https://scholar.google.com/scholar?"]');
     return {
       clicked: true,
       visible: !!popup && !popup.hidden,
       scholarHref: link?.href ?? null,
-      text: popup?.textContent.slice(0, 60) ?? null,
+      hasRefsAction: [...(popup?.querySelectorAll('a') ?? [])].some(a => a.textContent === 'See in References'),
+      hasClose: !!popup?.querySelector('.fx-cite-close'),
+      body: popup?.querySelector('.fx-cite-body')?.textContent.slice(0, 80) ?? null,
     };
   })()`);
+  console.log("popup:", JSON.stringify(popupState));
   check(
-    "citation popup with Scholar link",
-    popupState.visible && !!popupState.scholarHref,
+    "pinned citation popup (Scholar action + references action)",
+    popupState.visible && !!popupState.scholarHref && popupState.hasRefsAction && popupState.hasClose,
     popupState.scholarHref ?? JSON.stringify(popupState),
   );
   const shotPopup = await cdp.send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(outDir, "citation-popup.png"), Buffer.from(shotPopup.data, "base64"));
-  await cdp.eval(`(() => { document.querySelector('.fx-cite-popup').hidden = true; return 1; })()`);
+  await cdp.eval(`(() => { document.querySelector('.fx-cite-popup .fx-cite-close')?.click(); return 1; })()`);
 
   // Cross-span citations: scan pages for a regex match in the concatenated
   // text that straddles a span boundary, and confirm those pages' matches all

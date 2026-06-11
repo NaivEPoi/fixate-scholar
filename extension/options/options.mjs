@@ -7,12 +7,14 @@ $("enabled").checked = settings.enabled;
 $("fraction").value = settings.fraction;
 $("fractionOut").textContent = `${Math.round(settings.fraction * 100)}%`;
 $("smartSyllable").checked = settings.smartSyllable;
+$("fontMode").value = settings.fontMode;
 $("boldWeight").value = settings.boldWeight;
 $("saccade").value = settings.saccade;
 $("bypassOrigins").value = settings.bypassOrigins.join("\n");
 
 $("enabled").addEventListener("change", (e) => setSettings({ enabled: e.target.checked }));
 $("smartSyllable").addEventListener("change", (e) => setSettings({ smartSyllable: e.target.checked }));
+$("fontMode").addEventListener("change", (e) => setSettings({ fontMode: e.target.value }));
 $("fraction").addEventListener("input", (e) => {
   $("fractionOut").textContent = `${Math.round(e.target.value * 100)}%`;
 });

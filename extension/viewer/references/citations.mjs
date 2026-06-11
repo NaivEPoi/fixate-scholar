@@ -93,7 +93,7 @@ export class ReferencesFeature {
           a.addEventListener("mouseleave", () => this.#popup.scheduleHide());
           a.addEventListener("click", (e) => {
             e.preventDefault();
-            this.#popup.showNow(entries, a);
+            this.#popup.showNow(entries, a, { pinned: true });
           });
           layer.append(a);
         }

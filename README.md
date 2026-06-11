@@ -10,16 +10,24 @@ code, fonts, or assets.
 
 ## Features
 
-- **Fixation typography**: per-word emphasis with a configurable fraction (30/40/50%),
-  optional syllable-aware "smart mode", optional word-skip (saccade) interval. Instant
+- **Fixation typography**: per-word emphasis with a configurable fraction (30/40/50%)
+  and weight, optional syllable-aware "smart mode", optional word-skip (saccade)
+  interval. Text renders in the document's own embedded fonts at the original size by
+  default (sans/serif replacements available), and only the main body text is
+  processed — tables, figures, captions, and footnotes are left untouched. Instant
   on/off toggle that restores the native rendering pixel-for-pixel.
 - **Automatic PDF interception**: any PDF you navigate to (including links from Google
   Scholar) opens in the FixatePDF viewer. Per-site bypass list, per-document
   "open in native viewer" escape hatch, and a context-menu fallback.
 - **References & citations** (academic papers): detects the bibliography, links in-text
-  citations like `[12]` or `(Smith et al., 2020)` to their entries, shows a hover preview,
-  and offers one-click **Find on Google Scholar** lookup for any reference.
-- All processing is 100% local. No network requests other than fetching the PDF itself.
+  citations like `[12]` or `(Smith et al., 2020)` to their entries, and shows a hover
+  preview of the entry. Clicking a citation opens a pinned card with a Google Scholar
+  preview (title, authors, snippet, cited-by, direct [PDF] link when available), a
+  pager for multi-citations like `[38, 24, 15]`, and **See in References** /
+  **DOI** actions.
+- Rendering is 100% local. The only network requests are fetching the PDF itself and,
+  when you *click* a citation, one Google Scholar search for that reference (same as
+  typing the query into Scholar yourself; cached per session, never automatic).
 
 ## Install (from source)
 

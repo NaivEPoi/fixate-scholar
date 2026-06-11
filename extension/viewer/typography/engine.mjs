@@ -2,24 +2,34 @@
 //
 // PDF.js paints glyphs on a canvas and overlays transparent, absolutely
 // positioned text spans for selection/search. With the mode on we:
-//   1. make the span text visible (overlay.css, .fx-on),
-//   2. cover the duplicate canvas glyphs with a per-span mask layer placed
+//   1. pick the spans belonging to the main document text (dominant body
+//      font size — table/figure/caption/footnote text stays untouched on
+//      the canvas),
+//   2. make those spans visible in the document's own embedded font (the
+//      FontFaces PDF.js loaded for the canvas) at the original size,
+//   3. cover the duplicate canvas glyphs with a per-span mask layer placed
 //      between the canvas and the text layer,
-//   3. rewrite each span as bold-prefix + rest,
-//   4. re-calibrate the span's scaleX so its rendered width still matches the
-//      original glyph run (keeps selection/search geometry usable).
+//   4. rewrite each span as bold-prefix + rest,
+//   5. re-calibrate the span's scaleX so its rendered width still matches
+//      the original glyph run (keeps selection/search geometry usable).
 // Everything is reversible: pristine markup is kept in a WeakMap and restored
 // on toggle-off. Work happens in idle-time chunks to avoid jank.
 
 import { emphasizeParts } from "./segmenter.mjs";
 
 const CHUNK = 150;
+const CAPTION = /^\s*(?:Fig(?:ure)?\.?|Table|TABLE|FIGURE)\s*\d/;
+
+const FONT_STACKS = {
+  sans: '"Segoe UI", Roboto, "Noto Sans", Arial, sans-serif',
+  serif: 'Georgia, "Noto Serif", "Times New Roman", serif',
+};
 
 export class TypographyEngine {
   #app;
   #settings;
   #enabled = false;
-  #pristine = new WeakMap(); // span -> { html, transform }
+  #pristine = new WeakMap(); // span -> { html, transform, fontFamily }
   #pending = new Map(); // pageNumber -> cancel flag holder
 
   constructor(app, settings) {
@@ -91,22 +101,72 @@ export class TypographyEngine {
       if (orig) {
         span.innerHTML = orig.html;
         span.style.transform = orig.transform;
+        span.style.fontFamily = orig.fontFamily;
       }
       delete span.dataset.fxDone;
     }
   }
 
-  #leafSpans(textLayerDiv) {
-    return [...textLayerDiv.querySelectorAll("span")].filter(
-      (s) =>
-        s.childElementCount === 0 &&
-        !s.dataset.fxDone &&
-        s.textContent.trim().length > 1 &&
-        !s.closest(".editToolbar"),
-    );
+  /**
+   * Pair every text-layer div with its getTextContent item, giving us the
+   * item's fontName (the FontFace PDF.js registered for the canvas) and
+   * height. Falls back to bare divs when the mapping is unavailable.
+   */
+  async #pagePairs(pageView) {
+    try {
+      const divs = pageView.textLayer.highlighter?.textDivs;
+      if (divs?.length) {
+        const content = await pageView.pdfPage.getTextContent({
+          includeMarkedContent: true,
+          disableNormalization: true,
+        });
+        const strItems = content.items.filter((it) => it.str !== undefined);
+        if (strItems.length === divs.length) {
+          return strItems.map((item, i) => ({
+            div: divs[i],
+            item,
+            style: content.styles[item.fontName],
+          }));
+        }
+      }
+    } catch {
+      /* fall through */
+    }
+    return [...pageView.textLayer.div.querySelectorAll("span")]
+      .filter((s) => !s.querySelector("span"))
+      .map((div) => ({ div, item: null, style: null }));
   }
 
-  #processPage(pageView) {
+  /** Dominant body-text height (weighted by character count). */
+  #dominantHeight(pairs) {
+    const counts = new Map();
+    for (const { item } of pairs) {
+      if (!item?.height || !item.str.trim()) continue;
+      const bucket = Math.round(item.height * 2) / 2;
+      counts.set(bucket, (counts.get(bucket) || 0) + item.str.length);
+    }
+    let best = 0;
+    let height = null;
+    for (const [bucket, weight] of counts) {
+      if (weight > best) {
+        best = weight;
+        height = bucket;
+      }
+    }
+    return height;
+  }
+
+  #fontFamilyFor(pair) {
+    const mode = this.#settings.fontMode ?? "original";
+    if (FONT_STACKS[mode]) return FONT_STACKS[mode];
+    if (pair.item?.fontName) {
+      const fallback = pair.style?.fontFamily || "sans-serif";
+      return `"${pair.item.fontName}", ${fallback}`;
+    }
+    return null; // keep whatever PDF.js set
+  }
+
+  async #processPage(pageView) {
     const pageNumber = pageView.id;
     // A re-render (zoom) replaces the text layer DOM; drop any stale run.
     const prev = this.#pending.get(pageNumber);
@@ -118,6 +178,12 @@ export class TypographyEngine {
     holder.promise = new Promise((resolve) => (holder.resolve = resolve));
     this.#pending.set(pageNumber, holder);
 
+    const allPairs = await this.#pagePairs(pageView);
+    if (holder.cancelled) {
+      holder.resolve();
+      return holder.promise;
+    }
+
     pageView.div.querySelector(".fx-mask")?.remove();
     const textLayerDiv = pageView.textLayer.div;
     const mask = document.createElement("div");
@@ -125,7 +191,18 @@ export class TypographyEngine {
     mask.setAttribute("aria-hidden", "true");
     textLayerDiv.before(mask);
 
-    const spans = this.#leafSpans(textLayerDiv);
+    // Main-text filter: smaller-than-body text (tables, figure labels,
+    // captions, footnotes) and caption lines are left to the canvas.
+    const dominant = this.#dominantHeight(allPairs);
+    const pairs = allPairs.filter(({ div, item }) => {
+      if (!div?.isConnected || div.dataset.fxDone) return false;
+      const text = div.textContent;
+      if (!text || text.trim().length < 2) return false;
+      if (CAPTION.test(text)) return false;
+      if (dominant && item?.height && item.height < dominant * 0.85) return false;
+      return true;
+    });
+
     const settings = this.#settings;
     let wordIndex = 0;
     let i = 0;
@@ -136,23 +213,29 @@ export class TypographyEngine {
         return;
       }
       const layerRect = textLayerDiv.getBoundingClientRect();
-      while (i < spans.length) {
-        const end = Math.min(i + CHUNK, spans.length);
+      while (i < pairs.length) {
+        const end = Math.min(i + CHUNK, pairs.length);
         const batch = [];
         // Read pass: pristine geometry.
         for (let j = i; j < end; j++) {
-          const span = spans[j];
-          const result = emphasizeParts(span.textContent, settings, wordIndex);
+          const pair = pairs[j];
+          const result = emphasizeParts(pair.div.textContent, settings, wordIndex);
           if (!result) continue;
           wordIndex = result.wordIndex;
-          batch.push({ span, parts: result.parts, rect: span.getBoundingClientRect() });
+          batch.push({
+            pair,
+            parts: result.parts,
+            rect: pair.div.getBoundingClientRect(),
+          });
         }
-        // Write pass: masks + content.
-        for (const item of batch) {
-          const { span, parts, rect } = item;
+        // Write pass: masks + content + font.
+        for (const entry of batch) {
+          const { pair, parts, rect } = entry;
+          const span = pair.div;
           this.#pristine.set(span, {
             html: span.innerHTML,
             transform: span.style.transform,
+            fontFamily: span.style.fontFamily,
           });
           const pad = rect.height * 0.18;
           const m = document.createElement("div");
@@ -174,10 +257,14 @@ export class TypographyEngine {
             }
           }
           span.replaceChildren(frag);
+          const family = this.#fontFamilyFor(pair);
+          if (family) span.style.fontFamily = family;
           span.dataset.fxDone = "1";
         }
-        // Read pass 2 + write pass 2: re-calibrate scaleX to pristine width.
-        for (const { span, rect } of batch) {
+        // Read pass 2 + write pass 2: re-calibrate scaleX to pristine width
+        // (the font swap and bolding both change the natural width).
+        for (const { pair, rect } of batch) {
+          const span = pair.div;
           const newWidth = span.getBoundingClientRect().width;
           if (newWidth > 0 && Math.abs(newWidth - rect.width) > 0.5) {
             const prevScale =
@@ -186,7 +273,7 @@ export class TypographyEngine {
           }
         }
         i = end;
-        if (deadline && deadline.timeRemaining() < 4 && i < spans.length) {
+        if (deadline && deadline.timeRemaining() < 4 && i < pairs.length) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }

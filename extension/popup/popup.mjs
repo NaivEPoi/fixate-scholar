@@ -9,9 +9,11 @@ $("fractionOut").textContent = `${Math.round(settings.fraction * 100)}%`;
 $("boldWeight").value = settings.boldWeight;
 $("weightOut").textContent = settings.boldWeight;
 $("smartSyllable").checked = settings.smartSyllable;
+$("fontMode").value = settings.fontMode;
 
 $("enabled").addEventListener("change", (e) => setSettings({ enabled: e.target.checked }));
 $("smartSyllable").addEventListener("change", (e) => setSettings({ smartSyllable: e.target.checked }));
+$("fontMode").addEventListener("change", (e) => setSettings({ fontMode: e.target.value }));
 $("fraction").addEventListener("input", (e) => {
   $("fractionOut").textContent = `${Math.round(e.target.value * 100)}%`;
 });

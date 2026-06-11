@@ -7,7 +7,8 @@ export const DEFAULTS = Object.freeze({
   fraction: 0.4,
   smartSyllable: false,
   saccade: 1,
-  boldWeight: 700,
+  boldWeight: 600,
+  fontMode: "original", // "original" | "sans" | "serif"
   bypassOrigins: [],
 });
 

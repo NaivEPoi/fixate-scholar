@@ -82,6 +82,16 @@ const settings = await getSettings();
 const engine = new TypographyEngine(app, settings);
 const references = new ReferencesFeature(app);
 
+function applyStyleVars(s) {
+  const root = document.documentElement.style;
+  root.setProperty("--fx-bold-weight", String(s.boldWeight));
+  // Emphasis stroke width for original-font mode: 500 → light, 900 → heavy.
+  root.setProperty("--fx-stroke", `${(s.boldWeight - 400) / 10000}em`);
+  const container =
+    app.appConfig.mainContainer ?? document.getElementById("viewerContainer");
+  container.dataset.fxFont = s.fontMode ?? "original";
+}
+
 // Citation hit-targets are measured from live geometry, so they must be
 // (re)built after the engine finishes mutating a page.
 async function applyEnabled(on) {
@@ -95,11 +105,11 @@ const syncButton = addToolbarToggle(app, settings.enabled, (on) => {
 });
 addNativeViewerButton();
 
-document.documentElement.style.setProperty("--fx-bold-weight", String(settings.boldWeight));
+applyStyleVars(settings);
 applyEnabled(settings.enabled);
 
 onSettingsChange(async (next) => {
-  document.documentElement.style.setProperty("--fx-bold-weight", String(next.boldWeight));
+  applyStyleVars(next);
   syncButton(next.enabled);
   await engine.updateSettings(next);
   await applyEnabled(next.enabled);

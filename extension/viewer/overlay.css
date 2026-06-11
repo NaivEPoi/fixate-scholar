@@ -8,13 +8,23 @@
   --fx-bold-weight: 700;
 }
 
-/* With the mode on, the text layer becomes the visible text. */
-#viewerContainer.fx-on .textLayer :is(span, br) {
+/* With the mode on, only the spans the engine processed become visible —
+   table/figure/caption text stays on the canvas untouched. */
+#viewerContainer.fx-on .textLayer span[data-fx-done] {
   color: var(--fx-text-color) !important;
 }
 
-#viewerContainer.fx-on .textLayer .fx-b {
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b {
   font-weight: var(--fx-bold-weight);
+}
+
+/* Embedded PDF fonts rarely ship a bold variant, and the browser's synthetic
+   bold is a single heavy weight. In original-font mode, emphasize with a
+   hairline stroke instead — its width follows the weight slider, giving a
+   true light/semi/heavy range. */
+#viewerContainer.fx-on[data-fx-font="original"] .textLayer span[data-fx-done] .fx-b {
+  font-weight: 400;
+  -webkit-text-stroke: var(--fx-stroke, 0.0125em) currentColor;
 }
 
 /* Per-span masks covering the duplicate canvas glyphs. Sits between the
@@ -89,9 +99,11 @@
 }
 
 .fx-cite-popup .fx-cite-actions {
-  margin-top: 8px;
+  margin-top: 10px;
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
 }
 
 .fx-cite-popup a {
@@ -102,4 +114,97 @@
 
 .fx-cite-popup a:hover {
   text-decoration: underline;
+}
+
+.fx-cite-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.fx-cite-pager {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 400;
+  color: light-dark(#5f6368, #9aa0a6);
+}
+
+.fx-cite-pager button,
+.fx-cite-close {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.fx-cite-pager button:hover:not(:disabled),
+.fx-cite-close:hover {
+  background: light-dark(#eee, #444);
+}
+
+.fx-cite-pager button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.fx-cite-head .fx-cite-close {
+  margin-left: 4px;
+}
+
+.fx-cite-head:has(.fx-cite-pager) .fx-cite-close {
+  margin-left: 0;
+}
+
+.fx-cite-label + .fx-cite-close {
+  margin-left: auto;
+}
+
+.fx-cite-loading {
+  color: light-dark(#5f6368, #9aa0a6);
+  font-style: italic;
+}
+
+.fx-scholar-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-bottom: 3px;
+}
+
+.fx-scholar-byline {
+  color: light-dark(#006621, #7fbf8e);
+  margin-bottom: 5px;
+}
+
+.fx-scholar-snippet {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 5px;
+}
+
+.fx-pill {
+  display: inline-block;
+  padding: 5px 12px;
+  border: 1px solid light-dark(#c0c0c6, #52525e);
+  border-radius: 16px;
+}
+
+.fx-pill:hover {
+  text-decoration: none;
+  background: light-dark(#f1f3f4, #3c4043);
+}
+
+.fx-pill-primary {
+  background: light-dark(#e8f0fe, #394457);
+  border-color: transparent;
 }
