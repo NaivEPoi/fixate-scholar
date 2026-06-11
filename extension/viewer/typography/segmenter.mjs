@@ -31,29 +31,53 @@ export function segment(text) {
 }
 
 /**
- * Index of the end of the first syllable: the first vowel cluster plus any
- * single trailing consonant (naive but stable heuristic).
+ * Cumulative syllable end positions, by a naive but stable heuristic: each
+ * syllable is consonants + a vowel cluster + at most one trailing consonant.
  */
-function firstSyllableEnd(word) {
+export function syllableBoundaries(word) {
+  const ends = [];
   let i = 0;
-  while (i < word.length && !VOWELS.test(word[i])) i++;
-  while (i < word.length && VOWELS.test(word[i])) i++;
-  if (i < word.length && !VOWELS.test(word[i])) i++;
-  return Math.min(i, word.length);
+  while (i < word.length) {
+    let j = i;
+    while (j < word.length && !VOWELS.test(word[j])) j++;
+    while (j < word.length && VOWELS.test(word[j])) j++;
+    if (j < word.length && !VOWELS.test(word[j])) j++;
+    if (j === i) break; // no progress (shouldn't happen) — bail out
+    ends.push(j);
+    i = j;
+  }
+  return ends;
 }
 
 /**
- * Number of leading characters to embolden for `word`.
- * smartSyllable (the default mode): exactly the first syllable.
- * Otherwise fraction: 0..1 of the word length (rounded, min 1).
+ * Number of leading characters to embolden for `word`, by emphasis mode:
+ *  - "dynamic" (default): whole syllables, as many as fit in half the word
+ *    (rounded up) — longer words get several syllables, never more than half.
+ *  - "syllable": exactly the first syllable.
+ *  - "fraction": `fraction` (0..1) of the word length, rounded, min 1.
+ * Always at least 1 character and never the whole word.
  */
-export function emphasisLength(word, { fraction = 0.4, smartSyllable = false } = {}) {
+export function emphasisLength(word, opts = {}) {
+  const { fraction = 0.4 } = opts;
+  const mode = opts.emphasisMode ?? (opts.smartSyllable ? "syllable" : "dynamic");
   const letters = word.length;
   if (letters === 0) return 0;
   if (letters === 1) return 1;
-  const n = smartSyllable
-    ? Math.max(1, firstSyllableEnd(word))
-    : Math.max(1, Math.round(letters * fraction));
+  let n;
+  if (mode === "fraction") {
+    n = Math.max(1, Math.round(letters * fraction));
+  } else {
+    const ends = syllableBoundaries(word);
+    const first = ends[0] ?? letters;
+    if (mode === "syllable") {
+      n = Math.max(1, first);
+    } else {
+      const half = Math.ceil(letters / 2);
+      const fitting = ends.filter((e) => e <= half);
+      n = fitting.length ? fitting.at(-1) : Math.min(first, half);
+      n = Math.max(1, n);
+    }
+  }
   return Math.min(n, letters - 1 || 1);
 }
 

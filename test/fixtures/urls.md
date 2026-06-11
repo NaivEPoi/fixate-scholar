@@ -28,6 +28,11 @@ smoke test:
 `node test/debug-refs.mjs <pdf-url>` dumps heading candidates and surrounding
 extracted lines when reference parsing misbehaves on a new paper.
 
+The full processing rulebook these tests enforce lives in
+[REQUIREMENTS.md](../../REQUIREMENTS.md). When adding a paper with a data
+table, set its `tableProbe` in `test/papers.mjs` to a string known to live in
+a table cell — it must never be emphasized.
+
 Automated smoke test: `node test/e2e.mjs [path-to-browser]`.
 
 Note: Google Chrome stable ≥137 ignores `--load-extension`, so the automated

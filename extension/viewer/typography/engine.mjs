@@ -188,6 +188,70 @@ export class TypographyEngine {
       .map((div) => ({ div, item: null, style: null }));
   }
 
+  /**
+   * Divs belonging to tabular rows: a baseline row whose items form 3+
+   * cells separated by column-sized gaps is a table row. Column-aware: in
+   * two-column layouts a gap crossing the column split starts a new
+   * sub-row (left- and right-column lines share baselines and would
+   * otherwise compose into false 3-cell "rows"); full-width tables still
+   * yield 3+ cells inside each half.
+   */
+  #tableDivs(allPairs, vx0, pageW) {
+    const items = allPairs.filter((p) => p.item?.transform && p.item.str.trim());
+    items.sort(
+      (a, b) =>
+        b.item.transform[5] - a.item.transform[5] ||
+        a.item.transform[4] - b.item.transform[4],
+    );
+    const mid = vx0 + pageW * 0.45;
+    const rightStarts = items.filter((p) => p.item.transform[4] > mid).length;
+    const splitX = rightStarts > items.length * 0.2 && rightStarts > 5 ? vx0 + pageW * 0.5 : null;
+
+    const tableSet = new Set();
+    const flushSubRow = (subRow) => {
+      if (subRow.length < 3) return;
+      let cells = 1;
+      for (let k = 1; k < subRow.length; k++) {
+        const prev = subRow[k - 1].item;
+        const gap =
+          subRow[k].item.transform[4] - (prev.transform[4] + (prev.width ?? 0));
+        if (gap > Math.max(prev.height || 8, subRow[k].item.height || 8) * 1.5) cells++;
+      }
+      if (cells >= 3) for (const p of subRow) tableSet.add(p.div);
+    };
+    const flush = (row) => {
+      row.sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+      let subRow = [];
+      for (const p of row) {
+        const prev = subRow.at(-1)?.item;
+        const prevEnd = prev ? prev.transform[4] + (prev.width ?? 0) : null;
+        if (splitX !== null && prevEnd !== null && prevEnd < splitX && p.item.transform[4] >= splitX) {
+          flushSubRow(subRow);
+          subRow = [];
+        }
+        subRow.push(p);
+      }
+      flushSubRow(subRow);
+    };
+    let row = [];
+    let rowY = null;
+    let rowH = 0;
+    for (const p of items) {
+      const y = p.item.transform[5];
+      const h = p.item.height || 8;
+      if (rowY !== null && Math.abs(y - rowY) < Math.max(rowH, h) * 0.6) {
+        row.push(p);
+      } else {
+        if (row.length) flush(row);
+        row = [p];
+        rowY = y;
+        rowH = h;
+      }
+    }
+    if (row.length) flush(row);
+    return tableSet;
+  }
+
   /** Dominant body-text height (weighted by character count). */
   #dominantHeight(pairs) {
     const counts = new Map();
@@ -260,20 +324,24 @@ export class TypographyEngine {
     textLayerDiv.before(mask);
 
     // Main-text filter. Left to the canvas untouched:
-    //  - smaller-than-body text (tables, figure labels, footnotes) and
-    //    caption lines,
+    //  - tabular rows (3+ gap-separated cells on one baseline),
+    //  - smaller-than-body text (figure labels, footnotes) and caption lines,
     //  - larger-than-body text (paper title, section headings),
     //  - math/symbol faces,
     //  - running headers/footers and the left/right margins (page numbers,
     //    proceedings lines, arXiv watermarks),
-    //  - the page-1 header block (title/authors/emails) above "Abstract",
+    //  - front matter before the Abstract heading (title/authors/emails),
     //  - the bibliography region (setRefsRegion) — appendices after it are
     //    processed normally.
-    const dominant = this.#dominantHeight(allPairs);
-    const fontCache = new Map();
     const [vx0, vy0, vx1, vy1] = pageView.pdfPage.view;
     const pageW = vx1 - vx0;
     const pageH = vy1 - vy0;
+    const tableSet = this.#tableDivs(allPairs, vx0, pageW);
+    for (const d of tableSet) d.dataset.fxTable = "1"; // debug/test marker
+    const dominant = this.#dominantHeight(
+      tableSet.size ? allPairs.filter((p) => !tableSet.has(p.div)) : allPairs,
+    );
+    const fontCache = new Map();
     // Document-level cut from setContentStart; until it arrives, a per-page
     // fast path keeps the common single-cover case (Abstract on page 1) right.
     // y grows upward in PDF coordinates: "above the heading" means y greater.
@@ -290,6 +358,7 @@ export class TypographyEngine {
       const text = div.textContent;
       if (!text || text.trim().length < 2) return false;
       if (CAPTION.test(text)) return false;
+      if (tableSet.has(div)) return false;
       if (dominant && item?.height) {
         if (item.height < dominant * 0.85) return false;
         if (item.height > dominant * 1.15) return false;
@@ -345,12 +414,15 @@ export class TypographyEngine {
             scaleX: span.style.getPropertyValue("--scale-x"),
             fontFamily: span.style.fontFamily,
           });
-          const pad = rect.height * 0.18;
+          // Cover glyph overshoot too: ink (italics, descenders, accents)
+          // extends past the advance-width box the rect describes.
+          const padY = rect.height * 0.28;
+          const padX = Math.max(2, rect.height * 0.12);
           const m = document.createElement("div");
-          m.style.left = `${rect.left - layerRect.left - 1}px`;
-          m.style.top = `${rect.top - layerRect.top - pad}px`;
-          m.style.width = `${rect.width + 2}px`;
-          m.style.height = `${rect.height + 2 * pad}px`;
+          m.style.left = `${rect.left - layerRect.left - padX}px`;
+          m.style.top = `${rect.top - layerRect.top - padY}px`;
+          m.style.width = `${rect.width + 2 * padX}px`;
+          m.style.height = `${rect.height + 2 * padY}px`;
           mask.append(m);
 
           const frag = document.createDocumentFragment();

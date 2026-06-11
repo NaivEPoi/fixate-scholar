@@ -11,9 +11,17 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+const FILTER = process.argv[3] ?? "";
+// tableProbe: ground-truth text known to live in a data table of that paper —
+// it must never be emphasized (the page is rendered by the refs/appendix
+// navigation, so probes should sit on late pages).
 const PAPERS = [
   { template: "USENIX Sec'25", url: "https://yilud.me/usenixsecurity25-dong-yilu.pdf" },
-  { template: "USENIX Sec'24", url: "https://yilud.me/usenixsecurity24-tu.pdf" },
+  {
+    template: "USENIX Sec'24",
+    url: "https://yilud.me/usenixsecurity24-tu.pdf",
+    tableProbe: "Snapdragon 865",
+  },
   { template: "USENIX NSDI'26", url: "https://yilud.me/AFC_Attacks_NSDI.pdf" },
   { template: "ACM CCS'24", url: "https://yilud.me/Proteus-ccs24.pdf" },
   { template: "ACM WiSec'25", url: "https://yilud.me/SIB-Auth.pdf" },
@@ -113,7 +121,7 @@ try {
   if (!extId) throw new Error("extension did not load");
 
   const results = [];
-  for (const paper of PAPERS) {
+  for (const paper of PAPERS.filter((p) => p.template.includes(FILTER))) {
     const viewerUrl = `chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(paper.url)}`;
     const tab = await http(`/json/new?${viewerUrl}`, "PUT");
     const cdp = new CDP(tab.webSocketDebuggerUrl);
@@ -229,6 +237,24 @@ try {
           }
           app.page = 1;
         }
+
+        // Tables: the engine marks tabular spans with data-fx-table; none of
+        // those may also be processed, the marker must actually fire
+        // somewhere in the corpus run, and the paper's ground-truth probe
+        // (text known to live in a data table) must be untouched.
+        out.tableOk = !document.querySelector('.textLayer span[data-fx-table][data-fx-done]');
+        out.tableMarked = document.querySelectorAll('.textLayer span[data-fx-table]').length;
+        const probe = ${JSON.stringify(paper.tableProbe ?? null)};
+        if (probe) {
+          const cell = [...document.querySelectorAll('.textLayer span')]
+            .find(s => s.textContent.includes(probe));
+          out.probeFound = !!cell;
+          if (cell && (cell.dataset.fxDone || cell.querySelector('.fx-b'))) {
+            out.tableOk = false;
+            out.tableSample = ['probe processed: ' + probe];
+          }
+          if (!cell) out.tableOk = false; // probe page should have rendered
+        }
         return out;
       })()`);
     } catch (e) {
@@ -240,7 +266,8 @@ try {
     const checksOk =
       !!checks && !checks.error &&
       checks.fontOk && checks.headingOk && checks.headerOk && checks.linkOk &&
-      checks.footerOk && checks.refsOk !== false && checks.appendixOk !== false;
+      checks.footerOk && checks.tableOk &&
+      checks.refsOk !== false && checks.appendixOk !== false;
     const ok = !!state && state.pages > 0 && state.fxOn && state.bolded > 100 && checksOk;
     if (!ok) failures++;
     const warn =

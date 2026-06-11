@@ -4,8 +4,11 @@
 
 export const DEFAULTS = Object.freeze({
   enabled: true,
-  fraction: 0.4, // used when smartSyllable is off
-  smartSyllable: true, // bold the first syllable of each word
+  // "dynamic": whole syllables up to half the word (default)
+  // "syllable": exactly the first syllable
+  // "fraction": a fixed fraction of the word (the `fraction` slider)
+  emphasisMode: "dynamic",
+  fraction: 0.4,
   saccade: 1,
   boldWeight: 600,
   fontMode: "original", // "original" | "atkinson" | "inter" | "literata"

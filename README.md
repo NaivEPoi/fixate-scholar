@@ -10,13 +10,15 @@ code, fonts, or assets.
 
 ## Features
 
-- **Fixation typography**: bolds the first syllable of each word by default (a fixed
-  configurable fraction is available instead), with adjustable weight and an optional
+- **Fixation typography**: dynamic syllable emphasis by default — longer words get
+  several leading syllables bolded, never more than half the word (first-syllable-only
+  and fixed-fraction modes available) — with adjustable weight and an optional
   word-skip (saccade) interval. Text renders in the document's own embedded fonts at
   the original size and color; bundled open-source reading fonts (Atkinson
   Hyperlegible, Inter, Literata) are available as replacements. Only main body prose
   is processed — the paper title, authors and emails, section headings, math, tables,
-  figures, captions, footnotes, and the references section are left exactly as set.
+  figures, captions, footnotes, headers/footers, and the references section are left
+  exactly as set (see [REQUIREMENTS.md](REQUIREMENTS.md) for the full rulebook).
   Instant on/off toggle that restores the native rendering pixel-for-pixel.
 - **Automatic PDF interception**: any PDF you navigate to (including links from Google
   Scholar, and links served as `attachment` downloads) opens in the FixatePDF viewer —
