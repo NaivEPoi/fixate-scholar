@@ -10,6 +10,24 @@
 | Bypass | toggle "Bypass current site" in popup, reload PDF | Native viewer |
 | Native escape hatch | "native" toolbar button in the viewer | Re-opens in Chrome's viewer once |
 
+## Template corpus (automated: `node test/papers.mjs`)
+
+Real papers covering the major academic templates, used by the multi-template
+smoke test:
+
+| Template | Paper | URL |
+|---|---|---|
+| USENIX Security '25 | CoreCrisis | https://yilud.me/usenixsecurity25-dong-yilu.pdf |
+| USENIX Security '24 | Logic Gone Astray | https://yilud.me/usenixsecurity24-tu.pdf |
+| USENIX NSDI '26 | AFC Threat Analysis | https://yilud.me/AFC_Attacks_NSDI.pdf |
+| ACM CCS '24 | Proteus | https://yilud.me/Proteus-ccs24.pdf |
+| ACM WiSec '25 | SIB-Auth | https://yilud.me/SIB-Auth.pdf |
+| EW '25 (stamped) | AFC GPS Spoofing | https://yilud.me/a33-dong%20stamped.pdf |
+| IEEE (arXiv preprint) | E2IBS | https://arxiv.org/pdf/2502.04915 |
+
+`node test/debug-refs.mjs <pdf-url>` dumps heading candidates and surrounding
+extracted lines when reference parsing misbehaves on a new paper.
+
 Automated smoke test: `node test/e2e.mjs [path-to-browser]`.
 
 Note: Google Chrome stable ≥137 ignores `--load-extension`, so the automated

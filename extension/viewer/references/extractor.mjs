@@ -23,18 +23,39 @@ export async function extractLines(pdfDocument) {
       }));
     items.sort((a, b) => b.y - a.y || a.x - b.x);
 
-    // Group items into visual lines: same baseline, no column-sized x gap.
-    const lines = [];
-    let cur = null;
+    // Two passes: first collect baseline "rows" (everything within a y
+    // tolerance, both columns included), then split each row at column-sized
+    // x gaps. Grouping in one y-then-x sweep merges the columns of
+    // two-column layouts, whose lines share baselines.
+    const rows = [];
+    let row = null;
     for (const it of items) {
-      const sameBaseline = cur && Math.abs(cur.y - it.y) < Math.max(cur.h, it.h) * 0.6;
-      const gap = cur ? it.x - cur.endX : 0;
-      if (sameBaseline && gap < Math.max(cur.h, it.h) * 3) {
-        cur.text += (gap > Math.max(cur.h, it.h) * 0.15 ? " " : "") + it.str;
-        cur.endX = Math.max(cur.endX, it.x + it.w);
+      if (row && Math.abs(row.y - it.y) < Math.max(row.h, it.h) * 0.6) {
+        row.items.push(it);
       } else {
-        cur = { text: it.str, x: it.x, y: it.y, page: p, h: it.h, endX: it.x + it.w };
-        lines.push(cur);
+        row = { y: it.y, h: it.h, items: [it] };
+        rows.push(row);
+      }
+    }
+    const lines = [];
+    for (const r of rows) {
+      r.items.sort((a, b) => a.x - b.x);
+      let cur = null;
+      for (const it of r.items) {
+        // Threshold must stay below two-column gutters (~2.4× the font
+        // height in USENIX/ACM templates) while exceeding word spacing —
+        // sized by the smaller item so a large heading can't inflate it.
+        // Items in clearly different font sizes never share a line.
+        const gap = cur ? it.x - cur.endX : 0;
+        const differentFont =
+          cur && Math.abs(cur.h - it.h) > Math.max(cur.h, it.h) * 0.25;
+        if (cur && !differentFont && gap < Math.min(cur.h, it.h) * 2) {
+          cur.text += (gap > Math.max(cur.h, it.h) * 0.15 ? " " : "") + it.str;
+          cur.endX = Math.max(cur.endX, it.x + it.w);
+        } else {
+          cur = { text: it.str, x: it.x, y: it.y, page: p, h: it.h, endX: it.x + it.w };
+          lines.push(cur);
+        }
       }
     }
 

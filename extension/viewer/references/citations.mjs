@@ -31,6 +31,7 @@ export class ReferencesFeature {
       try {
         const lines = await extractLines(pdfDocument);
         this.#entries = parseReferences(lines);
+        globalThis.__fxRefCount = this.#entries.length; // test introspection
         const heading = findReferencesHeading(lines);
         if (heading) await this.onHeadingFound?.(heading);
         // Pages rendered before extraction finished need annotating now.
