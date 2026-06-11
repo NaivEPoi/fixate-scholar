@@ -67,7 +67,14 @@ try {
     expression: "chrome.storage.sync.set({ enabled: true })",
     awaitPromise: true,
   });
-  await sleep(10000);
+  await sleep(6000);
+  const page = parseInt(process.argv[3] ?? "1", 10);
+  if (page > 1) {
+    await send("Runtime.evaluate", {
+      expression: `window.PDFViewerApplication.page = ${page}`,
+    });
+    await sleep(6000);
+  }
   const probe = await send("Runtime.evaluate", {
     returnByValue: true,
     expression: `(() => {

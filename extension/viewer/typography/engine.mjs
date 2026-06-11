@@ -45,7 +45,7 @@ export class TypographyEngine {
   #app;
   #settings;
   #enabled = false;
-  #pristine = new WeakMap(); // span -> { html, transform, fontFamily }
+  #pristine = new WeakMap(); // span -> { html, scaleX, fontFamily }
   #pending = new Map(); // pageNumber -> cancel flag holder
   #skipAfter = null; // { page, y } — References heading; nothing below it is touched
 
@@ -133,7 +133,7 @@ export class TypographyEngine {
       const orig = this.#pristine.get(span);
       if (orig) {
         span.innerHTML = orig.html;
-        span.style.transform = orig.transform;
+        span.style.setProperty("--scale-x", orig.scaleX || "");
         span.style.fontFamily = orig.fontFamily;
       }
       delete span.dataset.fxDone;
@@ -309,7 +309,7 @@ export class TypographyEngine {
           const span = pair.div;
           this.#pristine.set(span, {
             html: span.innerHTML,
-            transform: span.style.transform,
+            scaleX: span.style.getPropertyValue("--scale-x"),
             fontFamily: span.style.fontFamily,
           });
           const pad = rect.height * 0.18;
@@ -336,15 +336,22 @@ export class TypographyEngine {
           if (family) span.style.fontFamily = family;
           span.dataset.fxDone = "1";
         }
-        // Read pass 2 + write pass 2: re-calibrate scaleX to pristine width
-        // (the font swap and bolding both change the natural width).
+        // Read pass 2 + write pass 2: re-calibrate the span's --scale-x so
+        // its rendered width stays exactly the pristine width (the font swap
+        // and bolding both change the natural width). PDF.js composes the
+        // span transform as rotate(--rotate) scaleX(--scale-x)
+        // scale(--min-font-size-inv); only the custom property may be
+        // adjusted — writing style.transform would wipe the other parts.
         for (const { pair, rect } of batch) {
           const span = pair.div;
           const newWidth = span.getBoundingClientRect().width;
           if (newWidth > 0 && Math.abs(newWidth - rect.width) > 0.5) {
             const prevScale =
-              parseFloat(/scaleX\(([\d.]+)\)/.exec(span.style.transform)?.[1]) || 1;
-            span.style.transform = `scaleX(${(prevScale * rect.width) / newWidth})`;
+              parseFloat(span.style.getPropertyValue("--scale-x")) || 1;
+            span.style.setProperty(
+              "--scale-x",
+              (prevScale * rect.width) / newWidth,
+            );
           }
         }
         i = end;
