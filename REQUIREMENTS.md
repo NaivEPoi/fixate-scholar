@@ -34,7 +34,7 @@ paper-specific hack.
 |---|---|
 | Math: spans in TeX math/symbol faces (CMMI, CMSY, CMEX, MSAM, MSBM, …) and, inside prose, any word containing non-Latin letters, digits, or symbols | `engine.mjs SPECIAL_FONT`, `segmenter.mjs`, unit tests |
 | Special fonts: monospace/typewriter, small caps, bold display variants | `engine.mjs SPECIAL_FONT` |
-| URLs, DOIs, emails — including brace-grouped lists `{a, b}@host` | `segmenter.mjs LINKLIKE`, unit tests, `papers.mjs linkOk` |
+| URLs, DOIs, emails — including brace-grouped lists `{a, b}@host`, URL continuation lines wrapped without a scheme (`com/Foo/Bar`), and any text under the PDF's own **external-link annotations** (the authoritative metadata — text there stays canvas-rendered in its original color and clickable through the native annotation layer) | `segmenter.mjs LINKLIKE` + continuation rule, `engine.mjs` urlRects, unit tests, `papers.mjs linkOk` + `untouchedEarly` probes |
 | **Tables**: per baseline sub-row (column-aware — a gap crossing the two-column split starts a new sub-row): 3+ gap-separated cells, OR special-font items holding ≥55% of the characters (label columns that fill their width) | `engine.mjs #tableDivs`, `papers.mjs tableOk` + `untouched` probes |
 | **Algorithm/pseudocode listings**: rows starting with a line number (`10:`) or `Require:`/`Ensure:`/`Input:`/`Output:`/`Algorithm N` | `engine.mjs #tableDivs ALGO_LEAD`, `untouched` probes |
 | The dominant body size is estimated from actual prose only — bibliography and table text are excluded, so appendix prose on references-heavy pages is still processed | `engine.mjs`, `papers.mjs processed` probes |
@@ -51,7 +51,7 @@ paper-specific hack.
 | Detect the bibliography (numeric, dotted, and author-year/hanging-indent styles; two-column layouts) and parse entries with label/authors/year/title/DOI | `references/parser.mjs`, unit tests, `papers.mjs refs` count |
 | Link in-text citations — numeric `[12]`, ranges `[1-3]`, author-year `(Smith et al., 2020)`, including citations wrapping across text spans — to their entries | `references/citations.mjs`, `papers.mjs cites` count |
 | Hover → instant local entry preview; click → pinned card with Google Scholar preview (title/byline/snippet/cited-by/[PDF]), pager for multi-citations, See-in-References, DOI | `references/popup.mjs`, e2e popup check |
-| Citations and in-paper references (Figure/Table/Section/Algorithm/… N) are colored distinctly, using the document's own link colors sampled from the canvas when present, else a hyperref-style palette (green citations, red internal refs) | `references/citations.mjs wrapRange`/`sampleCanvasColor`, `papers.mjs colorOk` |
+| Citations and in-paper references (Figure/Table/Section/Algorithm/… N) are colored distinctly, using the document's own link colors sampled from the canvas when present (one consistent color per document per kind), else a hyperref-style palette (green citations, red internal refs). Color wrappers are inline (`position: static`) — PDF.js's absolute-positioning of text-layer spans must never apply to them, or line flow collapses | `references/citations.mjs wrapRange`/`sampleCanvasColor`, `overlay.css`, `papers.mjs colorOk` |
 | Scholar is queried only on explicit click, one search per reference, cached per session | `references/scholar.mjs` |
 
 ## 5. Interception & privacy

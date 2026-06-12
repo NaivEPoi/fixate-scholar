@@ -77,6 +77,9 @@ test("URLs, DOIs, and emails are never emphasized", () => {
   assert.ok(!doi.parts.some((p) => p.bold && /doi|org/.test(p.text)));
   // round-trip safety with links present
   assert.equal(url.parts.map((p) => p.text).join(""), "code at https://github.com/SyNSec-den/5GBaseChecker today");
+  // wrapped-URL continuation lines (no scheme, no spaces) are left whole
+  assert.equal(emphasizeParts("com/SyNSec-den/5GBaseChecker."), null);
+  assert.equal(emphasizeParts("ishtiaq@psu.edu"), null);
 });
 
 test("non-Latin and mixed words are never emphasized", () => {

@@ -23,6 +23,9 @@ const PAPERS = [
     template: "USENIX Sec'24",
     url: "https://yilud.me/usenixsecurity24-tu.pdf",
     untouched: ["Snapdragon 865", "learning not terminate", "Network Traces ("],
+    // Early probes run before refs-page navigation (their pages may get
+    // virtualized away afterwards): the wrapped 2-line URL must be whole.
+    untouchedEarly: ["com/SyNSec-den/5GBaseChecker"],
     processed: ["takes as input a set of UEs"],
   },
   { template: "USENIX NSDI'26", url: "https://yilud.me/AFC_Attacks_NSDI.pdf" },
@@ -149,6 +152,21 @@ try {
         continue;
       }
       if (state.bolded > 100 && state.refs > 0 && state.cites > 0) break;
+    }
+
+    // Early ground-truth probes, before navigation virtualizes early pages.
+    let earlyOk = true;
+    for (const probe of paper.untouchedEarly ?? []) {
+      const hit = await cdp.eval(`(() => {
+        const span = [...document.querySelectorAll('.textLayer span')]
+          .find(s => s.textContent.includes(${JSON.stringify(probe)}));
+        if (!span) return 'missing';
+        return span.dataset.fxDone || span.querySelector('.fx-b') ? 'processed' : 'ok';
+      })()`);
+      if (hit !== "ok") {
+        earlyOk = false;
+        console.log(`      early probe ${hit}: ${probe}`);
+      }
     }
 
     // Deeper checks: embedded-font rendering, page-1 header exclusion,
@@ -287,7 +305,7 @@ try {
     await fetch(`http://127.0.0.1:${PORT}/json/close/${tab.id}`); // plain-text response
 
     const checksOk =
-      !!checks && !checks.error &&
+      !!checks && !checks.error && earlyOk &&
       checks.fontOk && checks.headingOk && checks.headerOk && checks.linkOk &&
       checks.footerOk && checks.tableOk && checks.proseOk && checks.colorOk &&
       checks.refsOk !== false && checks.appendixOk !== false;
