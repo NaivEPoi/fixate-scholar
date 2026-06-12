@@ -340,6 +340,19 @@ export class TypographyEngine {
     this.#pending.set(pageNumber, holder);
 
     const allPairs = await this.#pagePairs(pageView);
+    // External-link annotations are the PDF's own metadata for URLs/emails:
+    // text under them stays canvas-rendered (original color) and clickable
+    // through the native annotation layer — this also covers URLs wrapped
+    // across lines, where each line has its own annotation rectangle.
+    let urlRects = [];
+    try {
+      const annotations = await pageView.pdfPage.getAnnotations();
+      urlRects = annotations
+        .filter((a) => a.subtype === "Link" && (a.url || a.unsafeUrl))
+        .map((a) => a.rect); // [x0, y0, x1, y1] PDF coords
+    } catch {
+      /* no annotations — regex-based URL handling still applies */
+    }
     if (holder.cancelled) {
       holder.resolve();
       return holder.promise;
@@ -416,6 +429,19 @@ export class TypographyEngine {
           if (pageNumber === contentStart.page && y >= contentStart.y - 1) return false;
         }
         if (inRefsBox(item)) return false;
+        // Skip when a URL annotation covers most of the item (a long prose
+        // item merely brushing a link keeps its emphasis — the regex-based
+        // range exclusion handles the link part).
+        const itemEnd = x + (item.width ?? 0);
+        if (
+          urlRects.some((r) => {
+            if (y < r[1] - 2 || y > r[3] + 2) return false;
+            const overlap = Math.min(itemEnd, r[2]) - Math.max(x, r[0]);
+            return overlap > Math.max(2, (itemEnd - x) * 0.5);
+          })
+        ) {
+          return false;
+        }
       }
       return true;
     });

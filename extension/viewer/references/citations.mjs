@@ -18,6 +18,10 @@ export class ReferencesFeature {
   #entries = [];
   #popup;
   #ready = null;
+  // One color per document for each link kind — per-instance canvas samples
+  // vary with anti-aliasing, so the first confident sample wins.
+  #citeColor = null;
+  #refColor = null;
 
   /** Called with the bibliography line boxes (Map<page, boxes>) once known. */
   onRefsRegion = null;
@@ -32,6 +36,8 @@ export class ReferencesFeature {
 
   onDocumentLoaded(pdfDocument) {
     this.#entries = [];
+    this.#citeColor = null;
+    this.#refColor = null;
     this.#ready = (async () => {
       try {
         const lines = await extractLines(pdfDocument);
@@ -107,13 +113,12 @@ export class ReferencesFeature {
     for (const cite of findCitations(joined)) {
       const entries = resolveCitation(cite.keys, this.#entries);
       if (!entries.length) continue;
-      let sampled = null;
       for (const seg of segments) {
         if (seg.end <= cite.start || seg.start >= cite.end) continue;
         const localStart = Math.max(0, cite.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
         for (const rect of rangeRects(seg.span, localStart, localEnd)) {
-          sampled ??= sampleCanvasColor(pageView, rect);
+          this.#citeColor ??= sampleCanvasColor(pageView, rect);
           const a = document.createElement("a");
           a.className = "fx-cite-hit";
           a.style.cssText =
@@ -133,7 +138,7 @@ export class ReferencesFeature {
         // Color the citation text itself, matching the document's own link
         // color when one is painted on the canvas.
         if (seg.span.dataset.fxDone) {
-          wrapRange(seg.span, localStart, localEnd, "fx-cite-c", sampled);
+          wrapRange(seg.span, localStart, localEnd, "fx-cite-c", this.#citeColor);
         }
       }
     }
@@ -141,17 +146,16 @@ export class ReferencesFeature {
     // In-paper references (Figure 3, Table 9, Section 5, Algorithm 2, …)
     // get their own color, again sampled from the document when possible.
     for (const ref of findInternalRefs(joined)) {
-      let sampled = null;
       for (const seg of segments) {
         if (seg.end <= ref.start || seg.start >= ref.end) continue;
         if (!seg.span.dataset.fxDone) continue;
         const localStart = Math.max(0, ref.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, ref.end - seg.start);
-        sampled ??= sampleCanvasColor(
+        this.#refColor ??= sampleCanvasColor(
           pageView,
           rangeRects(seg.span, localStart, localEnd)[0],
         );
-        wrapRange(seg.span, localStart, localEnd, "fx-ref-c", sampled);
+        wrapRange(seg.span, localStart, localEnd, "fx-ref-c", this.#refColor);
       }
     }
   }

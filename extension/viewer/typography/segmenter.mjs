@@ -103,6 +103,9 @@ function linkRanges(text) {
  */
 export function emphasizeParts(text, opts = {}, startWordIndex = 0) {
   if (!text || MATHY(text)) return null;
+  // A space-free fragment containing a path/address separator is the
+  // continuation of a wrapped URL or email — leave it whole.
+  if (/^\S+$/.test(text.trim()) && /[/@]/.test(text)) return null;
   const { saccade = 1 } = opts;
   const links = linkRanges(text);
   const parts = [];
