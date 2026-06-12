@@ -111,6 +111,18 @@
   font-weight: 600;
 }
 
+/* Citation and in-paper reference coloring. The document's own link colors
+   (sampled from the canvas) are applied inline and win over these defaults,
+   which follow the common hyperref palette: green citations, red internal
+   references. */
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-cite-c {
+  color: var(--fx-cite-color, #15803d);
+}
+
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-ref-c {
+  color: var(--fx-ref-color, #b91c1c);
+}
+
 /* Citation links and hover popup (references feature) */
 .fx-cite {
   cursor: pointer;

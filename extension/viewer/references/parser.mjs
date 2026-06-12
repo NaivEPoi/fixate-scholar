@@ -186,6 +186,20 @@ export function guessTitle(raw) {
   return raw.slice(0, 150);
 }
 
+// In-paper references: pointers to the document's own figures, tables,
+// sections, equations, algorithms, and appendices.
+const INTERNAL_REF =
+  /\b(?:Figure|Fig\.|Figs?\.|Table|Tab\.|Algorithm|Alg\.|Listing|Section|Sec\.|§|Appendix|App\.|Equation|Eq\.|Chapter|Theorem|Lemma|Definition|Claim)\s*~?\s*(?:\d+(?:\.\d+)*[a-z]?|[A-Z]\b(?:\.\d+)?)/g;
+
+/** Character ranges of in-paper references in a text string. */
+export function findInternalRefs(text) {
+  const out = [];
+  for (const m of text.matchAll(INTERNAL_REF)) {
+    out.push({ start: m.index, end: m.index + m[0].length });
+  }
+  return out;
+}
+
 const NUMERIC_CITE = /\[(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)\]/g;
 const AUTHOR_YEAR_CITE = /\(([^()]{2,120}?(?:19|20)\d{2}[a-z]?(?:\s*[;,]\s*(?:p+\.\s*[\d–-]+|[^();]*?(?:19|20)\d{2}[a-z]?))*)\)/g;
 

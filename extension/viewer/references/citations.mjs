@@ -8,6 +8,7 @@ import {
   findReferencesBody,
   findContentStart,
   findCitations,
+  findInternalRefs,
   resolveCitation,
 } from "./parser.mjs";
 import { CitationPopup } from "./popup.mjs";
@@ -106,11 +107,13 @@ export class ReferencesFeature {
     for (const cite of findCitations(joined)) {
       const entries = resolveCitation(cite.keys, this.#entries);
       if (!entries.length) continue;
+      let sampled = null;
       for (const seg of segments) {
         if (seg.end <= cite.start || seg.start >= cite.end) continue;
         const localStart = Math.max(0, cite.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
         for (const rect of rangeRects(seg.span, localStart, localEnd)) {
+          sampled ??= sampleCanvasColor(pageView, rect);
           const a = document.createElement("a");
           a.className = "fx-cite-hit";
           a.style.cssText =
@@ -127,8 +130,102 @@ export class ReferencesFeature {
           });
           layer.append(a);
         }
+        // Color the citation text itself, matching the document's own link
+        // color when one is painted on the canvas.
+        if (seg.span.dataset.fxDone) {
+          wrapRange(seg.span, localStart, localEnd, "fx-cite-c", sampled);
+        }
       }
     }
+
+    // In-paper references (Figure 3, Table 9, Section 5, Algorithm 2, …)
+    // get their own color, again sampled from the document when possible.
+    for (const ref of findInternalRefs(joined)) {
+      let sampled = null;
+      for (const seg of segments) {
+        if (seg.end <= ref.start || seg.start >= ref.end) continue;
+        if (!seg.span.dataset.fxDone) continue;
+        const localStart = Math.max(0, ref.start - seg.start);
+        const localEnd = Math.min(seg.end - seg.start, ref.end - seg.start);
+        sampled ??= sampleCanvasColor(
+          pageView,
+          rangeRects(seg.span, localStart, localEnd)[0],
+        );
+        wrapRange(seg.span, localStart, localEnd, "fx-ref-c", sampled);
+      }
+    }
+  }
+}
+
+/**
+ * Wrap the character range [start, end) of a span's text in colored
+ * <span class> elements, splitting text nodes as needed (the span may
+ * contain <b> emphasis wrappers; each intersecting text portion is wrapped
+ * separately). Already-wrapped portions are skipped, so re-annotation is
+ * idempotent. `color` (CSS color or null) overrides the class default.
+ */
+function wrapRange(span, start, end, className, color) {
+  const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+  const targets = [];
+  let pos = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const len = node.data.length;
+    const s = Math.max(start, pos);
+    const e = Math.min(end, pos + len);
+    if (s < e && !node.parentElement.closest(`.${className}`)) {
+      targets.push({ node, from: s - pos, to: e - pos });
+    }
+    pos += len;
+  }
+  for (const { node, from, to } of targets) {
+    let piece = node;
+    if (from > 0) piece = piece.splitText(from);
+    if (to - from < piece.data.length) piece.splitText(to - from);
+    const wrap = document.createElement("span");
+    wrap.className = className;
+    if (color) wrap.style.color = color;
+    piece.before(wrap);
+    wrap.append(piece);
+  }
+}
+
+/**
+ * The document's own color for a piece of text, sampled from the rendered
+ * canvas under the given client rect. Returns a CSS color when the sample
+ * is colorful (a hyperref link), else null (black text → use defaults).
+ */
+function sampleCanvasColor(pageView, rect) {
+  try {
+    const canvas = pageView.canvas ?? pageView.div.querySelector("canvas");
+    if (!canvas || !rect) return null;
+    const cr = canvas.getBoundingClientRect();
+    const sx = ((rect.left + rect.width / 2 - cr.left) * canvas.width) / cr.width;
+    const sy = ((rect.top + rect.height * 0.55 - cr.top) * canvas.height) / cr.height;
+    const data = canvas
+      .getContext("2d")
+      .getImageData(Math.round(sx) - 2, Math.round(sy) - 2, 5, 5).data;
+    // Pick the most saturated dark-ish pixel (glyph ink, not background).
+    let best = null;
+    let bestScore = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const saturation = max - min;
+      const darkness = 255 - min;
+      const score = saturation * 2 + darkness;
+      if (max > 250 && saturation < 20) continue; // background
+      if (score > bestScore) {
+        bestScore = score;
+        best = [r, g, b];
+      }
+    }
+    if (!best) return null;
+    const [r, g, b] = best;
+    if (Math.max(r, g, b) - Math.min(r, g, b) < 40) return null; // not colorful
+    return `rgb(${r}, ${g}, ${b})`;
+  } catch {
+    return null;
   }
 }
 

@@ -5,6 +5,7 @@ import {
   findReferencesBody,
   guessTitle,
   findCitations,
+  findInternalRefs,
   resolveCitation,
 } from "../../extension/viewer/references/parser.mjs";
 
@@ -142,6 +143,14 @@ test("resolveCitation maps author-year keys to entries", () => {
   const entries = parseReferences(APA_DOC);
   const resolved = resolveCitation(["Smith-2020", "Doe-2019"], entries);
   assert.equal(resolved.length, 2);
+});
+
+test("findInternalRefs matches in-paper pointers, not prose", () => {
+  const text =
+    "As shown in Figure 3 and Table 9, Algorithm 2 (Section 5.1) and Appendix B apply.";
+  const found = findInternalRefs(text).map(({ start, end }) => text.slice(start, end));
+  assert.deepEqual(found, ["Figure 3", "Table 9", "Algorithm 2", "Section 5.1", "Appendix B"]);
+  assert.equal(findInternalRefs("the figure shows a table of results").length, 0);
 });
 
 test("guessTitle falls back to raw prefix", () => {

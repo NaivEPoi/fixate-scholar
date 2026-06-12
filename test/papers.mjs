@@ -12,15 +12,18 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const FILTER = process.argv[3] ?? "";
-// tableProbe: ground-truth text known to live in a data table of that paper —
-// it must never be emphasized (the page is rendered by the refs/appendix
-// navigation, so probes should sit on late pages).
+// untouched: ground-truth texts known to live in data tables / algorithm
+// listings of that paper — they must never be emphasized. processed:
+// ground-truth body prose that MUST be emphasized (e.g. appendix text on a
+// references-heavy page). Probe pages must be rendered by the refs/appendix
+// navigation, so they should sit on late pages.
 const PAPERS = [
   { template: "USENIX Sec'25", url: "https://yilud.me/usenixsecurity25-dong-yilu.pdf" },
   {
     template: "USENIX Sec'24",
     url: "https://yilud.me/usenixsecurity24-tu.pdf",
-    tableProbe: "Snapdragon 865",
+    untouched: ["Snapdragon 865", "learning not terminate", "Network Traces ("],
+    processed: ["takes as input a set of UEs"],
   },
   { template: "USENIX NSDI'26", url: "https://yilud.me/AFC_Attacks_NSDI.pdf" },
   { template: "ACM CCS'24", url: "https://yilud.me/Proteus-ccs24.pdf" },
@@ -238,23 +241,43 @@ try {
           app.page = 1;
         }
 
-        // Tables: the engine marks tabular spans with data-fx-table; none of
-        // those may also be processed, the marker must actually fire
-        // somewhere in the corpus run, and the paper's ground-truth probe
-        // (text known to live in a data table) must be untouched.
+        // Tables/listings: the engine marks tabular spans with
+        // data-fx-table; none of those may also be processed, the marker
+        // must actually fire somewhere in the corpus run, and the paper's
+        // ground-truth probes must hold: "untouched" texts (table cells,
+        // pseudocode) never emphasized, "processed" texts (body prose on
+        // tricky pages) always emphasized.
         out.tableOk = !document.querySelector('.textLayer span[data-fx-table][data-fx-done]');
         out.tableMarked = document.querySelectorAll('.textLayer span[data-fx-table]').length;
-        const probe = ${JSON.stringify(paper.tableProbe ?? null)};
-        if (probe) {
-          const cell = [...document.querySelectorAll('.textLayer span')]
-            .find(s => s.textContent.includes(probe));
-          out.probeFound = !!cell;
-          if (cell && (cell.dataset.fxDone || cell.querySelector('.fx-b'))) {
+        const spansAll = [...document.querySelectorAll('.textLayer span')];
+        for (const probe of ${JSON.stringify(paper.untouched ?? [])}) {
+          const cell = spansAll.find(s => s.textContent.includes(probe));
+          if (!cell) {
+            out.tableOk = false; // probe page should have rendered
+            out.tableSample = ['probe missing: ' + probe];
+          } else if (cell.dataset.fxDone || cell.querySelector('.fx-b')) {
             out.tableOk = false;
             out.tableSample = ['probe processed: ' + probe];
           }
-          if (!cell) out.tableOk = false; // probe page should have rendered
         }
+        out.proseOk = true;
+        for (const probe of ${JSON.stringify(paper.processed ?? [])}) {
+          const span = spansAll.find(s => s.textContent.includes(probe));
+          if (!span || !span.dataset.fxDone) {
+            out.proseOk = false;
+            out.proseSample = (span ? 'unprocessed: ' : 'missing: ') + probe;
+          }
+        }
+
+        // Coloring: citations and in-paper references get distinct colors
+        // (sampled from the document or palette defaults) on processed text.
+        const citeC = document.querySelector('span[data-fx-done] .fx-cite-c');
+        const refC = document.querySelector('span[data-fx-done] .fx-ref-c');
+        out.citeColored = citeC ? getComputedStyle(citeC).color : null;
+        out.refColored = refC ? getComputedStyle(refC).color : null;
+        out.colorOk =
+          (!citeC || out.citeColored !== 'rgb(26, 26, 26)') &&
+          (!refC || out.refColored !== 'rgb(26, 26, 26)');
         return out;
       })()`);
     } catch (e) {
@@ -266,7 +289,7 @@ try {
     const checksOk =
       !!checks && !checks.error &&
       checks.fontOk && checks.headingOk && checks.headerOk && checks.linkOk &&
-      checks.footerOk && checks.tableOk &&
+      checks.footerOk && checks.tableOk && checks.proseOk && checks.colorOk &&
       checks.refsOk !== false && checks.appendixOk !== false;
     const ok = !!state && state.pages > 0 && state.fxOn && state.bolded > 100 && checksOk;
     if (!ok) failures++;

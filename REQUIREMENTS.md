@@ -23,7 +23,7 @@ paper-specific hack.
 
 | Rule | Where enforced |
 |---|---|
-| Every processed span keeps its exact original rendered width: re-calibrate only PDF.js's `--scale-x` custom property (never overwrite `style.transform`, which would destroy rotation and min-font-size compensation) | `engine.mjs`, `debug-page.mjs widthCheck` (0.0px drift) |
+| Every processed span keeps its exact original rendered width. Preferred correction is **word-spacing** (glyphs keep their natural shapes — the line reads naturally); spans with too few spaces fall back to re-calibrating PDF.js's `--scale-x` custom property (never overwrite `style.transform`, which would destroy rotation and min-font-size compensation) | `engine.mjs`, `debug-page.mjs widthCheck` |
 | Toggle-off restores the pristine rendering exactly | `engine.mjs #restorePage`, e2e |
 | Masks covering duplicate canvas glyphs must also cover ink overshoot (italics, descenders, accents): ±28% height vertical, ±max(2px, 12% height) horizontal padding | `engine.mjs #processPage` |
 | Work happens lazily per rendered page, in idle-time chunks | `engine.mjs`, perf budget in plan |
@@ -35,7 +35,9 @@ paper-specific hack.
 | Math: spans in TeX math/symbol faces (CMMI, CMSY, CMEX, MSAM, MSBM, …) and, inside prose, any word containing non-Latin letters, digits, or symbols | `engine.mjs SPECIAL_FONT`, `segmenter.mjs`, unit tests |
 | Special fonts: monospace/typewriter, small caps, bold display variants | `engine.mjs SPECIAL_FONT` |
 | URLs, DOIs, emails — including brace-grouped lists `{a, b}@host` | `segmenter.mjs LINKLIKE`, unit tests, `papers.mjs linkOk` |
-| **Tables**: any baseline row forming 3+ cells separated by column-sized gaps (two-column body text yields only 2, so it is safe) | `engine.mjs #tableDivs`, `papers.mjs tableOk` |
+| **Tables**: per baseline sub-row (column-aware — a gap crossing the two-column split starts a new sub-row): 3+ gap-separated cells, OR special-font items holding ≥55% of the characters (label columns that fill their width) | `engine.mjs #tableDivs`, `papers.mjs tableOk` + `untouched` probes |
+| **Algorithm/pseudocode listings**: rows starting with a line number (`10:`) or `Require:`/`Ensure:`/`Input:`/`Output:`/`Algorithm N` | `engine.mjs #tableDivs ALGO_LEAD`, `untouched` probes |
+| The dominant body size is estimated from actual prose only — bibliography and table text are excluded, so appendix prose on references-heavy pages is still processed | `engine.mjs`, `papers.mjs processed` probes |
 | Section titles and the paper title: larger than ~1.15× the page's dominant body size | `engine.mjs`, `papers.mjs headingOk` |
 | Smaller-than-body text: footnotes, figure labels, captions (also caption lines by `Figure N`/`Table N` prefix) | `engine.mjs` |
 | Running headers/footers and margins: outer 6% vertical bands, left 4% (page numbers, proceedings lines, watermarks) | `engine.mjs`, `papers.mjs footerOk` |
@@ -49,6 +51,7 @@ paper-specific hack.
 | Detect the bibliography (numeric, dotted, and author-year/hanging-indent styles; two-column layouts) and parse entries with label/authors/year/title/DOI | `references/parser.mjs`, unit tests, `papers.mjs refs` count |
 | Link in-text citations — numeric `[12]`, ranges `[1-3]`, author-year `(Smith et al., 2020)`, including citations wrapping across text spans — to their entries | `references/citations.mjs`, `papers.mjs cites` count |
 | Hover → instant local entry preview; click → pinned card with Google Scholar preview (title/byline/snippet/cited-by/[PDF]), pager for multi-citations, See-in-References, DOI | `references/popup.mjs`, e2e popup check |
+| Citations and in-paper references (Figure/Table/Section/Algorithm/… N) are colored distinctly, using the document's own link colors sampled from the canvas when present, else a hyperref-style palette (green citations, red internal refs) | `references/citations.mjs wrapRange`/`sampleCanvasColor`, `papers.mjs colorOk` |
 | Scholar is queried only on explicit click, one search per reference, cached per session | `references/scholar.mjs` |
 
 ## 5. Interception & privacy
