@@ -153,6 +153,7 @@ export class TypographyEngine {
         span.innerHTML = orig.html;
         span.style.setProperty("--scale-x", orig.scaleX || "");
         span.style.fontFamily = orig.fontFamily;
+        span.style.wordSpacing = orig.wordSpacing || "";
       }
       delete span.dataset.fxDone;
     }
@@ -189,14 +190,17 @@ export class TypographyEngine {
   }
 
   /**
-   * Divs belonging to tabular rows: a baseline row whose items form 3+
-   * cells separated by column-sized gaps is a table row. Column-aware: in
-   * two-column layouts a gap crossing the column split starts a new
-   * sub-row (left- and right-column lines share baselines and would
-   * otherwise compose into false 3-cell "rows"); full-width tables still
-   * yield 3+ cells inside each half.
+   * Divs belonging to tabular/listing rows, detected per baseline sub-row
+   * (column-aware: in two-column layouts a gap crossing the column split
+   * starts a new sub-row, since left- and right-column lines share
+   * baselines). A sub-row is tabular when any of:
+   *  - 3+ cells separated by column-sized gaps (classic data table),
+   *  - special-font items (mono/math/bold) holding the majority of its
+   *    characters (tables whose label column fills its width),
+   *  - it starts with a pseudocode line number ("10:") or an algorithm
+   *    keyword (Require:/Ensure:/Input:/Output:/Algorithm N).
    */
-  #tableDivs(allPairs, vx0, pageW) {
+  #tableDivs(allPairs, vx0, pageW, isSpecial) {
     const items = allPairs.filter((p) => p.item?.transform && p.item.str.trim());
     items.sort(
       (a, b) =>
@@ -208,7 +212,32 @@ export class TypographyEngine {
     const splitX = rightStarts > items.length * 0.2 && rightStarts > 5 ? vx0 + pageW * 0.5 : null;
 
     const tableSet = new Set();
+    const ALGO_LEAD = /^(?:\d{1,3}:|Require:|Ensure:|Input:|Output:|Algorithm\s+\d+)/;
     const flushSubRow = (subRow) => {
+      if (!subRow.length) return;
+      const mark = () => {
+        for (const p of subRow) tableSet.add(p.div);
+      };
+      if (ALGO_LEAD.test(subRow[0].item.str.trim())) {
+        mark();
+        return;
+      }
+      if (subRow.length < 2) return;
+      let specialChars = 0;
+      let specialItems = 0;
+      let totalChars = 0;
+      for (const p of subRow) {
+        const len = p.item.str.trim().length;
+        totalChars += len;
+        if (isSpecial(p)) {
+          specialChars += len;
+          specialItems++;
+        }
+      }
+      if (specialItems >= 2 && totalChars > 0 && specialChars / totalChars >= 0.55) {
+        mark();
+        return;
+      }
       if (subRow.length < 3) return;
       let cells = 1;
       for (let k = 1; k < subRow.length; k++) {
@@ -217,7 +246,7 @@ export class TypographyEngine {
           subRow[k].item.transform[4] - (prev.transform[4] + (prev.width ?? 0));
         if (gap > Math.max(prev.height || 8, subRow[k].item.height || 8) * 1.5) cells++;
       }
-      if (cells >= 3) for (const p of subRow) tableSet.add(p.div);
+      if (cells >= 3) mark();
     };
     const flush = (row) => {
       row.sort((a, b) => a.item.transform[4] - b.item.transform[4]);
@@ -336,12 +365,26 @@ export class TypographyEngine {
     const [vx0, vy0, vx1, vy1] = pageView.pdfPage.view;
     const pageW = vx1 - vx0;
     const pageH = vy1 - vy0;
-    const tableSet = this.#tableDivs(allPairs, vx0, pageW);
-    for (const d of tableSet) d.dataset.fxTable = "1"; // debug/test marker
-    const dominant = this.#dominantHeight(
-      tableSet.size ? allPairs.filter((p) => !tableSet.has(p.div)) : allPairs,
-    );
     const fontCache = new Map();
+    const isSpecial = (p) =>
+      this.#isSpecialFont(pageView, p.item?.fontName, fontCache);
+    const refsBoxes = this.#refsBoxes?.get(pageNumber);
+    const inRefsBox = (item) => {
+      if (!refsBoxes || !item?.transform) return false;
+      const x = item.transform[4];
+      const y = item.transform[5];
+      return refsBoxes.some(
+        (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2,
+      );
+    };
+    const tableSet = this.#tableDivs(allPairs, vx0, pageW, isSpecial);
+    for (const d of tableSet) d.dataset.fxTable = "1"; // debug/test marker
+    // The dominant body size must come from actual prose: bibliography and
+    // table text (often smaller) would skew it on pages they dominate, and
+    // then real body text gets skipped as "larger than body".
+    const dominant = this.#dominantHeight(
+      allPairs.filter((p) => !tableSet.has(p.div) && !inRefsBox(p.item)),
+    );
     // Document-level cut from setContentStart; until it arrives, a per-page
     // fast path keeps the common single-cover case (Abstract on page 1) right.
     // y grows upward in PDF coordinates: "above the heading" means y greater.
@@ -352,7 +395,6 @@ export class TypographyEngine {
         contentStart = { page: 1, y: abstractPair.item.transform[5] };
       }
     }
-    const refsBoxes = this.#refsBoxes?.get(pageNumber);
     const pairs = allPairs.filter(({ div, item }) => {
       if (!div?.isConnected || div.dataset.fxDone) return false;
       const text = div.textContent;
@@ -373,9 +415,7 @@ export class TypographyEngine {
           if (pageNumber < contentStart.page) return false;
           if (pageNumber === contentStart.page && y >= contentStart.y - 1) return false;
         }
-        if (refsBoxes?.some((b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2)) {
-          return false;
-        }
+        if (inRefsBox(item)) return false;
       }
       return true;
     });
@@ -413,11 +453,14 @@ export class TypographyEngine {
             html: span.innerHTML,
             scaleX: span.style.getPropertyValue("--scale-x"),
             fontFamily: span.style.fontFamily,
+            wordSpacing: span.style.wordSpacing,
           });
           // Cover glyph overshoot too: ink (italics, descenders, accents)
-          // extends past the advance-width box the rect describes.
+          // extends past the advance-width box the rect describes. Keep the
+          // horizontal reach small — adjacent canvas glyphs (inline math,
+          // mono identifiers) must not get shaved.
           const padY = rect.height * 0.28;
-          const padX = Math.max(2, rect.height * 0.12);
+          const padX = Math.max(1.5, rect.height * 0.06);
           const m = document.createElement("div");
           m.style.left = `${rect.left - layerRect.left - padX}px`;
           m.style.top = `${rect.top - layerRect.top - padY}px`;
@@ -441,18 +484,28 @@ export class TypographyEngine {
           if (family) span.style.fontFamily = family;
           span.dataset.fxDone = "1";
         }
-        // Read pass 2 + write pass 2: re-calibrate the span's --scale-x so
-        // its rendered width stays exactly the pristine width (the font swap
-        // and bolding both change the natural width). PDF.js composes the
-        // span transform as rotate(--rotate) scaleX(--scale-x)
-        // scale(--min-font-size-inv); only the custom property may be
-        // adjusted — writing style.transform would wipe the other parts.
+        // Read pass 2 + write pass 2: restore the span's pristine rendered
+        // width (the font swap and bolding change the natural width).
+        // Preferred correction is word-spacing — glyphs keep their natural
+        // shapes and the line reads naturally; spans with too few spaces
+        // (or needing too much per-space correction) fall back to scaling
+        // the --scale-x custom property. PDF.js composes the span transform
+        // as rotate(--rotate) scaleX(--scale-x) scale(--min-font-size-inv);
+        // only the custom property may be adjusted — writing
+        // style.transform would wipe the other parts.
         for (const { pair, rect } of batch) {
           const span = pair.div;
           const newWidth = span.getBoundingClientRect().width;
-          if (newWidth > 0 && Math.abs(newWidth - rect.width) > 0.5) {
-            const prevScale =
-              parseFloat(span.style.getPropertyValue("--scale-x")) || 1;
+          if (!(newWidth > 0) || Math.abs(newWidth - rect.width) <= 0.5) continue;
+          const prevScale =
+            parseFloat(span.style.getPropertyValue("--scale-x")) || 1;
+          const spaces = (span.textContent.match(/ /g) || []).length;
+          const natural = newWidth / prevScale;
+          const perSpace = spaces ? (rect.width - natural) / spaces : Infinity;
+          if (spaces >= 2 && Math.abs(perSpace) < rect.height * 0.45) {
+            span.style.setProperty("--scale-x", 1);
+            span.style.wordSpacing = `${perSpace}px`;
+          } else {
             span.style.setProperty(
               "--scale-x",
               (prevScale * rect.width) / newWidth,
