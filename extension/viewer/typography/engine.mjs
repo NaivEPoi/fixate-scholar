@@ -63,10 +63,7 @@ export class TypographyEngine {
     if (!this.#enabled || !pos) return Promise.resolve();
     const promises = [];
     this.#eachRenderedPage((pv) => {
-      if (pv.id <= pos.page) {
-        this.#restorePage(pv);
-        promises.push(this.#processPage(pv));
-      }
+      if (pv.id <= pos.page) promises.push(this.#processPage(pv));
     });
     return Promise.all(promises);
   }
@@ -80,10 +77,7 @@ export class TypographyEngine {
     if (!this.#enabled || !boxesByPage?.size) return Promise.resolve();
     const promises = [];
     this.#eachRenderedPage((pv) => {
-      if (boxesByPage.has(pv.id)) {
-        this.#restorePage(pv);
-        promises.push(this.#processPage(pv));
-      }
+      if (boxesByPage.has(pv.id)) promises.push(this.#processPage(pv));
     });
     return Promise.all(promises);
   }
@@ -147,7 +141,11 @@ export class TypographyEngine {
 
   #restorePage(pageView) {
     pageView.div.querySelector(".fx-mask")?.remove();
-    for (const span of pageView.textLayer.div.querySelectorAll("span[data-fx-done]")) {
+    const layerDiv = pageView.textLayer?.div;
+    if (!layerDiv) return;
+    // The pristine --scale-x is dimensionless (canvas width / measured text
+    // width — both scale with zoom), so restoring it is valid at any scale.
+    for (const span of layerDiv.querySelectorAll("span[data-fx-done]")) {
       const orig = this.#pristine.get(span);
       if (orig) {
         span.innerHTML = orig.html;
@@ -156,6 +154,9 @@ export class TypographyEngine {
         span.style.wordSpacing = orig.wordSpacing || "";
       }
       delete span.dataset.fxDone;
+    }
+    for (const d of layerDiv.querySelectorAll("[data-fx-table]")) {
+      delete d.dataset.fxTable;
     }
   }
 
@@ -189,44 +190,90 @@ export class TypographyEngine {
       .map((div) => ({ div, item: null, style: null }));
   }
 
-  /**
-   * Divs belonging to tabular/listing rows, detected per baseline sub-row
-   * (column-aware: in two-column layouts a gap crossing the column split
-   * starts a new sub-row, since left- and right-column lines share
-   * baselines). A sub-row is tabular when any of:
-   *  - 3+ cells separated by column-sized gaps (classic data table),
-   *  - special-font items (mono/math/bold) holding the majority of its
-   *    characters (tables whose label column fills its width),
-   *  - it starts with a pseudocode line number ("10:") or an algorithm
-   *    keyword (Require:/Ensure:/Input:/Output:/Algorithm N).
-   */
-  #tableDivs(allPairs, vx0, pageW, isSpecial) {
-    const items = allPairs.filter((p) => p.item?.transform && p.item.str.trim());
-    items.sort(
+  /** Group page items into visual baseline lines, top→bottom (descending PDF
+   *  y). Each line carries its x-extent and joined text. */
+  #lineGroups(items) {
+    const sorted = [...items].sort(
       (a, b) =>
         b.item.transform[5] - a.item.transform[5] ||
         a.item.transform[4] - b.item.transform[4],
     );
-    const mid = vx0 + pageW * 0.45;
-    const rightStarts = items.filter((p) => p.item.transform[4] > mid).length;
-    const splitX = rightStarts > items.length * 0.2 && rightStarts > 5 ? vx0 + pageW * 0.5 : null;
-
-    const tableSet = new Set();
-    const ALGO_LEAD = /^(?:\d{1,3}:|Require:|Ensure:|Input:|Output:|Algorithm\s+\d+)/;
-    const flushSubRow = (subRow) => {
-      if (!subRow.length) return;
-      const mark = () => {
-        for (const p of subRow) tableSet.add(p.div);
-      };
-      if (ALGO_LEAD.test(subRow[0].item.str.trim())) {
-        mark();
-        return;
+    const lines = [];
+    let cur = null;
+    for (const p of sorted) {
+      const y = p.item.transform[5];
+      const h = p.item.height || 8;
+      if (cur && Math.abs(y - cur.y) < Math.max(cur.h, h) * 0.6) {
+        cur.items.push(p);
+        cur.h = Math.max(cur.h, h);
+      } else {
+        cur = { y, h, items: [p] };
+        lines.push(cur);
       }
-      if (subRow.length < 2) return;
+    }
+    for (const ln of lines) {
+      ln.items.sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+      ln.xStart = ln.items[0].item.transform[4];
+      const last = ln.items.at(-1).item;
+      ln.xEnd = last.transform[4] + (last.width ?? 0);
+      ln.text = ln.items.map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim();
+    }
+    return lines;
+  }
+
+  /**
+   * Divs the author set apart from running prose, returned as two sets:
+   *  - tableSet: tabular / pseudocode-listing rows. A baseline (sub-)row is
+   *    tabular when it has 3+ column-gap-separated cells, OR special-font
+   *    items (mono/math/bold) holding the majority of its characters, OR it
+   *    starts with a pseudocode line number ("10:") / algorithm keyword
+   *    (Require:/Ensure:/Input:/Output:/Algorithm N). Detected tabular rows
+   *    are then clustered and the whole band is filled (x-bounded), so
+   *    interior rows with only one or two filled cells can't leak through.
+   *  - captionSet: figure/table caption blocks — a "Table N"/"Figure N"
+   *    leader plus its same-size continuation lines (multi-line captions).
+   *
+   * The page-center column split is applied ONLY on genuinely two-column
+   * pages (few items cross the center). Applying it to a wide single-column
+   * table would shred its rows into <3-cell fragments and let them through.
+   */
+  #skipRegions(allPairs, vx0, pageW, isSpecial) {
+    const tableSet = new Set();
+    const captionSet = new Set();
+    const items = allPairs.filter((p) => p.item?.transform && p.item.str.trim());
+    const lines = this.#lineGroups(items);
+    if (!lines.length) return { tableSet, captionSet };
+
+    // Two-column? Test whether a narrow band at the page center is a gutter.
+    // A baseline that merges a left-column item with a right-column item spans
+    // the center as a *line*, so test individual items: in a real two-column
+    // layout almost no item's own box covers the center band, whereas in a
+    // single column (or a wide full-width table) many lines have an item over
+    // it. This keeps left-column prose from being swept up with a right-column
+    // table that happens to share its baseline.
+    const centerX = vx0 + pageW * 0.5;
+    const cm = pageW * 0.03;
+    const gutter = pageW * 0.02;
+    let occupy = 0;
+    for (const ln of lines) {
+      const over = ln.items.some((p) => {
+        const x = p.item.transform[4];
+        return x < centerX + gutter && x + (p.item.width ?? 0) > centerX - gutter;
+      });
+      if (over) occupy++;
+    }
+    const twoColumn = lines.length > 4 && occupy < lines.length * 0.35;
+    const splitX = twoColumn ? centerX : null;
+
+    const ALGO_LEAD = /^(?:\d{1,3}:|Require:|Ensure:|Input:|Output:|Algorithm\s+\d+)/;
+    const runIsTabular = (run) => {
+      if (!run.length) return false;
+      if (ALGO_LEAD.test(run[0].item.str.trim())) return true;
+      if (run.length < 2) return false;
       let specialChars = 0;
       let specialItems = 0;
       let totalChars = 0;
-      for (const p of subRow) {
+      for (const p of run) {
         const len = p.item.str.trim().length;
         totalChars += len;
         if (isSpecial(p)) {
@@ -234,51 +281,96 @@ export class TypographyEngine {
           specialItems++;
         }
       }
-      if (specialItems >= 2 && totalChars > 0 && specialChars / totalChars >= 0.55) {
-        mark();
-        return;
-      }
-      if (subRow.length < 3) return;
+      if (specialItems >= 2 && totalChars > 0 && specialChars / totalChars >= 0.55) return true;
+      if (run.length < 3) return false;
       let cells = 1;
-      for (let k = 1; k < subRow.length; k++) {
-        const prev = subRow[k - 1].item;
+      for (let k = 1; k < run.length; k++) {
+        const prev = run[k - 1].item;
         const gap =
-          subRow[k].item.transform[4] - (prev.transform[4] + (prev.width ?? 0));
-        if (gap > Math.max(prev.height || 8, subRow[k].item.height || 8) * 1.5) cells++;
+          run[k].item.transform[4] - (prev.transform[4] + (prev.width ?? 0));
+        if (gap > Math.max(prev.height || 8, run[k].item.height || 8) * 1.5) cells++;
       }
-      if (cells >= 3) mark();
+      return cells >= 3;
     };
-    const flush = (row) => {
-      row.sort((a, b) => a.item.transform[4] - b.item.transform[4]);
-      let subRow = [];
-      for (const p of row) {
-        const prev = subRow.at(-1)?.item;
-        const prevEnd = prev ? prev.transform[4] + (prev.width ?? 0) : null;
-        if (splitX !== null && prevEnd !== null && prevEnd < splitX && p.item.transform[4] >= splitX) {
-          flushSubRow(subRow);
-          subRow = [];
-        }
-        subRow.push(p);
-      }
-      flushSubRow(subRow);
-    };
-    let row = [];
-    let rowY = null;
-    let rowH = 0;
-    for (const p of items) {
-      const y = p.item.transform[5];
-      const h = p.item.height || 8;
-      if (rowY !== null && Math.abs(y - rowY) < Math.max(rowH, h) * 0.6) {
-        row.push(p);
+    // Split every baseline into per-column sub-rows. On a two-column page,
+    // left- and right-column content share baselines; clustering and filling
+    // must stay within a column, or a table in one column would swallow prose
+    // in the other (e.g. an appendix with a symbol table beside running text).
+    const columns = splitX === null ? [[]] : [[], []];
+    for (const ln of lines) {
+      if (splitX === null) {
+        columns[0].push({ y: ln.y, h: ln.h, items: ln.items });
       } else {
-        if (row.length) flush(row);
-        row = [p];
-        rowY = y;
-        rowH = h;
+        const left = ln.items.filter((p) => p.item.transform[4] < splitX);
+        const right = ln.items.filter((p) => p.item.transform[4] >= splitX);
+        if (left.length) columns[0].push({ y: ln.y, h: ln.h, items: left });
+        if (right.length) columns[1].push({ y: ln.y, h: ln.h, items: right });
       }
     }
-    if (row.length) flush(row);
-    return tableSet;
+
+    // Within a column, cluster tabular sub-rows (interior non-tabular rows
+    // tolerated up to a few line-heights apart) and fill the band between the
+    // first and last tabular sub-row, bounded to the table's own x-extent.
+    const fillColumn = (rows) => {
+      const tabIdx = rows.map((r, k) => (runIsTabular(r.items) ? k : -1)).filter((k) => k >= 0);
+      let c = 0;
+      while (c < tabIdx.length) {
+        let end = c;
+        while (end + 1 < tabIdx.length) {
+          const a = rows[tabIdx[end]];
+          const b = rows[tabIdx[end + 1]];
+          if (a.y - b.y > Math.max(a.h, b.h) * 4) break;
+          end++;
+        }
+        const cluster = tabIdx.slice(c, end + 1).map((k) => rows[k]);
+        if (cluster.length >= 2) {
+          let xMin = Infinity;
+          let xMax = -Infinity;
+          for (const r of cluster) {
+            for (const p of r.items) {
+              xMin = Math.min(xMin, p.item.transform[4]);
+              xMax = Math.max(xMax, p.item.transform[4] + (p.item.width ?? 0));
+            }
+          }
+          const top = rows[tabIdx[c]];
+          const bot = rows[tabIdx[end]];
+          const yTop = top.y + top.h * 0.6;
+          const yBot = bot.y - bot.h * 0.6;
+          for (const r of rows) {
+            if (r.y > yTop || r.y < yBot) continue;
+            for (const p of r.items) {
+              const x = p.item.transform[4] + (p.item.width ?? 0) / 2;
+              if (x >= xMin - cm && x <= xMax + cm) tableSet.add(p.div);
+            }
+          }
+        } else {
+          for (const p of cluster[0].items) tableSet.add(p.div);
+        }
+        c = end + 1;
+      }
+    };
+    for (const col of columns) fillColumn(col);
+
+    // Multi-line caption blocks: a "Table N"/"Figure N" leader plus up to two
+    // immediately-following same-size lines (tight spacing), stopping at the
+    // table, a size change, a paragraph gap, or the next caption.
+    for (let k = 0; k < lines.length; k++) {
+      if (!CAPTION.test(lines[k].text)) continue;
+      const lead = lines[k];
+      for (const p of lead.items) captionSet.add(p.div);
+      let absorbed = 0;
+      for (let m = k + 1; m < lines.length && absorbed < 2; m++) {
+        const gap = lines[m - 1].y - lines[m].y;
+        if (gap > Math.max(lines[m - 1].h, lines[m].h) * 1.5) break;
+        if (Math.abs(lines[m].h - lead.h) > lead.h * 0.15) break;
+        if (CAPTION.test(lines[m].text)) break;
+        if (lines[m].items.some((p) => tableSet.has(p.div))) break;
+        for (const p of lines[m].items) captionSet.add(p.div);
+        absorbed++;
+      }
+    }
+
+    return { tableSet, captionSet };
   }
 
   /** Dominant body-text height (weighted by character count). */
@@ -335,6 +427,12 @@ export class TypographyEngine {
       prev.cancelled = true;
       prev.resolve();
     }
+    // A zoom/resize KEEPS the text-layer DOM and re-lays it out in place
+    // (TextLayer.update): PDF.js overwrites --scale-x measuring the span's
+    // plain text, while our pixel-unit word-spacing and mask geometry go
+    // stale. Restore to pristine synchronously — the page shows its native
+    // rendering rather than a half-stale hybrid — then process fresh below.
+    this.#restorePage(pageView);
     const holder = { cancelled: false };
     holder.promise = new Promise((resolve) => (holder.resolve = resolve));
     this.#pending.set(pageNumber, holder);
@@ -390,13 +488,15 @@ export class TypographyEngine {
         (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2,
       );
     };
-    const tableSet = this.#tableDivs(allPairs, vx0, pageW, isSpecial);
+    const { tableSet, captionSet } = this.#skipRegions(allPairs, vx0, pageW, isSpecial);
     for (const d of tableSet) d.dataset.fxTable = "1"; // debug/test marker
-    // The dominant body size must come from actual prose: bibliography and
-    // table text (often smaller) would skew it on pages they dominate, and
-    // then real body text gets skipped as "larger than body".
+    // The dominant body size must come from actual prose: bibliography, table,
+    // and caption text (often smaller) would skew it on pages they dominate,
+    // and then real body text gets skipped as "larger than body".
     const dominant = this.#dominantHeight(
-      allPairs.filter((p) => !tableSet.has(p.div) && !inRefsBox(p.item)),
+      allPairs.filter(
+        (p) => !tableSet.has(p.div) && !captionSet.has(p.div) && !inRefsBox(p.item),
+      ),
     );
     // Document-level cut from setContentStart; until it arrives, a per-page
     // fast path keeps the common single-cover case (Abstract on page 1) right.
@@ -413,6 +513,7 @@ export class TypographyEngine {
       const text = div.textContent;
       if (!text || text.trim().length < 2) return false;
       if (CAPTION.test(text)) return false;
+      if (captionSet.has(div)) return false;
       if (tableSet.has(div)) return false;
       if (dominant && item?.height) {
         if (item.height < dominant * 0.85) return false;

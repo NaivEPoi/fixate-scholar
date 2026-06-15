@@ -9,6 +9,7 @@ const VIEWER = chrome.runtime.getURL("vendor/pdfjs/web/viewer.html");
 // 9xx = transient bypass-once.
 const RULE_REDIRECT_PDF = 201;
 const RULE_REDIRECT_OCTET = 202;
+const RULE_REDIRECT_PDF_URL = 203;
 const BYPASS_ORIGIN_BASE = 300;
 const BYPASS_ONCE_BASE = 900;
 
@@ -18,10 +19,29 @@ async function registerRules() {
     .map((r) => r.id)
     .filter((id) => id < BYPASS_ONCE_BASE);
   const rules = [
-    // Top-level navigations that return a PDF — including ones served with
-    // Content-Disposition: attachment. Nothing is ever saved to disk just by
-    // opening a link; the viewer's toolbar download button is the explicit
-    // way to save a copy.
+    // Top-level navigations to a *.pdf URL: redirect at the request stage
+    // (before any response exists), so the browser never receives a PDF
+    // response on the tab for a download manager (IDM, FDM, …) to grab. This
+    // also avoids a race with the header-stage rule below, which fires too
+    // late to keep such tools from intercepting the navigation.
+    {
+      id: RULE_REDIRECT_PDF_URL,
+      priority: 1,
+      condition: {
+        resourceTypes: ["main_frame"],
+        excludedRequestMethods: ["post"],
+        regexFilter: "^(https?://[^?#]*\\.pdf([?#].*)?)$",
+      },
+      action: {
+        type: "redirect",
+        redirect: { regexSubstitution: `${VIEWER}?file=\\1` },
+      },
+    },
+    // Top-level navigations that return a PDF without a .pdf extension
+    // (e.g. arxiv.org/pdf/1706.03762), matched on the response Content-Type —
+    // including ones served with Content-Disposition: attachment. Nothing is
+    // ever saved to disk just by opening a link; the viewer's toolbar
+    // download button is the explicit way to save a copy.
     {
       id: RULE_REDIRECT_PDF,
       priority: 1,
