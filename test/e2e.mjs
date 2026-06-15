@@ -152,10 +152,12 @@ try {
   const shot1 = await cdp.send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(outDir, "viewer-page1.png"), Buffer.from(shot1.data, "base64"));
 
-  // Citation popup: click a hit-target, expect the pinned card with the
-  // Scholar search action and the See-in-References action. (The rich
-  // Scholar preview itself depends on live scholar.google.com responses, so
-  // only its loading/fallback shell is asserted here.)
+  // Citation popup: click a hit-target, expect the pinned Scholar-reader-style
+  // card with the Scholar search action and a Cite (BibTeX) action — and NO
+  // jump-to-references action. Then open Cite and confirm BibTeX is produced
+  // (Scholar's own, or the locally generated fallback). (The rich Scholar
+  // preview itself depends on live scholar.google.com, so only the card's
+  // shell + the BibTeX it always yields are asserted.)
   const popupState = await cdp.eval(`(async () => {
     const hit = document.querySelector('.fx-cite-hit');
     if (!hit) return { clicked: false };
@@ -163,20 +165,27 @@ try {
     await new Promise(r => setTimeout(r, 4000)); // allow the Scholar fetch
     const popup = document.querySelector('.fx-cite-popup');
     const link = popup?.querySelector('a[href^="https://scholar.google.com/scholar?"]');
+    const citeBtn = [...(popup?.querySelectorAll('button') ?? [])].find(b => b.textContent === 'Cite');
+    citeBtn?.click();
+    await new Promise(r => setTimeout(r, 4000)); // allow the BibTeX fetch/fallback
+    const bib = popup?.querySelector('.fx-cite-bib textarea')?.value ?? '';
     return {
       clicked: true,
       visible: !!popup && !popup.hidden,
       scholarHref: link?.href ?? null,
-      hasRefsAction: [...(popup?.querySelectorAll('a') ?? [])].some(a => a.textContent === 'See in References'),
+      hasCiteAction: !!citeBtn,
+      noJumpAction: ![...(popup?.querySelectorAll('a,button') ?? [])].some(a => a.textContent === 'See in References'),
+      bibtexOk: /^@\\w+\\{/.test(bib.trim()),
       hasClose: !!popup?.querySelector('.fx-cite-close'),
       body: popup?.querySelector('.fx-cite-body')?.textContent.slice(0, 80) ?? null,
     };
   })()`);
   console.log("popup:", JSON.stringify(popupState));
   check(
-    "pinned citation popup (Scholar action + references action)",
-    popupState.visible && !!popupState.scholarHref && popupState.hasRefsAction && popupState.hasClose,
-    popupState.scholarHref ?? JSON.stringify(popupState),
+    "citation card: Scholar action + Cite/BibTeX, no PDF-jump",
+    popupState.visible && !!popupState.scholarHref && popupState.hasCiteAction &&
+      popupState.noJumpAction && popupState.bibtexOk && popupState.hasClose,
+    JSON.stringify(popupState),
   );
   const shotPopup = await cdp.send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(outDir, "citation-popup.png"), Buffer.from(shotPopup.data, "base64"));
