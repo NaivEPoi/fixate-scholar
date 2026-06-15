@@ -377,17 +377,20 @@ export class TypographyEngine {
     };
     for (const col of columns) fillColumn(col);
 
-    // Multi-line caption blocks: a "Table N"/"Figure N" leader plus up to two
-    // immediately-following same-size lines (tight spacing), stopping at the
-    // table, a size change, a paragraph gap, or the next caption.
+    // Multi-line caption blocks: a "Table N"/"Figure N" leader plus its
+    // following same-size lines (tight spacing), stopping at the table, a size
+    // change, a paragraph gap, or the next caption. Captions are emphasized
+    // like body text (see #processPage), so this set marks which spans are
+    // caption text — letting smaller-than-body caption lines bypass the size
+    // filter — and the generous line cap errs toward covering the whole caption.
     for (let k = 0; k < lines.length; k++) {
       if (!CAPTION.test(lines[k].text)) continue;
       const lead = lines[k];
       for (const p of lead.items) captionSet.add(p.div);
       let absorbed = 0;
-      for (let m = k + 1; m < lines.length && absorbed < 2; m++) {
+      for (let m = k + 1; m < lines.length && absorbed < 12; m++) {
         const gap = lines[m - 1].y - lines[m].y;
-        if (gap > Math.max(lines[m - 1].h, lines[m].h) * 1.5) break;
+        if (gap > Math.max(lines[m - 1].h, lines[m].h) * 1.6) break;
         if (Math.abs(lines[m].h - lead.h) > lead.h * 0.15) break;
         if (CAPTION.test(lines[m].text)) break;
         if (lines[m].items.some((p) => tableSet.has(p.div))) break;
@@ -538,10 +541,12 @@ export class TypographyEngine {
       if (!div?.isConnected || div.dataset.fxDone) return false;
       const text = div.textContent;
       if (!text || text.trim().length < 2) return false;
-      if (CAPTION.test(text)) return false;
-      if (captionSet.has(div)) return false;
       if (tableSet.has(div)) return false;
-      if (dominant && item?.height) {
+      // Figure/table captions are emphasized like body text — including their
+      // continuation lines and even when set smaller than the body — so they
+      // bypass the smaller/larger-than-body size filter below.
+      const isCaption = captionSet.has(div) || CAPTION.test(text);
+      if (dominant && item?.height && !isCaption) {
         if (item.height < dominant * 0.85) return false;
         if (item.height > dominant * 1.15) return false;
       }

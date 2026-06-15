@@ -1,11 +1,28 @@
 // Citation popup. Two modes:
 //  - hover: quick local preview of the reference entry text (auto-hides)
-//  - click: pinned card with a Google Scholar preview (title, byline,
-//    snippet, cited-by, [PDF] button) and a pager when one in-text citation
-//    resolves to several entries. Dismissed by ✕, Escape, or clicking
-//    outside.
+//  - click: pinned card, like the Google Scholar reader — title linking to
+//    the paper, byline, abstract snippet, cited-by, and actions ([PDF], Cite
+//    → BibTeX, Related, Google Scholar, DOI), with a pager when one in-text
+//    citation resolves to several entries. Clicking a citation never scrolls
+//    the PDF to the bibliography. Dismissed by ✕, Escape, or clicking outside.
 
-import { fetchScholarPreview, scholarSearchUrl } from "./scholar.mjs";
+import { fetchScholarPreview, fetchScholarBibtex, scholarSearchUrl } from "./scholar.mjs";
+
+/** A minimal BibTeX entry from the locally parsed reference — the fallback
+ *  when Scholar's own BibTeX can't be fetched. */
+function entryBibtex(entry, preview) {
+  const surname = (entry.surname || "ref").replace(/[^A-Za-z]/g, "") || "ref";
+  const key = (surname + (entry.year || "")).toLowerCase();
+  const clean = (s) => String(s).replace(/[{}]/g, "").trim();
+  const out = [`@misc{${key},`];
+  const title = clean(entry.title || preview?.title || "");
+  if (title) out.push(`  title = {${title}},`);
+  if (entry.year) out.push(`  year = {${entry.year}},`);
+  if (entry.doi) out.push(`  doi = {${clean(entry.doi)}},`);
+  out.push(`  note = {${clean(entry.raw).slice(0, 300)}}`);
+  out.push(`}`);
+  return out.join("\n");
+}
 
 const SHOW_DELAY = 120;
 const HIDE_DELAY = 250;
@@ -195,55 +212,94 @@ export class CitationPopup {
     return card;
   }
 
+  #linkPill(text, href, extra = "") {
+    const a = document.createElement("a");
+    a.className = `${this.#pinned ? "fx-pill" : ""} ${extra}`.trim();
+    a.textContent = text;
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    return a;
+  }
+
   #actions(entry) {
     const actions = document.createElement("div");
     actions.className = "fx-cite-actions";
 
     if (this.#pinned) {
-      // Fill in the [PDF] pill once the preview arrives.
+      // Cite → BibTeX panel (Scholar's own BibTeX, else a local fallback).
+      const cite = document.createElement("button");
+      cite.type = "button";
+      cite.className = "fx-pill fx-pill-action";
+      cite.textContent = "Cite";
+      cite.addEventListener("click", (e) => {
+        e.preventDefault();
+        this.#toggleCite(entry);
+      });
+      actions.append(cite);
+
+      // [PDF] (prepended, primary) and Related fill in once the preview lands.
       fetchScholarPreview(entry.title).then((preview) => {
-        if (!preview?.pdfUrl || !actions.isConnected) return;
-        const pdf = document.createElement("a");
-        pdf.className = "fx-pill fx-pill-primary";
-        pdf.textContent = `[PDF] ${preview.pdfHost}`;
-        pdf.href = preview.pdfUrl;
-        pdf.target = "_blank";
-        pdf.rel = "noopener noreferrer";
-        actions.prepend(pdf);
+        if (!actions.isConnected) return;
+        if (preview?.pdfUrl) {
+          actions.prepend(this.#linkPill(`[PDF] ${preview.pdfHost}`, preview.pdfUrl, "fx-pill-primary"));
+        }
+        if (preview?.relatedUrl) {
+          actions.append(this.#linkPill("Related", preview.relatedUrl));
+        }
       });
     }
 
-    const refs = document.createElement("a");
-    refs.className = this.#pinned ? "fx-pill" : "";
-    refs.textContent = "See in References";
-    refs.addEventListener("click", (e) => {
-      e.preventDefault();
-      this.hide();
-      this.#app.pdfViewer.scrollPageIntoView({
-        pageNumber: entry.page,
-        destArray: [null, { name: "XYZ" }, 0, entry.y + 8, null],
-      });
-    });
-    actions.append(refs);
-
-    const scholar = document.createElement("a");
-    scholar.className = this.#pinned ? "fx-pill" : "";
-    scholar.textContent = "Google Scholar";
-    scholar.href = scholarSearchUrl(entry.title);
-    scholar.target = "_blank";
-    scholar.rel = "noopener noreferrer";
-    actions.append(scholar);
+    actions.append(this.#linkPill("Google Scholar", scholarSearchUrl(entry.title)));
 
     if (entry.doi) {
-      const doi = document.createElement("a");
-      doi.className = this.#pinned ? "fx-pill" : "";
-      doi.textContent = "DOI";
-      doi.href = `https://doi.org/${encodeURIComponent(entry.doi).replaceAll("%2F", "/")}`;
-      doi.target = "_blank";
-      doi.rel = "noopener noreferrer";
-      actions.append(doi);
+      actions.append(
+        this.#linkPill("DOI", `https://doi.org/${encodeURIComponent(entry.doi).replaceAll("%2F", "/")}`),
+      );
     }
     return actions;
+  }
+
+  // Toggle a BibTeX panel under the card. Prefers Scholar's own BibTeX
+  // (fetched via the cluster id), falling back to a BibTeX generated from the
+  // locally parsed reference so "Cite" always yields something copyable.
+  #toggleCite(entry) {
+    const el = this.#el;
+    const existing = el.querySelector(".fx-cite-bib");
+    if (existing) {
+      existing.remove();
+      this.#position();
+      return;
+    }
+    const panel = document.createElement("div");
+    panel.className = "fx-cite-bib";
+    const ta = document.createElement("textarea");
+    ta.readOnly = true;
+    ta.rows = 7;
+    ta.value = "Loading BibTeX…";
+    const bar = document.createElement("div");
+    bar.className = "fx-cite-bib-bar";
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "Copy";
+    copy.addEventListener("click", () => {
+      ta.select();
+      Promise.resolve(navigator.clipboard?.writeText(ta.value)).catch(() => {});
+      copy.textContent = "Copied ✓";
+      setTimeout(() => (copy.textContent = "Copy"), 1400);
+    });
+    bar.append(copy);
+    panel.append(ta, bar);
+    el.append(panel);
+    this.#position();
+
+    fetchScholarPreview(entry.title).then((preview) =>
+      fetchScholarBibtex(preview?.cid).then((bib) => {
+        if (!panel.isConnected) return;
+        ta.value = bib || entryBibtex(entry, preview);
+        this.#position();
+      }),
+    );
   }
 
   // Position near the anchor, clamped to the container, flipped above when

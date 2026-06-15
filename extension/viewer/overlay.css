@@ -246,7 +246,7 @@
 
 .fx-scholar-snippet {
   display: -webkit-box;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 8;
   -webkit-box-orient: vertical;
   overflow: hidden;
   margin-bottom: 5px;
@@ -267,4 +267,43 @@
 .fx-pill-primary {
   background: light-dark(#e8f0fe, #394457);
   border-color: transparent;
+}
+
+/* "Cite" pill is a <button>; match the link pills. */
+.fx-pill.fx-pill-action {
+  font: inherit;
+  color: light-dark(#0b57d0, #8ab4f8);
+}
+
+/* BibTeX panel under the card */
+.fx-cite-bib {
+  margin-top: 10px;
+}
+
+.fx-cite-bib textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: light-dark(#1a1a1a, #e8e8e8);
+  background: light-dark(#f6f8fa, #1e1e22);
+  border: 1px solid light-dark(#c0c0c6, #52525e);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+
+.fx-cite-bib-bar {
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.fx-cite-bib-bar button {
+  font: inherit;
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: 14px;
+  border: 1px solid light-dark(#c0c0c6, #52525e);
+  background: light-dark(#f1f3f4, #3c4043);
+  color: inherit;
 }

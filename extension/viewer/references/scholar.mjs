@@ -5,6 +5,7 @@
 // gracefully (returns null) on any change, block, or consent interstitial.
 
 const cache = new Map();
+const bibCache = new Map();
 const BASE = "https://scholar.google.com";
 
 export function scholarSearchUrl(query) {
@@ -13,7 +14,7 @@ export function scholarSearchUrl(query) {
 
 /**
  * @returns {Promise<{title, url, byline, snippet, citedBy, citedByUrl,
- *           pdfUrl, pdfHost} | null>} null when no preview is available.
+ *           pdfUrl, pdfHost, cid, relatedUrl} | null>} null when no preview.
  */
 export function fetchScholarPreview(query) {
   if (!cache.has(query)) {
@@ -24,6 +25,40 @@ export function fetchScholarPreview(query) {
     cache.set(query, promise);
   }
   return cache.get(query);
+}
+
+/**
+ * BibTeX for a result, via Scholar's cite dialog (the same path the "Cite"
+ * link uses): the cluster id → cite popup → the signed .bib link → its text.
+ * One extra fetch pair, only when the user opens "Cite". Null on any failure
+ * (the caller falls back to a locally generated BibTeX).
+ */
+export function fetchScholarBibtex(cid) {
+  if (!cid) return Promise.resolve(null);
+  if (!bibCache.has(cid)) {
+    const promise = fetchBibtex(cid).catch(() => {
+      bibCache.delete(cid);
+      return null;
+    });
+    bibCache.set(cid, promise);
+  }
+  return bibCache.get(cid);
+}
+
+async function fetchBibtex(cid) {
+  const citeUrl = `${BASE}/scholar?q=info:${encodeURIComponent(cid)}:scholar.google.com/&output=cite&hl=en`;
+  const res = await fetch(citeUrl, { credentials: "omit" });
+  if (!res.ok) throw new Error(`cite HTTP ${res.status}`);
+  const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+  const links = [...doc.querySelectorAll("a.gs_citi")];
+  const bibA = links.find((a) => /bibtex/i.test(a.textContent)) ?? links[0];
+  const href = bibA?.getAttribute("href");
+  if (!href) throw new Error("no bibtex link");
+  const bibRes = await fetch(new URL(href, BASE).href, { credentials: "omit" });
+  if (!bibRes.ok) throw new Error(`bib HTTP ${bibRes.status}`);
+  const text = (await bibRes.text()).trim();
+  if (!text.startsWith("@")) throw new Error("not bibtex");
+  return text;
 }
 
 async function fetchAndParse(query) {
@@ -43,8 +78,12 @@ async function fetchAndParse(query) {
   const cited = [...result.querySelectorAll(".gs_fl a")].find((a) =>
     /^Cited by \d/.test(a.textContent),
   );
-  const pdfA = result.closest(".gs_r")?.querySelector(".gs_ggs a") ?? null;
+  const root = result.closest(".gs_r");
+  const pdfA = root?.querySelector(".gs_ggs a") ?? null;
   const pdfUrl = abs(pdfA);
+  const related = [...result.querySelectorAll(".gs_fl a")].find((a) =>
+    /^Related articles/i.test(a.textContent),
+  );
   return {
     title,
     url: abs(titleA),
@@ -54,5 +93,7 @@ async function fetchAndParse(query) {
     citedByUrl: abs(cited),
     pdfUrl,
     pdfHost: pdfUrl ? new URL(pdfUrl).hostname.replace(/^www\./, "") : null,
+    cid: root?.getAttribute("data-cid") || null,
+    relatedUrl: abs(related),
   };
 }

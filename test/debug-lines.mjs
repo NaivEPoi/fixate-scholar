@@ -137,7 +137,19 @@ try {
           text: text.slice(0, 90),
         });
       }
-      return { page: ${PAGE}, lineCount: out.length, lines: out };
+      const findTerm = ${JSON.stringify(process.argv.find((a) => a.startsWith("--find="))?.slice(7) ?? null)};
+      let found = undefined;
+      if (findTerm) {
+        found = [...div.querySelectorAll('span')]
+          .filter(s => s.textContent.includes(findTerm))
+          .slice(0, 6)
+          .map(s => ({
+            done: !!s.dataset.fxDone, keep: !!s.dataset.fxKeep, table: !!s.dataset.fxTable,
+            bold: s.querySelectorAll('b.fx-b').length,
+            html: s.innerHTML.slice(0, 140),
+          }));
+      }
+      return { page: ${PAGE}, lineCount: out.length, found, lines: out };
     })()`,
   });
   console.log(JSON.stringify(r.result.value ?? r.result, null, 2));
