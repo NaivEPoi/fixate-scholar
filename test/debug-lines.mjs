@@ -4,7 +4,7 @@
 // Usage: node test/debug-lines.mjs <pdf-url> <pageNumber> [yMin] [yMax] [browser]
 
 import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -109,7 +109,7 @@ try {
           s, top: r.top - layerRect.top, left: r.left - layerRect.left,
           relTopPct: ((r.top - layerRect.top) / layerRect.height) * 100,
           fs: Math.round(parseFloat(getComputedStyle(s).fontSize) * 10) / 10,
-          done: !!s.dataset.fxDone, table: !!s.dataset.fxTable,
+          done: !!s.dataset.fxDone, table: !!s.dataset.fxTable, keep: !!s.dataset.fxKeep,
           text: s.textContent,
         };
       }).sort((a,b) => a.top - b.top || a.left - b.left);
@@ -131,6 +131,7 @@ try {
           y: Math.round(ln.relTopPct * 10) / 10,
           fs: ln.cells.map(c => c.fs).sort((a,b)=>b-a)[0],
           done: ln.cells.filter(c => c.done).length,
+          keep: ln.cells.filter(c => c.keep).length,
           tbl: ln.cells.filter(c => c.table).length,
           n: ln.cells.length,
           text: text.slice(0, 90),
@@ -140,6 +141,13 @@ try {
     })()`,
   });
   console.log(JSON.stringify(r.result.value ?? r.result, null, 2));
+  if (process.argv.includes("--shot")) {
+    mkdirSync(join(root, "test", "out"), { recursive: true });
+    const shot = await send("Page.captureScreenshot", { format: "png" });
+    const out = join(root, "test", "out", `page-${PAGE}.png`);
+    writeFileSync(out, Buffer.from(shot.data, "base64"));
+    console.log(`saved ${out}`);
+  }
   ws.close();
 } finally {
   browser.kill();
