@@ -118,12 +118,12 @@
   font-weight: 600;
 }
 
-/* Citation and in-paper reference coloring. The document's own link colors
-   (sampled from the canvas) are applied inline and win over these defaults,
-   which follow the common hyperref palette: green citations, red internal
-   references. PDF.js makes every .textLayer span position:absolute — these
-   wrappers are inline text and MUST stay in flow, or the rest of the line
-   collapses onto them. */
+/* Citation and in-paper reference coloring. Fixed, high-contrast colors —
+   citations a strong blue, in-paper references a strong red — chosen for
+   readability on the (white) page rather than matching the document's own
+   link color, which is often a low-contrast pastel. PDF.js makes every
+   .textLayer span position:absolute — these wrappers are inline text and MUST
+   stay in flow, or the rest of the line collapses onto them. */
 .textLayer span.fx-cite-c,
 .textLayer span.fx-ref-c {
   position: static !important;
@@ -131,7 +131,7 @@
 }
 
 #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-cite-c {
-  color: var(--fx-cite-color, #15803d);
+  color: var(--fx-cite-color, #0b57d0);
 }
 
 #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-ref-c {

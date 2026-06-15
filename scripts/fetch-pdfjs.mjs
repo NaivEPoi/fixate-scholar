@@ -130,4 +130,15 @@ patch(
   "fixate-pdf-patch-2",
 );
 
+// Patch 3: allow the viewer to fetch local file:// PDFs (when the user has
+// enabled "Allow access to file URLs"). The stock connect-src uses `*`, which
+// covers network schemes but NOT file:, so a file:// fetch is otherwise
+// blocked by CSP and the document fails to load.
+patch(
+  "web/viewer.html",
+  `connect-src * blob: data:;`,
+  `connect-src * blob: data: file:;`,
+  `connect-src * blob: data: file:`,
+);
+
 console.log("Done. Load the ./extension directory as an unpacked extension.");
