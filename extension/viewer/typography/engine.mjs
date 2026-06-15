@@ -155,6 +155,9 @@ export class TypographyEngine {
       }
       delete span.dataset.fxDone;
     }
+    for (const d of layerDiv.querySelectorAll("[data-fx-keep]")) {
+      delete d.dataset.fxKeep;
+    }
     for (const d of layerDiv.querySelectorAll("[data-fx-table]")) {
       delete d.dataset.fxTable;
     }
@@ -253,13 +256,18 @@ export class TypographyEngine {
     // table that happens to share its baseline.
     const centerX = vx0 + pageW * 0.5;
     const cm = pageW * 0.03;
-    const gutter = pageW * 0.02;
+    // A line "occupies" the center only if one of its items actually CROSSES
+    // the center line (spans from left of it to right of it). Left- and
+    // right-column items merely reaching toward the gutter do not count, so a
+    // two-column page reads as two-column even when PDF.js collapses a left
+    // and a right line onto one baseline. Only genuinely full-width content
+    // (single-column prose, full-width tables, a figure straddling the gutter)
+    // crosses, so a high ratio means single column.
     let occupy = 0;
     for (const ln of lines) {
-      const over = ln.items.some((p) => {
-        const x = p.item.transform[4];
-        return x < centerX + gutter && x + (p.item.width ?? 0) > centerX - gutter;
-      });
+      const over = ln.items.some(
+        (p) => p.item.transform[4] < centerX && p.item.transform[4] + (p.item.width ?? 0) > centerX,
+      );
       if (over) occupy++;
     }
     const twoColumn = lines.length > 4 && occupy < lines.length * 0.35;
@@ -291,6 +299,16 @@ export class TypographyEngine {
         if (gap > Math.max(prev.height || 8, run[k].item.height || 8) * 1.5) cells++;
       }
       return cells >= 3;
+    };
+    // A text item that reads as running prose (several lowercase words) — used
+    // to spare body sentences from a table/figure band-fill when they share a
+    // baseline with it. Pseudocode keywords are NOT spared, because their rows
+    // match runIsTabular (ALGO_LEAD) and are filled wholesale before this runs.
+    const LOWER_WORD = /^[a-zà-ÿ]{2,}$/;
+    const isProseItem = (p) => {
+      let lc = 0;
+      for (const w of p.item.str.trim().split(/\s+/)) if (LOWER_WORD.test(w)) lc++;
+      return lc >= 4;
     };
     // Split every baseline into per-column sub-rows. On a two-column page,
     // left- and right-column content share baselines; clustering and filling
@@ -338,9 +356,17 @@ export class TypographyEngine {
           const yBot = bot.y - bot.h * 0.6;
           for (const r of rows) {
             if (r.y > yTop || r.y < yBot) continue;
+            // Pseudocode rows (line-number / keyword led) are filled wholesale
+            // — their English keywords must not be bolded. Everywhere else,
+            // running-prose items are spared: body text frequently shares a
+            // PDF baseline with a figure's labels or a table's cells (super/
+            // subscripts collapse onto one baseline), and that prose should
+            // still be emphasized while the genuine cells stay on the canvas.
+            const algo = ALGO_LEAD.test(r.items[0]?.item.str.trim() ?? "");
             for (const p of r.items) {
               const x = p.item.transform[4] + (p.item.width ?? 0) / 2;
-              if (x >= xMin - cm && x <= xMax + cm) tableSet.add(p.div);
+              if (x < xMin - cm || x > xMax + cm) continue;
+              if (algo || !isProseItem(p)) tableSet.add(p.div);
             }
           }
         } else {
@@ -519,7 +545,11 @@ export class TypographyEngine {
         if (item.height < dominant * 0.85) return false;
         if (item.height > dominant * 1.15) return false;
       }
-      if (this.#isSpecialFont(pageView, item?.fontName, fontCache)) return false;
+      // Special-font (math/mono/small-caps) body spans are NOT excluded here:
+      // they stay in the candidate set so the write pass can render them
+      // visible on top of the masks (without bolding). Otherwise a bolded
+      // neighbour's mask would white out an adjacent inline math glyph that
+      // lives only on the canvas. They are diverted to "keep" in #work.
       if (item?.transform) {
         const x = item.transform[4];
         const y = item.transform[5];
@@ -563,8 +593,20 @@ export class TypographyEngine {
         // Read pass: pristine geometry.
         for (let j = i; j < end; j++) {
           const pair = pairs[j];
-          const result = emphasizeParts(pair.div.textContent, settings, wordIndex);
-          if (!result) continue;
+          // Inline math (math-heavy spans) and special-font runs (mono, small
+          // caps, symbols) are kept in their original face, not bolded — but
+          // they must render on TOP of the masks so a neighbouring processed
+          // span's mask can't erase them from the canvas.
+          const result = isSpecial(pair)
+            ? null
+            : emphasizeParts(pair.div.textContent, settings, wordIndex);
+          if (!result) {
+            // Keep: mask the canvas glyph and show the original text-layer
+            // glyph (unchanged face, no bold) on top — so it survives a
+            // neighbouring mask instead of being whited out.
+            batch.push({ pair, keep: true, rect: pair.div.getBoundingClientRect() });
+            continue;
+          }
           wordIndex = result.wordIndex;
           batch.push({
             pair,
@@ -574,14 +616,8 @@ export class TypographyEngine {
         }
         // Write pass: masks + content + font.
         for (const entry of batch) {
-          const { pair, parts, rect } = entry;
+          const { pair, parts, rect, keep } = entry;
           const span = pair.div;
-          this.#pristine.set(span, {
-            html: span.innerHTML,
-            scaleX: span.style.getPropertyValue("--scale-x"),
-            fontFamily: span.style.fontFamily,
-            wordSpacing: span.style.wordSpacing,
-          });
           // Cover glyph overshoot too: ink (italics, descenders, accents)
           // extends past the advance-width box the rect describes. Keep the
           // horizontal reach small — adjacent canvas glyphs (inline math,
@@ -595,6 +631,20 @@ export class TypographyEngine {
           m.style.height = `${rect.height + 2 * padY}px`;
           mask.append(m);
 
+          if (keep) {
+            // Inline math / special-font run: mask its canvas glyph and let
+            // the original (unbolded, original-face) text-layer span show on
+            // top of the masks. Content and font are left untouched.
+            span.dataset.fxKeep = "1";
+            continue;
+          }
+
+          this.#pristine.set(span, {
+            html: span.innerHTML,
+            scaleX: span.style.getPropertyValue("--scale-x"),
+            fontFamily: span.style.fontFamily,
+            wordSpacing: span.style.wordSpacing,
+          });
           const frag = document.createDocumentFragment();
           for (const part of parts) {
             if (part.bold) {
@@ -620,7 +670,8 @@ export class TypographyEngine {
         // as rotate(--rotate) scaleX(--scale-x) scale(--min-font-size-inv);
         // only the custom property may be adjusted — writing
         // style.transform would wipe the other parts.
-        for (const { pair, rect } of batch) {
+        for (const { pair, rect, keep } of batch) {
+          if (keep) continue; // unchanged content/font — width is already exact
           const span = pair.div;
           const newWidth = span.getBoundingClientRect().width;
           if (!(newWidth > 0) || Math.abs(newWidth - rect.width) <= 0.5) continue;

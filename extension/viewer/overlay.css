@@ -47,6 +47,13 @@
   color: var(--fx-text-color) !important;
 }
 
+/* Inline math / special-font runs inside body prose are kept in their
+   original face (not bolded) but rendered from the text layer on top of the
+   masks, so a neighbouring processed span's mask can't white them out. */
+#viewerContainer.fx-on .textLayer span[data-fx-keep] {
+  color: var(--fx-text-color) !important;
+}
+
 #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b {
   font-weight: var(--fx-bold-weight);
 }
