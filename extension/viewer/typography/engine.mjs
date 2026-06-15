@@ -310,15 +310,58 @@ export class TypographyEngine {
       for (const w of p.item.str.trim().split(/\s+/)) if (LOWER_WORD.test(w)) lc++;
       return lc >= 4;
     };
+    const cellCount = (items) => {
+      if (!items.length) return 0;
+      let cells = 1;
+      for (let k = 1; k < items.length; k++) {
+        const prev = items[k - 1].item;
+        const gap = items[k].item.transform[4] - (prev.transform[4] + (prev.width ?? 0));
+        if (gap > Math.max(prev.height || 8, items[k].item.height || 8) * 1.5) cells++;
+      }
+      return cells;
+    };
+    // A full-width table row: spans most of the page width AND has multiple
+    // gap-separated cells on BOTH sides of the center. This distinguishes a
+    // genuine wide table (cells distributed across the width) from a
+    // two-column line that merely merges a left-column block with a
+    // right-column block (one side is a single prose cell).
+    const isFullWidthRow = (ln) => {
+      if (ln.xEnd - ln.xStart < pageW * 0.7) return false;
+      const left = ln.items.filter((p) => p.item.transform[4] < centerX);
+      const right = ln.items.filter((p) => p.item.transform[4] >= centerX);
+      return cellCount(left) >= 2 && cellCount(right) >= 2;
+    };
+
     // Split every baseline into per-column sub-rows. On a two-column page,
     // left- and right-column content share baselines; clustering and filling
     // must stay within a column, or a table in one column would swallow prose
     // in the other (e.g. an appendix with a symbol table beside running text).
-    const columns = splitX === null ? [[]] : [[], []];
-    for (const ln of lines) {
-      if (splitX === null) {
-        columns[0].push({ y: ln.y, h: ln.h, items: ln.items });
-      } else {
+    // A full-width table embedded on a two-column page (a run of 3+ full-width
+    // rows) is the exception: those rows are kept whole in a third group so
+    // the column split doesn't shred the table into sub-3-cell fragments.
+    const columns = splitX === null ? [[]] : [[], [], []];
+    if (splitX === null) {
+      for (const ln of lines) columns[0].push({ y: ln.y, h: ln.h, items: ln.items });
+    } else {
+      const fw = lines.map(isFullWidthRow);
+      const inTable = new Array(lines.length).fill(false);
+      let r = 0;
+      while (r < lines.length) {
+        if (!fw[r]) { r++; continue; }
+        let e = r;
+        while (
+          e + 1 < lines.length && fw[e + 1] &&
+          lines[e].y - lines[e + 1].y < Math.max(lines[e].h, lines[e + 1].h) * 3
+        ) e++;
+        if (e - r + 1 >= 3) for (let k = r; k <= e; k++) inTable[k] = true;
+        r = e + 1;
+      }
+      for (let i = 0; i < lines.length; i++) {
+        const ln = lines[i];
+        if (inTable[i]) {
+          columns[2].push({ y: ln.y, h: ln.h, items: ln.items });
+          continue;
+        }
         const left = ln.items.filter((p) => p.item.transform[4] < splitX);
         const right = ln.items.filter((p) => p.item.transform[4] >= splitX);
         if (left.length) columns[0].push({ y: ln.y, h: ln.h, items: left });
@@ -375,7 +418,18 @@ export class TypographyEngine {
         c = end + 1;
       }
     };
-    for (const col of columns) fillColumn(col);
+    fillColumn(columns[0]);
+    if (splitX !== null) {
+      fillColumn(columns[1]);
+      // The full-width table group is, by construction, a run of genuine
+      // full-width table rows — mark every (non-prose) cell directly rather
+      // than x-bounding to a cluster, so a column that overflows the others
+      // (e.g. a long version string) can't escape and get re-rendered.
+      for (const r of columns[2]) {
+        const algo = ALGO_LEAD.test(r.items[0]?.item.str.trim() ?? "");
+        for (const p of r.items) if (algo || !isProseItem(p)) tableSet.add(p.div);
+      }
+    }
 
     // Multi-line caption blocks: a "Table N"/"Figure N" leader plus its
     // following same-size lines (tight spacing), stopping at the table, a size
@@ -540,13 +594,22 @@ export class TypographyEngine {
     const pairs = allPairs.filter(({ div, item }) => {
       if (!div?.isConnected || div.dataset.fxDone) return false;
       const text = div.textContent;
-      if (!text || text.trim().length < 2) return false;
+      const trimmed = text ? text.trim() : "";
+      if (!trimmed) return false;
+      // Math/symbol glyphs (a special-font run, or a span with no Latin
+      // letters — subscripts, single italic variables, operators) must reach
+      // the write pass so they're re-rendered on top of the masks. Otherwise a
+      // single subscript "2" or italic "i" is dropped by the length / size
+      // filters below and a neighbouring bolded span's mask whites it out.
+      const mathGlyph =
+        isSpecial({ item }) || !/[A-Za-zÀ-ɏ]/.test(trimmed);
+      if (trimmed.length < 2 && !mathGlyph) return false;
       if (tableSet.has(div)) return false;
       // Figure/table captions are emphasized like body text — including their
       // continuation lines and even when set smaller than the body — so they
       // bypass the smaller/larger-than-body size filter below.
       const isCaption = captionSet.has(div) || CAPTION.test(text);
-      if (dominant && item?.height && !isCaption) {
+      if (dominant && item?.height && !isCaption && !mathGlyph) {
         if (item.height < dominant * 0.85) return false;
         if (item.height > dominant * 1.15) return false;
       }

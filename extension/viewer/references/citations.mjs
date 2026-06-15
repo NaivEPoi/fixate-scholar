@@ -18,10 +18,6 @@ export class ReferencesFeature {
   #entries = [];
   #popup;
   #ready = null;
-  // One color per document for each link kind — per-instance canvas samples
-  // vary with anti-aliasing, so the first confident sample wins.
-  #citeColor = null;
-  #refColor = null;
 
   /** Called with the bibliography line boxes (Map<page, boxes>) once known. */
   onRefsRegion = null;
@@ -36,8 +32,6 @@ export class ReferencesFeature {
 
   onDocumentLoaded(pdfDocument) {
     this.#entries = [];
-    this.#citeColor = null;
-    this.#refColor = null;
     this.#ready = (async () => {
       try {
         const lines = await extractLines(pdfDocument);
@@ -118,7 +112,6 @@ export class ReferencesFeature {
         const localStart = Math.max(0, cite.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
         for (const rect of rangeRects(seg.span, localStart, localEnd)) {
-          this.#citeColor ??= sampleCanvasColor(pageView, rect);
           const a = document.createElement("a");
           a.className = "fx-cite-hit";
           a.style.cssText =
@@ -135,27 +128,24 @@ export class ReferencesFeature {
           });
           layer.append(a);
         }
-        // Color the citation text itself, matching the document's own link
-        // color when one is painted on the canvas.
+        // Color the citation text itself. A fixed, high-contrast color (set
+        // in overlay.css) — not the document's own link color, which is often
+        // a low-contrast pastel that's hard to read.
         if (seg.span.dataset.fxDone) {
-          wrapRange(seg.span, localStart, localEnd, "fx-cite-c", this.#citeColor);
+          wrapRange(seg.span, localStart, localEnd, "fx-cite-c", null);
         }
       }
     }
 
-    // In-paper references (Figure 3, Table 9, Section 5, Algorithm 2, …)
-    // get their own color, again sampled from the document when possible.
+    // In-paper references (Figure 3, Table 9, Section 5, Algorithm 2, …) get a
+    // distinct fixed high-contrast color, also from overlay.css.
     for (const ref of findInternalRefs(joined)) {
       for (const seg of segments) {
         if (seg.end <= ref.start || seg.start >= ref.end) continue;
         if (!seg.span.dataset.fxDone) continue;
         const localStart = Math.max(0, ref.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, ref.end - seg.start);
-        this.#refColor ??= sampleCanvasColor(
-          pageView,
-          rangeRects(seg.span, localStart, localEnd)[0],
-        );
-        wrapRange(seg.span, localStart, localEnd, "fx-ref-c", this.#refColor);
+        wrapRange(seg.span, localStart, localEnd, "fx-ref-c", null);
       }
     }
   }
@@ -190,46 +180,6 @@ function wrapRange(span, start, end, className, color) {
     if (color) wrap.style.color = color;
     piece.before(wrap);
     wrap.append(piece);
-  }
-}
-
-/**
- * The document's own color for a piece of text, sampled from the rendered
- * canvas under the given client rect. Returns a CSS color when the sample
- * is colorful (a hyperref link), else null (black text → use defaults).
- */
-function sampleCanvasColor(pageView, rect) {
-  try {
-    const canvas = pageView.canvas ?? pageView.div.querySelector("canvas");
-    if (!canvas || !rect) return null;
-    const cr = canvas.getBoundingClientRect();
-    const sx = ((rect.left + rect.width / 2 - cr.left) * canvas.width) / cr.width;
-    const sy = ((rect.top + rect.height * 0.55 - cr.top) * canvas.height) / cr.height;
-    const data = canvas
-      .getContext("2d")
-      .getImageData(Math.round(sx) - 2, Math.round(sy) - 2, 5, 5).data;
-    // Pick the most saturated dark-ish pixel (glyph ink, not background).
-    let best = null;
-    let bestScore = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
-      const max = Math.max(r, g, b);
-      const min = Math.min(r, g, b);
-      const saturation = max - min;
-      const darkness = 255 - min;
-      const score = saturation * 2 + darkness;
-      if (max > 250 && saturation < 20) continue; // background
-      if (score > bestScore) {
-        bestScore = score;
-        best = [r, g, b];
-      }
-    }
-    if (!best) return null;
-    const [r, g, b] = best;
-    if (Math.max(r, g, b) - Math.min(r, g, b) < 40) return null; // not colorful
-    return `rgb(${r}, ${g}, ${b})`;
-  } catch {
-    return null;
   }
 }
 

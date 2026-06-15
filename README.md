@@ -44,8 +44,10 @@ npm run fetch-pdfjs   # downloads + verifies the pinned PDF.js viewer into exten
 ```
 
 Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and
-select the `extension/` directory. To use it on local PDF files, also enable
-**Allow access to file URLs** in the extension's details page.
+select the `extension/` directory. To open local PDFs by their `file://` URL (e.g. by
+opening the file in the browser), also enable **Allow access to file URLs** on the
+extension's details page. Either way, the viewer's **Open File** button always works —
+it reads the file directly, no permission toggle needed.
 
 ## Development
 
