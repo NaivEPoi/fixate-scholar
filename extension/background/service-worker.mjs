@@ -1,4 +1,4 @@
-// ScholarLens background service worker: redirects PDF navigations into the
+// FixateScholar background service worker: redirects PDF navigations into the
 // bundled viewer using declarativeNetRequest session rules (Chrome 128+,
 // responseHeaders conditions), with a webNavigation fallback for file:// and
 // a context-menu fallback for anything else.
@@ -103,7 +103,7 @@ chrome.runtime.onInstalled.addListener(() => {
   registerRules();
   chrome.contextMenus.create({
     id: "fx-open-link",
-    title: "Open link in ScholarLens",
+    title: "Open link in FixateScholar",
     contexts: ["link"],
   });
 });

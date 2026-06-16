@@ -1,4 +1,4 @@
-# ScholarLens
+# FixateScholar
 
 A Chrome (Manifest V3) extension that renders PDFs — especially academic papers — with
 **fixation-guided typography**: the leading portion of each word is bolded to create
@@ -25,7 +25,7 @@ code, fonts, or assets.
   exactly as set (see [REQUIREMENTS.md](REQUIREMENTS.md) for the full rulebook).
   Instant on/off toggle that restores the native rendering pixel-for-pixel.
 - **Automatic PDF interception**: any PDF you navigate to (including links from Google
-  Scholar, and links served as `attachment` downloads) opens in the ScholarLens viewer —
+  Scholar, and links served as `attachment` downloads) opens in the FixateScholar viewer —
   nothing is ever saved to disk just by clicking a link; the toolbar download button
   saves a copy explicitly. Per-site bypass list, per-document "open in native viewer"
   escape hatch, and a context-menu fallback.
@@ -74,7 +74,7 @@ script header). Everything else is plain ES modules — no bundler.
 ## How it works
 
 PDF.js paints each page to a canvas and overlays an invisible, selectable HTML text layer.
-ScholarLens makes that text layer visible, masks the duplicate canvas text behind each line,
+FixateScholar makes that text layer visible, masks the duplicate canvas text behind each line,
 and rewrites each word as `<b>prefix</b>rest`, re-calibrating the span scaling so selection
 and search keep working. Pages are processed lazily as PDF.js renders them, in idle-time
 chunks. See `extension/viewer/typography/`.

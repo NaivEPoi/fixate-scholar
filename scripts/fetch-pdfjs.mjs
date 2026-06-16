@@ -118,16 +118,16 @@ await fetchFonts();
 patch(
   "web/viewer.mjs",
   `if (HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {`,
-  `if (viewerOrigin.startsWith("chrome-extension:") /* scholar-lens-patch-1: extension pages may load cross-origin PDFs */ || HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {`,
-  "scholar-lens-patch-1",
+  `if (viewerOrigin.startsWith("chrome-extension:") /* fixate-scholar-patch-1: extension pages may load cross-origin PDFs */ || HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {`,
+  "fixate-scholar-patch-1",
 );
 
 // Patch 2: load the overlay (typography engine, references, toolbar buttons).
 patch(
   "web/viewer.html",
   `</head>`,
-  `  <link rel="stylesheet" href="../../../viewer/overlay.css"><!-- scholar-lens-patch-2 -->\n  <script src="../../../viewer/overlay.mjs" type="module"></script>\n</head>`,
-  "scholar-lens-patch-2",
+  `  <link rel="stylesheet" href="../../../viewer/overlay.css"><!-- fixate-scholar-patch-2 -->\n  <script src="../../../viewer/overlay.mjs" type="module"></script>\n</head>`,
+  "fixate-scholar-patch-2",
 );
 
 // Patch 3: allow the viewer to fetch local file:// PDFs (when the user has
