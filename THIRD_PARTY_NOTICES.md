@@ -20,6 +20,6 @@ PDF.js is Copyright Mozilla Foundation and contributors, licensed under the
 Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
 
 The vendoring script applies a few small, marked patches to the viewer
-(`scholar-lens-patch-1`, `scholar-lens-patch-2`, and a CSP `connect-src`
+(`fixate-scholar-patch-1`, `fixate-scholar-patch-2`, and a CSP `connect-src`
 addition for `file:`); see `scripts/fetch-pdfjs.mjs` for the exact changes.
 The upstream `LICENSE` file is preserved inside `extension/vendor/pdfjs/`.

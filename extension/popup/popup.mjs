@@ -50,7 +50,7 @@ const bypassRow = $("bypassSite").closest(".row");
 if (!origin) {
   bypassRow.style.display = "none";
 } else {
-  bypassRow.title = `Don't open PDFs from ${origin} in ScholarLens`;
+  bypassRow.title = `Don't open PDFs from ${origin} in FixateScholar`;
   $("bypassSite").checked = settings.bypassOrigins.includes(origin);
   $("bypassSite").addEventListener("change", async (e) => {
     const { bypassOrigins = [] } = await getSettings();

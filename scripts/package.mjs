@@ -1,4 +1,4 @@
-// Zips extension/ into dist/scholar-lens-<version>.zip for Chrome Web Store upload.
+// Zips extension/ into dist/fixate-scholar-<version>.zip for Chrome Web Store upload.
 // Requires extension/vendor/pdfjs to exist (run fetch-pdfjs first).
 
 import { execFileSync } from "node:child_process";
@@ -16,7 +16,7 @@ if (!existsSync(join(extDir, "vendor", "pdfjs", "web", "viewer.html"))) {
 }
 
 const { version } = JSON.parse(readFileSync(join(extDir, "manifest.json"), "utf8"));
-const zipPath = join(distDir, `scholar-lens-${version}.zip`);
+const zipPath = join(distDir, `fixate-scholar-${version}.zip`);
 mkdirSync(distDir, { recursive: true });
 rmSync(zipPath, { force: true });
 

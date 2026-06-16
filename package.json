@@ -1,5 +1,5 @@
 {
-  "name": "scholar-lens",
+  "name": "fixate-scholar",
   "version": "0.1.0",
   "private": true,
   "description": "Chrome extension: academic PDF viewer with fixation-guided typography and reference lookup",

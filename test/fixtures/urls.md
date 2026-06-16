@@ -2,11 +2,11 @@
 
 | Case | URL | Expect |
 |---|---|---|
-| Content-type-only PDF (no .pdf extension), numeric citations | https://arxiv.org/pdf/1706.03762 | Opens in ScholarLens, bolding + citation popups |
+| Content-type-only PDF (no .pdf extension), numeric citations | https://arxiv.org/pdf/1706.03762 | Opens in FixateScholar, bolding + citation popups |
 | APA author-year citations | any psychology paper PDF, e.g. via Google Scholar | (Author, year) popups resolve |
-| Attachment disposition | a link served with `Content-Disposition: attachment` | Opens in ScholarLens (no auto-download); save via the toolbar download button |
-| Local file | file:///C:/...some.pdf (needs "Allow access to file URLs") | Opens in ScholarLens |
-| Google Scholar results | scholar.google.com → click a [PDF] link | Opens in ScholarLens |
+| Attachment disposition | a link served with `Content-Disposition: attachment` | Opens in FixateScholar (no auto-download); save via the toolbar download button |
+| Local file | file:///C:/...some.pdf (needs "Allow access to file URLs") | Opens in FixateScholar |
+| Google Scholar results | scholar.google.com → click a [PDF] link | Opens in FixateScholar |
 | Bypass | toggle "Bypass current site" in popup, reload PDF | Native viewer |
 | Native escape hatch | "native" toolbar button in the viewer | Re-opens in Chrome's viewer once |
 

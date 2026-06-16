@@ -1,6 +1,6 @@
 # Processing requirements
 
-The rules below define what ScholarLens must (and must not) do to a document.
+The rules below define what FixateScholar must (and must not) do to a document.
 They are **template-agnostic**: each rule is stated in terms of document
 structure (font sizes, geometry, fonts, text patterns), never in terms of a
 specific publisher template, so they apply to academic paper PDFs in general.
