@@ -57,7 +57,7 @@ export class ReferencesFeature {
         // Pages rendered before extraction finished need annotating now.
         this.reannotateRendered();
       } catch (e) {
-        console.warn("FixatePDF: reference extraction failed", e);
+        console.warn("ScholarLens: reference extraction failed", e);
       }
     })();
   }

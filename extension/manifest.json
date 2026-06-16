@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "FixatePDF — Guided-Reading PDF Viewer",
+  "name": "ScholarLens — Guided-Reading PDF Viewer",
   "version": "0.1.0",
   "description": "Read PDFs with fixation-guided typography: leading word emphasis that guides the eye, plus reference lookup for academic papers.",
   "minimum_chrome_version": "128",
@@ -18,7 +18,7 @@
   },
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "FixatePDF"
+    "default_title": "ScholarLens"
   },
   "options_page": "options/options.html",
   "web_accessible_resources": [

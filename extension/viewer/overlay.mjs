@@ -146,7 +146,7 @@ app.eventBus.on("documenterror", () => {
   const banner = document.createElement("div");
   banner.id = "fxLoadError";
   banner.className = "fx-load-error";
-  banner.append("FixatePDF couldn't load this document. ");
+  banner.append("ScholarLens couldn't load this document. ");
   const link = document.createElement("a");
   link.textContent = "Open in the browser's native viewer";
   link.href = "#";

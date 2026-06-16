@@ -1,6 +1,7 @@
-// Multi-template smoke test: loads a set of real papers (USENIX, ACM, IEEE
-// templates) in the extension viewer and reports per-paper typography and
-// reference-parsing results.
+// Multi-template smoke test: loads a set of real academic papers spanning a
+// range of common templates (two-column conference/journal layouts and an
+// arXiv preprint) in the extension viewer and reports per-paper typography and
+// reference-parsing results. Labels are template-agnostic by design.
 //
 // Usage: node test/papers.mjs [path-to-browser]
 // (Regular Chrome ≥137 ignores --load-extension; use Edge/Chromium.)
@@ -18,9 +19,9 @@ const FILTER = process.argv[3] ?? "";
 // references-heavy page). Probe pages must be rendered by the refs/appendix
 // navigation, so they should sit on late pages.
 const PAPERS = [
-  { template: "USENIX Sec'25", url: "https://yilud.me/usenixsecurity25-dong-yilu.pdf" },
+  { template: "Two-column A", url: "https://yilud.me/usenixsecurity25-dong-yilu.pdf" },
   {
-    template: "USENIX Sec'24",
+    template: "Two-column B",
     url: "https://yilud.me/usenixsecurity24-tu.pdf",
     untouched: ["Snapdragon 865", "learning not terminate", "Network Traces ("],
     // Early probes run before refs-page navigation (their pages may get
@@ -28,11 +29,11 @@ const PAPERS = [
     untouchedEarly: ["com/SyNSec-den/5GBaseChecker"],
     processed: ["takes as input a set of UEs"],
   },
-  { template: "USENIX NSDI'26", url: "https://yilud.me/AFC_Attacks_NSDI.pdf" },
-  { template: "ACM CCS'24", url: "https://yilud.me/Proteus-ccs24.pdf" },
-  { template: "ACM WiSec'25", url: "https://yilud.me/SIB-Auth.pdf" },
-  { template: "EW'25 (stamped)", url: "https://yilud.me/a33-dong%20stamped.pdf" },
-  { template: "IEEE (arXiv)", url: "https://arxiv.org/pdf/2502.04915" },
+  { template: "Two-column C", url: "https://yilud.me/AFC_Attacks_NSDI.pdf" },
+  { template: "Two-column D", url: "https://yilud.me/Proteus-ccs24.pdf" },
+  { template: "Two-column E", url: "https://yilud.me/SIB-Auth.pdf" },
+  { template: "Two-column F (stamped)", url: "https://yilud.me/a33-dong%20stamped.pdf" },
+  { template: "arXiv preprint", url: "https://arxiv.org/pdf/2502.04915" },
 ];
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");

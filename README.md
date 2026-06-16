@@ -1,9 +1,13 @@
-# FixatePDF
+# ScholarLens
 
 A Chrome (Manifest V3) extension that renders PDFs — especially academic papers — with
 **fixation-guided typography**: the leading portion of each word is bolded to create
 visual fixation points that guide the eye, a technique that can improve reading speed
 and focus, particularly for neurodivergent readers.
+
+It is **template-agnostic**: every rule is based on document structure (font sizes,
+geometry, fonts, text patterns), never a specific publisher's template, so it works
+across academic paper PDFs generally — single- and two-column layouts alike.
 
 Built on Mozilla's [PDF.js](https://github.com/mozilla/pdf.js) (Apache 2.0). No proprietary
 code, fonts, or assets.
@@ -21,16 +25,18 @@ code, fonts, or assets.
   exactly as set (see [REQUIREMENTS.md](REQUIREMENTS.md) for the full rulebook).
   Instant on/off toggle that restores the native rendering pixel-for-pixel.
 - **Automatic PDF interception**: any PDF you navigate to (including links from Google
-  Scholar, and links served as `attachment` downloads) opens in the FixatePDF viewer —
+  Scholar, and links served as `attachment` downloads) opens in the ScholarLens viewer —
   nothing is ever saved to disk just by clicking a link; the toolbar download button
   saves a copy explicitly. Per-site bypass list, per-document "open in native viewer"
   escape hatch, and a context-menu fallback.
 - **References & citations** (academic papers): detects the bibliography, links in-text
   citations like `[12]` or `(Smith et al., 2020)` to their entries, and shows a hover
-  preview of the entry. Clicking a citation opens a pinned card with a Google Scholar
-  preview (title, authors, snippet, cited-by, direct [PDF] link when available), a
-  pager for multi-citations like `[38, 24, 15]`, and **See in References** /
-  **DOI** actions.
+  preview of the entry. Citations and in-paper references (Figure/Table/Section/…) are
+  marked in distinct, high-contrast colors. Clicking a citation opens a pinned,
+  Google-Scholar-reader-style card — title linking to the paper, authors, abstract
+  snippet, cited-by, and actions for **[PDF]**, **Cite** (copyable BibTeX), **Related
+  articles**, **Google Scholar**, and **DOI** — with a pager for multi-citations like
+  `[38, 24, 15]`. It never scrolls the PDF to the bibliography.
 - Rendering is 100% local. The only network requests are fetching the PDF itself and,
   when you *click* a citation, one Google Scholar search for that reference (same as
   typing the query into Scholar yourself; cached per session, never automatic).
@@ -62,13 +68,13 @@ node test/e2e.mjs "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 ```
 
 The PDF.js generic viewer is vendored (not committed) by `scripts/fetch-pdfjs.mjs`, which
-pins the release version and sha256 and applies two loud-failure string patches (see the
+pins the release version and sha256 and applies a few loud-failure string patches (see the
 script header). Everything else is plain ES modules — no bundler.
 
 ## How it works
 
 PDF.js paints each page to a canvas and overlays an invisible, selectable HTML text layer.
-FixatePDF makes that text layer visible, masks the duplicate canvas text behind each line,
+ScholarLens makes that text layer visible, masks the duplicate canvas text behind each line,
 and rewrites each word as `<b>prefix</b>rest`, re-calibrating the span scaling so selection
 and search keep working. Pages are processed lazily as PDF.js renders them, in idle-time
 chunks. See `extension/viewer/typography/`.
