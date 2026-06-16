@@ -43,8 +43,8 @@ export async function extractLines(pdfDocument) {
       let cur = null;
       for (const it of r.items) {
         // Threshold must stay below two-column gutters (~2.4× the font
-        // height in USENIX/ACM templates) while exceeding word spacing —
-        // sized by the smaller item so a large heading can't inflate it.
+        // height in typical two-column templates) while exceeding word spacing
+        // — sized by the smaller item so a large heading can't inflate it.
         // Items in clearly different font sizes never share a line.
         const gap = cur ? it.x - cur.endX : 0;
         const differentFont =

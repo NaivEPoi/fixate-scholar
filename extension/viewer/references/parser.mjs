@@ -57,9 +57,10 @@ export function findReferencesBody(lines) {
   const start = findHeadingIndex(lines);
   if (start === -1) return { heading: null, body: [] };
   const heading = lines[start];
-  // A following section may not say "appendix" (USENIX uses bare "B Title"
-  // headings), so also stop at any heading-sized line: at least as large as
-  // the References heading itself and clearly larger than the entries.
+  // A following section may not say "appendix" (some templates use bare
+  // "B Title" appendix headings), so also stop at any heading-sized line: at
+  // least as large as the References heading itself and clearly larger than
+  // the entries.
   const entryH = lines[start + 1]?.h ?? heading.h;
   const body = [];
   for (let i = start + 1; i < lines.length; i++) {

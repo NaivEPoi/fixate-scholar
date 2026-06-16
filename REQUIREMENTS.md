@@ -1,10 +1,11 @@
 # Processing requirements
 
-The rules below define what FixatePDF must (and must not) do to a document.
+The rules below define what ScholarLens must (and must not) do to a document.
 They are **template-agnostic**: each rule is stated in terms of document
 structure (font sizes, geometry, fonts, text patterns), never in terms of a
-specific publisher template. The automated tests enforce them against a corpus
-covering USENIX Security/NSDI, ACM CCS/WiSec, EW, and IEEE-format papers (see
+specific publisher template, so they apply to academic paper PDFs in general.
+The automated tests enforce them against a corpus of real papers spanning
+single- and two-column layouts and a range of common templates (see
 `test/fixtures/urls.md`); template-specific tuning may be layered on later for
 better processing, but must never replace a general rule with a
 paper-specific hack.

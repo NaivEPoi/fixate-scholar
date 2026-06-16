@@ -1,4 +1,4 @@
-/* FixatePDF overlay styles. Loaded after the stock PDF.js viewer.css. */
+/* ScholarLens overlay styles. Loaded after the stock PDF.js viewer.css. */
 
 /* Bundled reading fonts (SIL OFL), vendored by scripts/fetch-pdfjs.mjs.
    Prefixed family names so locally installed copies can't interfere. */
