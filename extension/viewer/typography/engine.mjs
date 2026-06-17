@@ -264,7 +264,6 @@ export class TypographyEngine {
     if (!lines.length) return skip;
 
     const centerX = vx0 + pageW * 0.5;
-    const cm = pageW * 0.04;
     const LOWER_WORD = /^[a-zà-ÿ]{2,}$/;
     // Caption leaders, section labels, and pseudocode/algorithm leaders.
     const CAP_LEAD = /^(?:Fig(?:ure)?\.?|Tab(?:le)?\.?|TABLE|FIGURE|Algorithm|Listing)\s*\d/;
@@ -324,14 +323,19 @@ export class TypographyEngine {
     const right = [];
     const full = [];
     for (const ln of lines) {
-      // Text present in the centre band ⇒ full-width (title, spanning figure/
-      // table, single-column prose). An empty gutter ⇒ a merged two-column
-      // baseline, split into the column streams.
-      const nearCenter = ln.items.some((p) => {
+      // An item that actually CROSSES the centre (spans it) ⇒ full-width
+      // content: a title, a figure/table spanning both columns, single-column
+      // prose. A left- or right-column line merely reaching toward the gutter
+      // does NOT cross it, so a merged two-column baseline (left line + right
+      // line collapsed by PDF.js, with an empty gutter between) splits into the
+      // column streams rather than being mistaken for one wide row. (Using a
+      // gutter *band* here would misfire: a column's inner edge sits within a
+      // few percent of the centre, so its lines would all read as full-width.)
+      const crosses = ln.items.some((p) => {
         const x0 = p.item.transform[4];
-        return x0 + (p.item.width ?? 0) > centerX - cm && x0 < centerX + cm;
+        return x0 < centerX && x0 + (p.item.width ?? 0) > centerX;
       });
-      if (!twoColumn || nearCenter) {
+      if (!twoColumn || crosses) {
         full.push({ y: ln.y, h: ln.h, items: ln.items });
         continue;
       }
@@ -470,6 +474,10 @@ export class TypographyEngine {
         } else if (HEAD_LEAD.test(leadStr)) {
           if (lowerWords(band) <= 3) for (const p of band) skip.add(p.div);
           else if (isSpecial(lead)) skipHeadingRun(its, a);
+        } else if (maxCells([{ items: band }]) >= 4) {
+          // A table row that block grouping merged into a text block: several
+          // wide column gaps on one baseline (running prose never has 4+).
+          for (const p of band) skip.add(p.div);
         } else if (isBold(lead)) {
           skipHeadingRun(its, a);
         }
@@ -493,11 +501,14 @@ export class TypographyEngine {
         const lead = its[a];
         if (!lead || !CAP_LEAD.test(lead.item.str.trim())) continue;
         const ax = lead.item.transform[4];
-        const capNearCenter = lines[k].items.some((p) => {
+        // Full-width (spanning legend) only when an item actually crosses the
+        // centre; a column caption merely reaching the gutter stays in-column,
+        // so the opposite column's body on that baseline isn't swept up.
+        const capCrosses = lines[k].items.some((p) => {
           const x0 = p.item.transform[4];
-          return x0 + (p.item.width ?? 0) > centerX - cm && x0 < centerX + cm;
+          return x0 < centerX && x0 + (p.item.width ?? 0) > centerX;
         });
-        const wide = !twoColumn || capNearCenter;
+        const wide = !twoColumn || capCrosses;
         const bx0 = wide ? vx0 : ax < centerX ? vx0 : centerX;
         const bx1 = wide ? vx0 + pageW : ax < centerX ? centerX : vx0 + pageW;
         const inBand = (p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1;
@@ -787,12 +798,12 @@ export class TypographyEngine {
         for (const entry of batch) {
           const { pair, parts, rect, keep } = entry;
           const span = pair.div;
-          // Cover glyph overshoot too: ink (italics, descenders, accents)
-          // extends past the advance-width box the rect describes. Keep the
-          // horizontal reach small — adjacent canvas glyphs (inline math,
-          // mono identifiers) must not get shaved.
-          const padY = rect.height * 0.28;
-          const padX = Math.max(1.5, rect.height * 0.06);
+          // Cover the canvas glyph snugly. The vertical pad spans ascender/
+          // descender ink past the advance box; the horizontal pad stays
+          // minimal so adjacent canvas glyphs (inline math, mono identifiers,
+          // subscripts) are never shaved by a neighbouring span's mask.
+          const padY = rect.height * 0.16;
+          const padX = Math.max(0.5, rect.height * 0.02);
           const m = document.createElement("div");
           m.style.left = `${rect.left - layerRect.left - padX}px`;
           m.style.top = `${rect.top - layerRect.top - padY}px`;

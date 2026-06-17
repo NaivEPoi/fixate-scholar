@@ -28,6 +28,10 @@ const PAPERS = [
     // virtualized away afterwards): the wrapped 2-line URL must be whole.
     untouchedEarly: ["com/SyNSec-den/5GBaseChecker"],
     processed: ["takes as input a set of UEs"],
+    // Body prose on a mid content page (§2 Preliminaries, p4) — guards against
+    // a whole content page being skipped by the block classifier.
+    processedPage: 4,
+    processedOnPage: ["primarily comprises three major", "consists of several Network"],
   },
   { template: "Two-column C", url: "https://yilud.me/AFC_Attacks_NSDI.pdf" },
   { template: "Two-column D", url: "https://yilud.me/Proteus-ccs24.pdf" },
@@ -168,6 +172,28 @@ try {
         earlyOk = false;
         console.log(`      early probe ${hit}: ${probe}`);
       }
+    }
+    // Body prose that MUST be emphasized on a mid content page — catches a
+    // whole content page skipped by mis-classification (navigate there first
+    // so the page is rendered).
+    if (paper.processedOnPage) {
+      await cdp.eval(`(async () => {
+        window.PDFViewerApplication.page = ${paper.processedPage};
+        await new Promise(r => setTimeout(r, 3500));
+      })()`);
+      for (const probe of paper.processedOnPage) {
+        const hit = await cdp.eval(`(() => {
+          const span = [...document.querySelectorAll('.textLayer span')]
+            .find(s => s.textContent.includes(${JSON.stringify(probe)}));
+          if (!span) return 'missing';
+          return span.dataset.fxDone || span.querySelector('.fx-b') ? 'ok' : 'unprocessed';
+        })()`);
+        if (hit !== "ok") {
+          earlyOk = false;
+          console.log(`      processed-on-page ${hit}: ${probe}`);
+        }
+      }
+      await cdp.eval(`window.PDFViewerApplication.page = 1`);
     }
 
     // Deeper checks: embedded-font rendering, page-1 header exclusion,
