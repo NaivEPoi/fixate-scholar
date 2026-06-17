@@ -188,6 +188,21 @@ try {
         const median = sizes[Math.floor(sizes.length / 2)];
         out.headingOk = sizes.every(s => s <= median * 1.3);
 
+        // Section headings stay in their original form: no processed span may
+        // begin with a section label — numbered ("9.2.3 Foo"), lettered
+        // ("A1: Foo"), or roman ("IV. Foo"). Body-size subsection headings slip
+        // past the size check above, so guard them explicitly.
+        // Heading-shaped = starts with a section label AND is not a running
+        // sentence (few lowercase words) — so body prose that merely opens with
+        // a number ("2.4 GHz and 5 GHz bands have become …") is not flagged.
+        const headingHit = (t) =>
+          (t.match(/\\b[a-z]{2,}\\b/g) || []).length <= 3 &&
+          (/^\\d+(?:\\.\\d+){1,3}\\.?\\s+[A-Z]/.test(t) ||
+            /^[A-Z]\\d*[.:]\\s+[A-Z]/.test(t) || /^[IVX]{1,5}\\.\\s+[A-Z]/.test(t));
+        out.headingClean = !done().some(s => headingHit(s.textContent.trim()));
+        out.headingDirty = done().filter(s => headingHit(s.textContent.trim()))
+          .slice(0, 5).map(s => s.textContent.trim().slice(0, 50));
+
         // Front matter: nothing processed before the Abstract heading —
         // neither on cover pages nor in the title/authors/emails block.
         out.headerOk = true;
@@ -307,7 +322,7 @@ try {
 
     const checksOk =
       !!checks && !checks.error && earlyOk &&
-      checks.fontOk && checks.headingOk && checks.headerOk && checks.linkOk &&
+      checks.fontOk && checks.headingOk && checks.headingClean && checks.headerOk && checks.linkOk &&
       checks.footerOk && checks.tableOk && checks.proseOk && checks.colorOk &&
       checks.refsOk !== false && checks.appendixOk !== false;
     const ok = !!state && state.pages > 0 && state.fxOn && state.bolded > 100 && checksOk;

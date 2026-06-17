@@ -18,7 +18,6 @@
 import { emphasizeParts } from "./segmenter.mjs";
 
 const CHUNK = 150;
-const CAPTION = /^\s*(?:Fig(?:ure)?\.?|Table|TABLE|FIGURE)\s*\d/;
 const ABSTRACT = /^\s*abstract\s*$/i;
 // Faces that are never emphasized — they mark intentional special typography:
 // TeX/Type1 math and symbol fonts, monospace/typewriter (code, URLs), small
@@ -31,6 +30,11 @@ const SPECIAL_FONT = new RegExp(
     "Bold|bold|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])", // bold display variants
   ].join("|"),
 );
+// Bold/medium display faces only — the subset of SPECIAL_FONT used to spot
+// unlabelled run-in headings (a bold paragraph lead-in like "Minimizing
+// duplicate states."). Kept (masked + redrawn) bold text renders lighter than
+// the canvas, so such headings are skipped to the canvas instead.
+const BOLD_FONT = /Bold|bold|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])/;
 
 // Bundled reading fonts (SIL OFL, vendored by scripts/fetch-pdfjs.mjs);
 // @font-face rules live in overlay.css. These ship real 700 weights, so
@@ -89,6 +93,17 @@ export class TypographyEngine {
   /** Resolves when re-processing (if any) has finished. */
   updateSettings(settings) {
     this.#settings = settings;
+    if (!this.#enabled) return Promise.resolve();
+    this.#restoreAll();
+    return this.#processAll();
+  }
+
+  /** Re-process every rendered page from a clean (restored) state. Used when
+   *  the page geometry our corrections depend on may have gone stale without a
+   *  textlayerrendered — e.g. the embedded fonts were evicted when the window
+   *  was backgrounded and re-loaded with different (fallback) metrics on
+   *  return, leaving spans we measured during the fallback window mis-spaced. */
+  refresh() {
     if (!this.#enabled) return Promise.resolve();
     this.#restoreAll();
     return this.#processAll();
@@ -225,235 +240,283 @@ export class TypographyEngine {
   }
 
   /**
-   * Divs the author set apart from running prose, returned as two sets:
-   *  - tableSet: tabular / pseudocode-listing rows. A baseline (sub-)row is
-   *    tabular when it has 3+ column-gap-separated cells, OR special-font
-   *    items (mono/math/bold) holding the majority of its characters, OR it
-   *    starts with a pseudocode line number ("10:") / algorithm keyword
-   *    (Require:/Ensure:/Input:/Output:/Algorithm N). Detected tabular rows
-   *    are then clustered and the whole band is filled (x-bounded), so
-   *    interior rows with only one or two filled cells can't leak through.
-   *  - captionSet: figure/table caption blocks — a "Table N"/"Figure N"
-   *    leader plus its same-size continuation lines (multi-line captions).
+   * Block-based content recognition (recursive-XY-cut / Docstrum style).
+   * Returns the set of text-layer divs to LEAVE on the canvas — every block
+   * that is NOT running body text: section headings, figure/table captions,
+   * table cells, figure labels, displayed equations, and pseudocode listings.
    *
-   * The page-center column split is applied ONLY on genuinely two-column
-   * pages (few items cross the center). Applying it to a wide single-column
-   * table would shred its rows into <3-cell fragments and let them through.
+   * Pipeline:
+   *   1. group items into baseline lines (#lineGroups);
+   *   2. assign each line to a column region — left / right / full-width — by
+   *      the page-centre gutter. A line with text in the gutter band is
+   *      full-width (a title, a figure/table spanning both columns); a line
+   *      with the gutter empty is split into the two column streams (PDF.js
+   *      collapses a left and a right line onto one baseline);
+   *   3. cut each stream into blocks at vertical whitespace gaps wider than the
+   *      stream's body leading, and at font-size jumps;
+   *   4. classify each block; everything that is not body text is skipped.
+   * Captions are skipped whole — treated as part of their figure/table.
    */
-  #skipRegions(allPairs, vx0, pageW, isSpecial) {
-    const tableSet = new Set();
-    const captionSet = new Set();
+  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold) {
+    const skip = new Set();
     const items = allPairs.filter((p) => p.item?.transform && p.item.str.trim());
     const lines = this.#lineGroups(items);
-    if (!lines.length) return { tableSet, captionSet };
+    if (!lines.length) return skip;
 
-    // Two-column? Test whether a narrow band at the page center is a gutter.
-    // A baseline that merges a left-column item with a right-column item spans
-    // the center as a *line*, so test individual items: in a real two-column
-    // layout almost no item's own box covers the center band, whereas in a
-    // single column (or a wide full-width table) many lines have an item over
-    // it. This keeps left-column prose from being swept up with a right-column
-    // table that happens to share its baseline.
     const centerX = vx0 + pageW * 0.5;
-    const cm = pageW * 0.03;
-    // A line "occupies" the center only if one of its items actually CROSSES
-    // the center line (spans from left of it to right of it). Left- and
-    // right-column items merely reaching toward the gutter do not count, so a
-    // two-column page reads as two-column even when PDF.js collapses a left
-    // and a right line onto one baseline. Only genuinely full-width content
-    // (single-column prose, full-width tables, a figure straddling the gutter)
-    // crosses, so a high ratio means single column.
-    let occupy = 0;
-    for (const ln of lines) {
-      const over = ln.items.some(
-        (p) => p.item.transform[4] < centerX && p.item.transform[4] + (p.item.width ?? 0) > centerX,
-      );
-      if (over) occupy++;
-    }
-    const twoColumn = lines.length > 4 && occupy < lines.length * 0.35;
-    const splitX = twoColumn ? centerX : null;
-
-    const ALGO_LEAD = /^(?:\d{1,3}:|Require:|Ensure:|Input:|Output:|Algorithm\s+\d+)/;
-    const runIsTabular = (run) => {
-      if (!run.length) return false;
-      if (ALGO_LEAD.test(run[0].item.str.trim())) return true;
-      if (run.length < 2) return false;
-      let specialChars = 0;
-      let specialItems = 0;
-      let totalChars = 0;
-      for (const p of run) {
-        const len = p.item.str.trim().length;
-        totalChars += len;
-        if (isSpecial(p)) {
-          specialChars += len;
-          specialItems++;
-        }
-      }
-      if (specialItems >= 2 && totalChars > 0 && specialChars / totalChars >= 0.55) return true;
-      if (run.length < 3) return false;
-      let cells = 1;
-      for (let k = 1; k < run.length; k++) {
-        const prev = run[k - 1].item;
-        const gap =
-          run[k].item.transform[4] - (prev.transform[4] + (prev.width ?? 0));
-        if (gap > Math.max(prev.height || 8, run[k].item.height || 8) * 1.5) cells++;
-      }
-      return cells >= 3;
-    };
-    // A text item that reads as running prose (several lowercase words) — used
-    // to spare body sentences from a table/figure band-fill when they share a
-    // baseline with it. Pseudocode keywords are NOT spared, because their rows
-    // match runIsTabular (ALGO_LEAD) and are filled wholesale before this runs.
+    const cm = pageW * 0.04;
     const LOWER_WORD = /^[a-zà-ÿ]{2,}$/;
-    const isProseItem = (p) => {
+    // Caption leaders, section labels, and pseudocode/algorithm leaders.
+    const CAP_LEAD = /^(?:Fig(?:ure)?\.?|Tab(?:le)?\.?|TABLE|FIGURE|Algorithm|Listing)\s*\d/;
+    const HEAD_LEAD = /^(?:\d+(?:\.\d+)*\.?|[A-Z]\d*[.:]|[IVX]{1,5}\.)(?:$|\s+[A-Z(])/;
+    const ALGO_LEAD = /^(?:\d{1,3}:|Require:|Ensure:|Input:|Output:|Algorithm\s+\d+)/;
+
+    const lowerWords = (its) => {
       let lc = 0;
-      for (const w of p.item.str.trim().split(/\s+/)) if (LOWER_WORD.test(w)) lc++;
-      return lc >= 4;
+      for (const p of its)
+        for (const w of p.item.str.trim().split(/\s+/)) if (LOWER_WORD.test(w)) lc++;
+      return lc;
     };
-    const cellCount = (items) => {
-      if (!items.length) return 0;
-      let cells = 1;
-      for (let k = 1; k < items.length; k++) {
-        const prev = items[k - 1].item;
-        const gap = items[k].item.transform[4] - (prev.transform[4] + (prev.width ?? 0));
-        if (gap > Math.max(prev.height || 8, items[k].item.height || 8) * 1.5) cells++;
+    // Column-gap-separated cells in a row (a wide gap = a column boundary).
+    const maxCells = (rows) => {
+      let m = 0;
+      for (const r of rows) {
+        let cells = 1;
+        for (let k = 1; k < r.items.length; k++) {
+          const prev = r.items[k - 1].item;
+          const gap = r.items[k].item.transform[4] - (prev.transform[4] + (prev.width ?? 0));
+          if (gap > Math.max(prev.height || 8, r.items[k].item.height || 8) * 1.5) cells++;
+        }
+        m = Math.max(m, cells);
       }
-      return cells;
+      return m;
     };
-    // A full-width table row: spans most of the page width AND has multiple
-    // gap-separated cells on BOTH sides of the center. This distinguishes a
-    // genuine wide table (cells distributed across the width) from a
-    // two-column line that merely merges a left-column block with a
-    // right-column block (one side is a single prose cell).
-    const isFullWidthRow = (ln) => {
-      if (ln.xEnd - ln.xStart < pageW * 0.7) return false;
-      const left = ln.items.filter((p) => p.item.transform[4] < centerX);
-      const right = ln.items.filter((p) => p.item.transform[4] >= centerX);
-      return cellCount(left) >= 2 && cellCount(right) >= 2;
+    const specialRatio = (its) => {
+      let s = 0;
+      let t = 0;
+      for (const p of its) {
+        const n = p.item.str.trim().length;
+        t += n;
+        if (isSpecial(p)) s += n;
+      }
+      return t ? s / t : 0;
     };
 
-    // Split every baseline into per-column sub-rows. On a two-column page,
-    // left- and right-column content share baselines; clustering and filling
-    // must stay within a column, or a table in one column would swallow prose
-    // in the other (e.g. an appendix with a symbol table beside running text).
-    // A full-width table embedded on a two-column page (a run of 3+ full-width
-    // rows) is the exception: those rows are kept whole in a third group so
-    // the column split doesn't shred the table into sub-3-cell fragments.
-    const columns = splitX === null ? [[]] : [[], [], []];
-    if (splitX === null) {
-      for (const ln of lines) columns[0].push({ y: ln.y, h: ln.h, items: ln.items });
-    } else {
-      const fw = lines.map(isFullWidthRow);
-      const inTable = new Array(lines.length).fill(false);
-      let r = 0;
-      while (r < lines.length) {
-        if (!fw[r]) { r++; continue; }
-        let e = r;
-        while (
-          e + 1 < lines.length && fw[e + 1] &&
-          lines[e].y - lines[e + 1].y < Math.max(lines[e].h, lines[e + 1].h) * 3
-        ) e++;
-        if (e - r + 1 >= 3) for (let k = r; k <= e; k++) inTable[k] = true;
-        r = e + 1;
+    // Reference body-text height: char-weighted mode over the whole page.
+    const hist = new Map();
+    for (const p of items) {
+      if (!p.item.height) continue;
+      const b = Math.round(p.item.height * 2) / 2;
+      hist.set(b, (hist.get(b) || 0) + p.item.str.length);
+    }
+    let dominant = 8;
+    let best = 0;
+    for (const [b, w] of hist) if (w > best) { best = w; dominant = b; }
+
+    // --- Column model: two-column iff few items cross the centre gutter. ---
+    let occupy = 0;
+    for (const ln of lines)
+      if (ln.items.some((p) => p.item.transform[4] < centerX && p.item.transform[4] + (p.item.width ?? 0) > centerX))
+        occupy++;
+    const twoColumn = lines.length > 4 && occupy < lines.length * 0.35;
+
+    const left = [];
+    const right = [];
+    const full = [];
+    for (const ln of lines) {
+      // Text present in the centre band ⇒ full-width (title, spanning figure/
+      // table, single-column prose). An empty gutter ⇒ a merged two-column
+      // baseline, split into the column streams.
+      const nearCenter = ln.items.some((p) => {
+        const x0 = p.item.transform[4];
+        return x0 + (p.item.width ?? 0) > centerX - cm && x0 < centerX + cm;
+      });
+      if (!twoColumn || nearCenter) {
+        full.push({ y: ln.y, h: ln.h, items: ln.items });
+        continue;
       }
-      for (let i = 0; i < lines.length; i++) {
-        const ln = lines[i];
-        if (inTable[i]) {
-          columns[2].push({ y: ln.y, h: ln.h, items: ln.items });
+      const l = ln.items.filter((p) => p.item.transform[4] < centerX);
+      const r = ln.items.filter((p) => p.item.transform[4] >= centerX);
+      if (l.length) left.push({ y: ln.y, h: ln.h, items: l });
+      if (r.length) right.push({ y: ln.y, h: ln.h, items: r });
+    }
+
+    // --- Cut a column stream into blocks at whitespace gaps / size jumps. ---
+    const blocksOf = (rows) => {
+      if (!rows.length) return [];
+      rows = rows.slice().sort((a, b) => b.y - a.y); // top → bottom
+      const gaps = [];
+      for (let i = 1; i < rows.length; i++) gaps.push(rows[i - 1].y - rows[i].y);
+      const pitch = gaps.length
+        ? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
+        : rows[0].h * 1.2;
+      const groups = [];
+      let cur = [rows[0]];
+      for (let i = 1; i < rows.length; i++) {
+        const gap = rows[i - 1].y - rows[i].y;
+        const dh = Math.abs(rows[i].h - rows[i - 1].h);
+        if (gap > Math.max(pitch * 1.5, rows[i].h * 1.8) ||
+            dh > Math.max(rows[i].h, rows[i - 1].h) * 0.3) {
+          groups.push(cur);
+          cur = [];
+        }
+        cur.push(rows[i]);
+      }
+      if (cur.length) groups.push(cur);
+      return groups.map((rs) => {
+        const its = rs.flatMap((r) => r.items);
+        let hsum = 0;
+        let hc = 0;
+        for (const p of its) {
+          hsum += (p.item.height || 0) * p.item.str.length;
+          hc += p.item.str.length;
+        }
+        const leadItems = rs[0].items;
+        return {
+          rows: rs,
+          items: its,
+          h: hc ? hsum / hc : rs[0].h,
+          yTop: rs[0].y,
+          yBot: rs.at(-1).y,
+          lead: leadItems.map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim(),
+          leadBold: leadItems[0] ? isBold(leadItems[0]) : false,
+        };
+      });
+    };
+
+    const skipBlock = (b) => { for (const p of b.items) skip.add(p.div); };
+    // A run-in heading that opens a body block ("Minimizing duplicate states.
+    // We also …" / "A1: … reuse. To address …"): skip the leading bold/glyph
+    // run so the heading stays pristine on the canvas (a kept redraw renders
+    // lighter), while the rest of the block is emphasized as body.
+    const skipLeadRun = (b) => {
+      const its = b.rows[0].items;
+      for (let j = 0; j < its.length; j++) {
+        const t = its[j].item.str.trim();
+        const glyphBit = t.length < 2 || !/[A-Za-zÀ-ÿ]/.test(t);
+        if (!isSpecial(its[j]) && !glyphBit) break; // first body word
+        skip.add(its[j].div);
+      }
+    };
+
+    const regions = twoColumn ? [left, right, full] : [full];
+    for (const region of regions) {
+      const blocks = blocksOf(region);
+      for (let bi = 0; bi < blocks.length; bi++) {
+        const b = blocks[bi];
+        const lc = lowerWords(b.items);
+        const cells = maxCells(b.rows);
+        const spc = specialRatio(b.items);
+        const offSize = b.h < dominant * 0.82 || b.h > dominant * 1.18;
+
+        // Caption → skip whole block, plus the figure/table body in the block
+        // directly above it in this column (figures are captioned below).
+        if (CAP_LEAD.test(b.lead)) {
+          skipBlock(b);
+          const prev = blocks[bi - 1];
+          if (prev && b.yTop - prev.yBot < pageH * 0.16 && lowerWords(prev.items) < 5) skipBlock(prev);
           continue;
         }
-        const left = ln.items.filter((p) => p.item.transform[4] < splitX);
-        const right = ln.items.filter((p) => p.item.transform[4] >= splitX);
-        if (left.length) columns[0].push({ y: ln.y, h: ln.h, items: left });
-        if (right.length) columns[1].push({ y: ln.y, h: ln.h, items: right });
+        // Table / pseudocode listing.
+        if (cells >= 3 || ALGO_LEAD.test(b.lead) || (spc >= 0.5 && cells >= 2)) { skipBlock(b); continue; }
+        // Heading: short, not a sentence, label- / bold- / large-led.
+        if (b.rows.length <= 2 && lc <= 3 &&
+            (HEAD_LEAD.test(b.lead) || b.leadBold || b.h > dominant * 1.15)) { skipBlock(b); continue; }
+        // Figure label / displayed equation: almost no prose, with a non-body
+        // face, an off-body size, or just a few glyphs.
+        if (lc < 2 && (spc >= 0.3 || offSize || b.items.length <= 3)) { skipBlock(b); continue; }
+        // Off-size block with little prose (footnotes, sub/superscript rows).
+        if (offSize && lc < 4) { skipBlock(b); continue; }
+
+        // Body text → process. Strip a leading run-in heading if present.
+        if (b.leadBold || HEAD_LEAD.test(b.lead)) skipLeadRun(b);
       }
     }
 
-    // Within a column, cluster tabular sub-rows (interior non-tabular rows
-    // tolerated up to a few line-heights apart) and fill the band between the
-    // first and last tabular sub-row, bounded to the table's own x-extent.
-    const fillColumn = (rows) => {
-      const tabIdx = rows.map((r, k) => (runIsTabular(r.items) ? k : -1)).filter((k) => k >= 0);
-      let c = 0;
-      while (c < tabIdx.length) {
-        let end = c;
-        while (end + 1 < tabIdx.length) {
-          const a = rows[tabIdx[end]];
-          const b = rows[tabIdx[end + 1]];
-          if (a.y - b.y > Math.max(a.h, b.h) * 4) break;
-          end++;
-        }
-        const cluster = tabIdx.slice(c, end + 1).map((k) => rows[k]);
-        if (cluster.length >= 2) {
-          let xMin = Infinity;
-          let xMax = -Infinity;
-          for (const r of cluster) {
-            for (const p of r.items) {
-              xMin = Math.min(xMin, p.item.transform[4]);
-              xMax = Math.max(xMax, p.item.transform[4] + (p.item.width ?? 0));
-            }
-          }
-          const top = rows[tabIdx[c]];
-          const bot = rows[tabIdx[end]];
-          const yTop = top.y + top.h * 0.6;
-          const yBot = bot.y - bot.h * 0.6;
-          for (const r of rows) {
-            if (r.y > yTop || r.y < yBot) continue;
-            // Pseudocode rows (line-number / keyword led) are filled wholesale
-            // — their English keywords must not be bolded. Everywhere else,
-            // running-prose items are spared: body text frequently shares a
-            // PDF baseline with a figure's labels or a table's cells (super/
-            // subscripts collapse onto one baseline), and that prose should
-            // still be emphasized while the genuine cells stay on the canvas.
-            const algo = ALGO_LEAD.test(r.items[0]?.item.str.trim() ?? "");
-            for (const p of r.items) {
-              const x = p.item.transform[4] + (p.item.width ?? 0) / 2;
-              if (x < xMin - cm || x > xMax + cm) continue;
-              if (algo || !isProseItem(p)) tableSet.add(p.div);
-            }
-          }
-        } else {
-          for (const p of cluster[0].items) tableSet.add(p.div);
-        }
-        c = end + 1;
+    // Line-level heading pass (independent of block grouping, which can merge a
+    // heading line into the paragraph below it). At each column's start: a short
+    // label-led line that is not a sentence ("I. INTRODUCTION", "C. Automated
+    // Frequency …", "9.2.3 Mishandling …") is skipped whole — in ANY font, so
+    // regular-weight / italic IEEE section titles are caught; a sentence-shaped
+    // bold lead ("A1: … reuse. To address …") skips only its leading bold run.
+    const skipHeadingRun = (its, a) => {
+      for (let j = a; j < its.length; j++) {
+        const t = its[j].item.str.trim();
+        const glyphBit = t.length < 2 || !/[A-Za-zÀ-ÿ]/.test(t);
+        if (!isSpecial(its[j]) && !glyphBit) break; // first body word
+        skip.add(its[j].div);
       }
     };
-    fillColumn(columns[0]);
-    if (splitX !== null) {
-      fillColumn(columns[1]);
-      // The full-width table group is, by construction, a run of genuine
-      // full-width table rows — mark every (non-prose) cell directly rather
-      // than x-bounding to a cluster, so a column that overflows the others
-      // (e.g. a long version string) can't escape and get re-rendered.
-      for (const r of columns[2]) {
-        const algo = ALGO_LEAD.test(r.items[0]?.item.str.trim() ?? "");
-        for (const p of r.items) if (algo || !isProseItem(p)) tableSet.add(p.div);
+    for (const ln of lines) {
+      const its = ln.items;
+      const starts = [0];
+      if (twoColumn) {
+        const r = its.findIndex((p) => p.item.transform[4] >= centerX);
+        if (r > 0) starts.push(r);
+      }
+      for (const a of starts) {
+        const lead = its[a];
+        if (!lead) continue;
+        const leadStr = lead.item.str.trim();
+        const ax = lead.item.transform[4];
+        const bx0 = twoColumn && ax >= centerX ? centerX : vx0;
+        const bx1 = twoColumn && ax < centerX ? centerX : vx0 + pageW;
+        const band = its.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+        if (ALGO_LEAD.test(leadStr)) {
+          // Pseudocode line ("10: while learning not terminate do"): the whole
+          // line is a listing, even though its regular-font operands read as
+          // prose between bold keywords.
+          for (const p of band) skip.add(p.div);
+        } else if (HEAD_LEAD.test(leadStr)) {
+          if (lowerWords(band) <= 3) for (const p of band) skip.add(p.div);
+          else if (isSpecial(lead)) skipHeadingRun(its, a);
+        } else if (isBold(lead)) {
+          skipHeadingRun(its, a);
+        }
       }
     }
 
-    // Multi-line caption blocks: a "Table N"/"Figure N" leader plus its
-    // following same-size lines (tight spacing), stopping at the table, a size
-    // change, a paragraph gap, or the next caption. Captions are emphasized
-    // like body text (see #processPage), so this set marks which spans are
-    // caption text — letting smaller-than-body caption lines bypass the size
-    // filter — and the generous line cap errs toward covering the whole caption.
+    // Caption pass (independent of block grouping). A "Figure N" / "Table N" /
+    // "Algorithm N" leader at a column start marks a caption; skip its column
+    // band on that baseline and the following tightly-spaced same-size lines
+    // (multi-line captions and legends), so the whole caption stays on the
+    // canvas as part of its figure/table. The caption's band is full-width when
+    // its own line carries text across the gutter (a spanning legend).
     for (let k = 0; k < lines.length; k++) {
-      if (!CAPTION.test(lines[k].text)) continue;
-      const lead = lines[k];
-      for (const p of lead.items) captionSet.add(p.div);
-      let absorbed = 0;
-      for (let m = k + 1; m < lines.length && absorbed < 12; m++) {
-        const gap = lines[m - 1].y - lines[m].y;
-        if (gap > Math.max(lines[m - 1].h, lines[m].h) * 1.6) break;
-        if (Math.abs(lines[m].h - lead.h) > lead.h * 0.15) break;
-        if (CAPTION.test(lines[m].text)) break;
-        if (lines[m].items.some((p) => tableSet.has(p.div))) break;
-        for (const p of lines[m].items) captionSet.add(p.div);
-        absorbed++;
+      const its = lines[k].items;
+      const starts = [0];
+      if (twoColumn) {
+        const r = its.findIndex((p) => p.item.transform[4] >= centerX);
+        if (r > 0) starts.push(r);
+      }
+      for (const a of starts) {
+        const lead = its[a];
+        if (!lead || !CAP_LEAD.test(lead.item.str.trim())) continue;
+        const ax = lead.item.transform[4];
+        const capNearCenter = lines[k].items.some((p) => {
+          const x0 = p.item.transform[4];
+          return x0 + (p.item.width ?? 0) > centerX - cm && x0 < centerX + cm;
+        });
+        const wide = !twoColumn || capNearCenter;
+        const bx0 = wide ? vx0 : ax < centerX ? vx0 : centerX;
+        const bx1 = wide ? vx0 + pageW : ax < centerX ? centerX : vx0 + pageW;
+        const inBand = (p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1;
+        const leadH = lines[k].h;
+        let prevY = lines[k].y;
+        for (const p of lines[k].items.filter(inBand)) skip.add(p.div);
+        for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 14; m++) {
+          const bandM = lines[m].items.filter(inBand);
+          if (!bandM.length) continue;
+          if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.8) break; // gap
+          if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
+          if (CAP_LEAD.test(bandM[0].item.str.trim())) break; // next caption
+          for (const p of bandM) skip.add(p.div);
+          prevY = lines[m].y;
+          absorbed++;
+        }
       }
     }
-
-    return { tableSet, captionSet };
+    return skip;
   }
 
   /** Dominant body-text height (weighted by character count). */
@@ -500,6 +563,22 @@ export class TypographyEngine {
     }
     cache.set(fontName, special);
     return special;
+  }
+
+  /** True when the item is set in a bold/medium display face (a subset of the
+   *  special faces) — used to spot unlabelled bold run-in headings. */
+  #isBoldFont(pageView, fontName, cache) {
+    if (!fontName) return false;
+    if (cache.has(fontName)) return cache.get(fontName);
+    let bold = false;
+    try {
+      const font = pageView.pdfPage.commonObjs.get(fontName);
+      bold = BOLD_FONT.test(font?.name ?? "");
+    } catch {
+      /* font not resolved — assume regular text */
+    }
+    cache.set(fontName, bold);
+    return bold;
   }
 
   async #processPage(pageView) {
@@ -560,8 +639,11 @@ export class TypographyEngine {
     const pageW = vx1 - vx0;
     const pageH = vy1 - vy0;
     const fontCache = new Map();
+    const boldCache = new Map();
     const isSpecial = (p) =>
       this.#isSpecialFont(pageView, p.item?.fontName, fontCache);
+    const isBold = (p) =>
+      this.#isBoldFont(pageView, p.item?.fontName, boldCache);
     const refsBoxes = this.#refsBoxes?.get(pageNumber);
     const inRefsBox = (item) => {
       if (!refsBoxes || !item?.transform) return false;
@@ -571,14 +653,14 @@ export class TypographyEngine {
         (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2,
       );
     };
-    const { tableSet, captionSet } = this.#skipRegions(allPairs, vx0, pageW, isSpecial);
-    for (const d of tableSet) d.dataset.fxTable = "1"; // debug/test marker
+    const skipSet = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold);
+    for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
     // The dominant body size must come from actual prose: bibliography, table,
     // and caption text (often smaller) would skew it on pages they dominate,
     // and then real body text gets skipped as "larger than body".
     const dominant = this.#dominantHeight(
       allPairs.filter(
-        (p) => !tableSet.has(p.div) && !captionSet.has(p.div) && !inRefsBox(p.item),
+        (p) => !skipSet.has(p.div) && !inRefsBox(p.item),
       ),
     );
     // Document-level cut from setContentStart; until it arrives, a per-page
@@ -591,25 +673,28 @@ export class TypographyEngine {
         contentStart = { page: 1, y: abstractPair.item.transform[5] };
       }
     }
-    const pairs = allPairs.filter(({ div, item }) => {
+    const pairs = allPairs.filter((pair) => {
+      const { div, item } = pair;
       if (!div?.isConnected || div.dataset.fxDone) return false;
       const text = div.textContent;
       const trimmed = text ? text.trim() : "";
       if (!trimmed) return false;
-      // Math/symbol glyphs (a special-font run, or a span with no Latin
-      // letters — subscripts, single italic variables, operators) must reach
-      // the write pass so they're re-rendered on top of the masks. Otherwise a
-      // single subscript "2" or italic "i" is dropped by the length / size
-      // filters below and a neighbouring bolded span's mask whites it out.
-      const mathGlyph =
-        isSpecial({ item }) || !/[A-Za-zÀ-ɏ]/.test(trimmed);
-      if (trimmed.length < 2 && !mathGlyph) return false;
-      if (tableSet.has(div)) return false;
-      // Figure/table captions are emphasized like body text — including their
-      // continuation lines and even when set smaller than the body — so they
-      // bypass the smaller/larger-than-body size filter below.
-      const isCaption = captionSet.has(div) || CAPTION.test(text);
-      if (dominant && item?.height && !isCaption && !mathGlyph) {
+      // "Keep" glyphs are rendered on top of the masks in their own face,
+      // never bolded: a special-font run (math/mono/small-caps/bold display), a
+      // span with no Latin letters (subscripts, operators), OR a single
+      // character (an italic variable like "I", a lone digit, a paren). These
+      // must reach the write pass so they get their OWN mask and re-render on
+      // top — otherwise the size / length filters below drop them, they stay
+      // only on the canvas, and a neighbouring glyph's mask clips them (the
+      // narrow ones, e.g. the "I" in an "(I₃, I₄)" marker, vanish at fit zoom).
+      const keepGlyph =
+        isSpecial({ item }) || !/[A-Za-zÀ-ɏ]/.test(trimmed) || trimmed.length < 2;
+      pair._keep = keepGlyph;
+      // Block classification (#classifyBlocks) owns content-type: anything not
+      // body text — headings, captions, tables, figures, equations — is here.
+      if (skipSet.has(div)) return false;
+      // Secondary size net for stray off-body items the block pass let through.
+      if (dominant && item?.height && !keepGlyph) {
         if (item.height < dominant * 0.85) return false;
         if (item.height > dominant * 1.15) return false;
       }
@@ -654,6 +739,22 @@ export class TypographyEngine {
         holder.resolve();
         return;
       }
+      // Geometry reads (getBoundingClientRect) are unreliable while the tab/
+      // window is hidden or occluded — the browser suspends layout, so widths
+      // can come back as 0 or stale. Measuring then bakes wrong --scale-x /
+      // word-spacing corrections (collapsed, jammed text) that persist until a
+      // re-process. If the window was switched away mid-run, pause and resume
+      // when it is visible again, so every measurement happens on a live layout.
+      if (typeof document !== "undefined" && document.hidden) {
+        const onVisible = () => {
+          if (document.hidden) return;
+          document.removeEventListener("visibilitychange", onVisible);
+          if (holder.cancelled) holder.resolve();
+          else requestIdleCallback(work, { timeout: 200 });
+        };
+        document.addEventListener("visibilitychange", onVisible);
+        return;
+      }
       const layerRect = textLayerDiv.getBoundingClientRect();
       while (i < pairs.length) {
         const end = Math.min(i + CHUNK, pairs.length);
@@ -661,11 +762,11 @@ export class TypographyEngine {
         // Read pass: pristine geometry.
         for (let j = i; j < end; j++) {
           const pair = pairs[j];
-          // Inline math (math-heavy spans) and special-font runs (mono, small
-          // caps, symbols) are kept in their original face, not bolded — but
-          // they must render on TOP of the masks so a neighbouring processed
-          // span's mask can't erase them from the canvas.
-          const result = isSpecial(pair)
+          // Keep glyphs (math-heavy / special-font runs, lone symbols, and
+          // single characters — flagged _keep in the filter) are kept in their
+          // original face, not bolded, but masked and re-rendered on TOP of the
+          // masks so a neighbouring processed span's mask can't clip them.
+          const result = pair._keep
             ? null
             : emphasizeParts(pair.div.textContent, settings, wordIndex);
           if (!result) {
@@ -738,6 +839,13 @@ export class TypographyEngine {
         // as rotate(--rotate) scaleX(--scale-x) scale(--min-font-size-inv);
         // only the custom property may be adjusted — writing
         // style.transform would wipe the other parts.
+        //
+        // Both corrections are kept SCALE-INVARIANT so they survive a zoom /
+        // window move / DPI change that re-lays-out the text layer at a new
+        // scale (PDF.js scales each span's font-size): --scale-x is already
+        // dimensionless, and word-spacing is written in `em` (relative to the
+        // font size) rather than px, so the gap scales with the text. A px gap
+        // would stay fixed while the glyphs grew/shrank, collapsing the spacing.
         for (const { pair, rect, keep } of batch) {
           if (keep) continue; // unchanged content/font — width is already exact
           const span = pair.div;
@@ -749,8 +857,9 @@ export class TypographyEngine {
           const natural = newWidth / prevScale;
           const perSpace = spaces ? (rect.width - natural) / spaces : Infinity;
           if (spaces >= 2 && Math.abs(perSpace) < rect.height * 0.45) {
+            const fontPx = parseFloat(getComputedStyle(span).fontSize) || rect.height;
             span.style.setProperty("--scale-x", 1);
-            span.style.wordSpacing = `${perSpace}px`;
+            span.style.wordSpacing = `${perSpace / fontPx}em`;
           } else {
             span.style.setProperty(
               "--scale-x",
