@@ -126,6 +126,26 @@ app.eventBus.on("textlayerrendered", async (evt) => {
   references.onTextLayerRendered(evt.source);
 });
 
+// Our typography masks the canvas glyphs and shows the text-layer spans in the
+// document's embedded font. When the window is backgrounded (e.g. switching
+// windows in Edge) the browser can evict those FontFaces; on return they
+// re-decode asynchronously and the text momentarily renders in a fallback font
+// with different metrics, which can leave our width/word-spacing corrections
+// stale (collapsed spacing, "wrong font"). PDF.js doesn't re-render for this,
+// so re-process from a clean state once fonts settle. Debounced — loadingdone
+// also fires during the initial page load.
+if (typeof document !== "undefined" && document.fonts?.addEventListener) {
+  let fontsTimer = null;
+  document.fonts.addEventListener("loadingdone", () => {
+    if (!engine.enabled) return;
+    clearTimeout(fontsTimer);
+    fontsTimer = setTimeout(async () => {
+      await engine.refresh();
+      references.reannotateRendered();
+    }, 250);
+  });
+}
+
 app.eventBus.on("documentloaded", () => {
   references.onDocumentLoaded(app.pdfDocument);
 });
