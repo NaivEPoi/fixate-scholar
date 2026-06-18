@@ -161,11 +161,21 @@ try {
   const popupState = await cdp.eval(`(async () => {
     const hit = document.querySelector('.fx-cite-hit');
     if (!hit) return { clicked: false };
+    const scroller = document.getElementById('viewerContainer');
+    const beforeScroll = scroller.scrollTop;
     hit.click();
     await new Promise(r => setTimeout(r, 4000)); // allow the Scholar fetch
+    // Clicking a citation must NOT scroll the page to the bibliography.
+    const noScrollJump = Math.abs(scroller.scrollTop - beforeScroll) < 5;
     const popup = document.querySelector('.fx-cite-popup');
     const link = popup?.querySelector('a[href^="https://scholar.google.com/scholar?"]');
     const citeBtn = [...(popup?.querySelectorAll('button') ?? [])].find(b => b.textContent === 'Cite');
+    const refBtn = [...(popup?.querySelectorAll('button') ?? [])].find(b => /^Reference/.test(b.textContent));
+    // The "Reference ↓" button scrolls to the bibliography entry.
+    refBtn?.click();
+    await new Promise(r => setTimeout(r, 1500));
+    const refJumped = Math.abs(scroller.scrollTop - beforeScroll) > 50;
+    if (refBtn) scroller.scrollTop = beforeScroll; // restore for later checks
     citeBtn?.click();
     await new Promise(r => setTimeout(r, 4000)); // allow the BibTeX fetch/fallback
     const bib = popup?.querySelector('.fx-cite-bib textarea')?.value ?? '';
@@ -174,7 +184,9 @@ try {
       visible: !!popup && !popup.hidden,
       scholarHref: link?.href ?? null,
       hasCiteAction: !!citeBtn,
-      noJumpAction: ![...(popup?.querySelectorAll('a,button') ?? [])].some(a => a.textContent === 'See in References'),
+      noScrollJump,
+      hasRefButton: !!refBtn,
+      refJumped,
       bibtexOk: /^@\\w+\\{/.test(bib.trim()),
       hasClose: !!popup?.querySelector('.fx-cite-close'),
       body: popup?.querySelector('.fx-cite-body')?.textContent.slice(0, 80) ?? null,
@@ -182,9 +194,10 @@ try {
   })()`);
   console.log("popup:", JSON.stringify(popupState));
   check(
-    "citation card: Scholar action + Cite/BibTeX, no PDF-jump",
+    "citation card: no jump on click, Scholar/Cite/BibTeX + Reference button",
     popupState.visible && !!popupState.scholarHref && popupState.hasCiteAction &&
-      popupState.noJumpAction && popupState.bibtexOk && popupState.hasClose,
+      popupState.noScrollJump && popupState.hasRefButton && popupState.refJumped &&
+      popupState.bibtexOk && popupState.hasClose,
     JSON.stringify(popupState),
   );
   const shotPopup = await cdp.send("Page.captureScreenshot", { format: "png" });

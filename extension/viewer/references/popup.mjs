@@ -238,6 +238,25 @@ export class CitationPopup {
       });
       actions.append(cite);
 
+      // Jump to the entry in the bibliography (replaces the PDF's own citation
+      // link, which we disable so a click opens this card instead of scrolling
+      // away). The parsed entry carries its page and PDF-space y.
+      if (entry.page && Number.isFinite(entry.y)) {
+        const ref = document.createElement("button");
+        ref.type = "button";
+        ref.className = "fx-pill fx-pill-action";
+        ref.textContent = "Reference ↓";
+        ref.title = "Scroll to this entry in the references";
+        ref.addEventListener("click", (e) => {
+          e.preventDefault();
+          this.#app.pdfViewer.scrollPageIntoView({
+            pageNumber: entry.page,
+            destArray: [null, { name: "XYZ" }, 0, entry.y + 24, null],
+          });
+        });
+        actions.append(ref);
+      }
+
       // [PDF] (prepended, primary) and Related fill in once the preview lands.
       fetchScholarPreview(entry.title).then((preview) => {
         if (!actions.isConnected) return;
