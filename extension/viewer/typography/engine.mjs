@@ -761,6 +761,25 @@ export class TypographyEngine {
     });
 
     const settings = this.#settings;
+    // Obstacles: every inked text-layer span we are NOT rendering on top (skip
+    // set, headings, captions, tables, refs, size-filtered). Masks cover only
+    // the canvas duplicate of spans we redraw — they must never white out an
+    // obstacle, which would only exist on the canvas. We break runs at, and
+    // clamp run padding away from, these. Measured lazily once in work() (needs
+    // a live, non-hidden layout). Classification can vary between render passes
+    // (async contentStart/refs/body-height), so this guard, not classification
+    // stability, is what guarantees skipped content is never erased.
+    const candidateDivs = new Set(pairs.map((p) => p.div));
+    const obstacleDivs = allPairs
+      .filter(
+        (p) =>
+          p.div &&
+          p.div.isConnected &&
+          !candidateDivs.has(p.div) &&
+          /[A-Za-zÀ-ÿ0-9]/.test(p.div.textContent || ""),
+      )
+      .map((p) => p.div);
+    let obstacleRects = null;
     let wordIndex = 0;
     let i = 0;
 
@@ -786,12 +805,43 @@ export class TypographyEngine {
         return;
       }
       const layerRect = textLayerDiv.getBoundingClientRect();
+      if (!obstacleRects) {
+        obstacleRects = [];
+        for (const d of obstacleDivs) {
+          if (!d.isConnected) continue;
+          const r = d.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) obstacleRects.push(r);
+        }
+      }
+      // True when a rect substantially overlaps a skipped (obstacle) span.
+      // Some PDFs carry a DUPLICATE text-layer span for the same glyphs (e.g. a
+      // wide caption span on top of fine-grained "Tab"/"le"/"8" spans, or
+      // tagged/accessibility duplicates). When one copy is skipped and its
+      // duplicate is a body candidate, processing the duplicate would mask —
+      // and white out — the skipped copy in the very same pixels. We can't both
+      // mask the duplicate and spare the original, so leave the duplicate on
+      // the canvas too.
+      const overlapsObstacle = (r) => {
+        const area = (r.right - r.left) * (r.bottom - r.top);
+        if (!(area > 0)) return false;
+        for (const o of obstacleRects) {
+          const w = Math.min(r.right, o.right) - Math.max(r.left, o.left);
+          const h = Math.min(r.bottom, o.bottom) - Math.max(r.top, o.top);
+          if (w > 0 && h > 0 && w * h > area * 0.35) return true;
+        }
+        return false;
+      };
       while (i < pairs.length) {
         const end = Math.min(i + CHUNK, pairs.length);
         const batch = [];
         // Read pass: pristine geometry.
         for (let j = i; j < end; j++) {
           const pair = pairs[j];
+          const rect = pair.div.getBoundingClientRect();
+          // A candidate overlapping skipped content is a duplicate of it —
+          // leave it on the canvas (no mask, no emphasis) so the skipped copy
+          // survives.
+          if (overlapsObstacle(rect)) continue;
           // Keep glyphs (math-heavy / special-font runs, lone symbols, and
           // single characters — flagged _keep in the filter) are kept in their
           // original face, not bolded, but masked and re-rendered on TOP of the
@@ -803,53 +853,47 @@ export class TypographyEngine {
             // Keep: mask the canvas glyph and show the original text-layer
             // glyph (unchanged face, no bold) on top — so it survives a
             // neighbouring mask instead of being whited out.
-            batch.push({ pair, keep: true, rect: pair.div.getBoundingClientRect() });
+            batch.push({ pair, keep: true, rect });
             continue;
           }
           wordIndex = result.wordIndex;
-          batch.push({
-            pair,
-            parts: result.parts,
-            rect: pair.div.getBoundingClientRect(),
-          });
+          batch.push({ pair, parts: result.parts, rect });
         }
-        // Mask pass: one white box per contiguous same-line RUN of rendered
-        // spans, not one per span. Merging the per-glyph boxes removes the
-        // edges that used to clip adjacent inline symbols / ghost the canvas /
-        // look shifted. A run breaks at a wide x-gap (a column gutter, or
-        // excluded canvas content such as a URL/figure between words) so the
-        // mask never whites out something we don't re-render. Every rendered
-        // span — bolded or kept-in-original-face — sits in the text layer above
-        // the mask, so the kept inline math still survives.
-        const sorted = batch
-          .filter((e) => e.rect.width > 0)
-          .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
-        const runs = [];
-        let run = null;
-        for (const { rect } of sorted) {
-          if (
-            run &&
-            Math.abs(rect.top - run.top) < run.h * 0.5 &&
-            rect.left - run.right < run.h
-          ) {
-            run.top = Math.min(run.top, rect.top);
-            run.left = Math.min(run.left, rect.left);
-            run.right = Math.max(run.right, rect.right);
-            run.bottom = Math.max(run.bottom, rect.bottom);
-            run.h = Math.max(run.h, rect.height);
-          } else {
-            run = { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, h: rect.height };
-            runs.push(run);
+        // Mask pass: one white box PER RENDERED SPAN, covering its canvas
+        // duplicate plus ink overshoot (italics, descenders, accents): ±28%
+        // height vertical, ±max(2px, 12% height) horizontal. A mask need only
+        // cover the glyphs we redraw — the gaps BETWEEN spans are inter-word
+        // whitespace (no canvas ink) and need no cover. So, unlike an earlier
+        // per-run bounding box that bridged those gaps, a skipped heading,
+        // caption leader, or figure label sitting in a gap (even on a slightly
+        // offset baseline that a bbox would have swallowed) is never whited
+        // out. As a second guard, each box is clamped back from any obstacle
+        // its padding would otherwise reach. Every rendered span — bolded or
+        // kept-in-original-face — sits in the text layer above the mask, so the
+        // kept inline math still survives.
+        for (const { rect: r } of batch) {
+          if (!(r.width > 0) || !(r.height > 0)) continue;
+          const padY = r.height * 0.28;
+          const padX = Math.max(2, r.height * 0.12);
+          let L = r.left - padX;
+          let R = r.right + padX;
+          let T = r.top - padY;
+          let B = r.bottom + padY;
+          for (const o of obstacleRects) {
+            if (o.right <= L || o.left >= R || o.bottom <= T || o.top >= B) continue;
+            // Obstacle reaches into the padding — pull the nearest padded edge
+            // back to it, but never past the span's own glyph rect.
+            if (o.left >= r.right) R = Math.min(R, o.left);
+            else if (o.right <= r.left) L = Math.max(L, o.right);
+            else if (o.top >= r.bottom) B = Math.min(B, o.top);
+            else if (o.bottom <= r.top) T = Math.max(T, o.bottom);
           }
-        }
-        for (const r of runs) {
-          const padY = r.h * 0.16;
-          const padX = Math.max(0.5, r.h * 0.04);
+          if (R - L <= 0 || B - T <= 0) continue;
           const m = document.createElement("div");
-          m.style.left = `${r.left - layerRect.left - padX}px`;
-          m.style.top = `${r.top - layerRect.top - padY}px`;
-          m.style.width = `${r.right - r.left + 2 * padX}px`;
-          m.style.height = `${r.bottom - r.top + 2 * padY}px`;
+          m.style.left = `${L - layerRect.left}px`;
+          m.style.top = `${T - layerRect.top}px`;
+          m.style.width = `${R - L}px`;
+          m.style.height = `${B - T}px`;
           mask.append(m);
         }
         // Content + font pass (no per-span masks).

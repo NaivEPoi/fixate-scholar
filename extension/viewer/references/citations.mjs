@@ -164,6 +164,42 @@ export class ReferencesFeature {
         wrapRange(seg.span, localStart, localEnd, "fx-ref-c", null);
       }
     }
+
+    // Now that this page's citation hit-targets exist, reconcile the native
+    // annotation links (it may have rendered before or after this pass).
+    this.reconcileLinks(pageView);
+  }
+
+  /**
+   * Decide, per native internal-destination link on a page, whether it is a
+   * citation (→ our card handles it; disable the link's scroll-to-bibliography)
+   * or an in-paper jump like Figure/Table/Section/Equation (→ keep the native
+   * jump working). A link is treated as a citation when one of our citation
+   * hit-targets overlaps it. External links (http/mailto/tel) are left alone.
+   * Idempotent — safe to call from both textlayerrendered and
+   * annotationlayerrendered, in any order.
+   */
+  reconcileLinks(pageView) {
+    const pageDiv = pageView?.div;
+    const layer = pageDiv?.querySelector(".annotationLayer");
+    if (!layer) return;
+    const hits = [...pageDiv.querySelectorAll(".fx-cite-hit")].map((a) =>
+      a.getBoundingClientRect(),
+    );
+    for (const a of layer.querySelectorAll("a")) {
+      const href = a.getAttribute("href") || "";
+      if (/^(https?|mailto|tel):/i.test(href)) continue; // external — keep
+      const r = a.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const overlapsCite = hits.some((h) => {
+        const w = Math.min(r.right, h.right) - Math.max(r.left, h.left);
+        const ht = Math.min(r.bottom, h.bottom) - Math.max(r.top, h.top);
+        return w > 0 && ht > 0 && w * ht > 0.3 * (r.width * r.height);
+      });
+      // Citation link → falls through to our hit-target/card; in-paper
+      // reference link (Figure/Table/Section/…) → native jump preserved.
+      a.style.pointerEvents = overlapsCite ? "none" : "";
+    }
   }
 }
 

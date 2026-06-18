@@ -127,23 +127,18 @@ app.eventBus.on("textlayerrendered", async (evt) => {
   references.onTextLayerRendered(evt.source);
 });
 
-// Disable the PDF's own in-document jump links (a citation "[35]" or a "Figure
-// 3" cross-reference whose annotation scrolls the page away). Clicking a
-// citation should open the reference card instead — which carries its own
-// "Reference ↓" button — so we neutralise the native internal links and let
-// the click fall through to our citation hit-targets. External links (DOI,
-// URLs) keep their href and stay clickable.
+// Reconcile the PDF's own in-document jump links once the annotation layer
+// renders. A citation "[35]" link (whose annotation scrolls to the
+// bibliography) should instead open our reference card, so we neutralise links
+// our citation hit-targets cover and let the click fall through. But an
+// in-paper cross-reference — "Figure 3", "Table 8", "Section 5" — must keep
+// its native jump, so those links stay clickable. External links (DOI, URLs)
+// are untouched. Idempotent and order-independent (annotatePage also calls it).
 app.eventBus.on("annotationlayerrendered", (evt) => {
-  const pageDiv = evt.source?.div ?? evt.source?.pageDiv;
-  const layer = pageDiv?.querySelector?.(".annotationLayer")
-    ?? evt.source?.annotationLayer?.div
-    ?? (evt.pageNumber && app.pdfViewer.getPageView(evt.pageNumber - 1)?.annotationLayer?.div);
-  if (!layer) return;
-  for (const a of layer.querySelectorAll("a")) {
-    const href = a.getAttribute("href") || "";
-    if (/^(https?|mailto|tel):/i.test(href)) continue; // external link — keep
-    a.style.pointerEvents = "none"; // internal dest — click falls through to us
-  }
+  const pageView = evt.pageNumber
+    ? app.pdfViewer.getPageView(evt.pageNumber - 1)
+    : evt.source;
+  if (pageView?.div) references.reconcileLinks(pageView);
 });
 
 // Our typography masks the canvas glyphs and shows the text-layer spans in the
