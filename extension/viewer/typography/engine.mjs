@@ -54,6 +54,8 @@ export class TypographyEngine {
   #refsBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — bibliography region
   #contentStart = null; // { page, y } — the Abstract heading; front matter above it
   #bodyHeight = null; // document-wide body-text height (from the refs extractor)
+  #ascentCache = new Map(); // fontFamily -> browser ascent ratio (baseline align)
+  #measureCtx = null; // offscreen 2d context for ascent measurement
 
   constructor(app, settings) {
     this.#app = app;
@@ -180,6 +182,7 @@ export class TypographyEngine {
         span.style.setProperty("--scale-x", orig.scaleX || "");
         span.style.fontFamily = orig.fontFamily;
         span.style.wordSpacing = orig.wordSpacing || "";
+        span.style.marginTop = orig.marginTop || "";
       }
       delete span.dataset.fxDone;
     }
@@ -572,6 +575,72 @@ export class TypographyEngine {
     return null; // keep whatever PDF.js set
   }
 
+  /**
+   * Browser ascent ratio — fontBoundingBoxAscent / (ascent + descent) — for a
+   * CSS font-family, measured exactly as PDF.js's TextLayer measures it. PDF.js
+   * positions every text span's `top` as `baseline − fontHeight × ascentRatio`
+   * using the ratio of the font IT assigned (often a generic substitute), so
+   * the rendered baseline lands on the canvas baseline. When we swap in the
+   * embedded (or a bundled) face whose ratio differs, the baseline slides — the
+   * glyphs render visibly higher/lower than the canvas, and the box-derived
+   * mask misses the canvas descenders. The ratio difference is the exact
+   * em-relative shift needed to re-seat the baseline. Cached per family.
+   */
+  #ascentRatio(fontFamily) {
+    if (!fontFamily) return 0.8;
+    if (this.#ascentCache.has(fontFamily)) return this.#ascentCache.get(fontFamily);
+    let ratio = 0.8;
+    try {
+      this.#measureCtx ??= document.createElement("canvas").getContext("2d");
+      this.#measureCtx.font = `100px ${fontFamily}`;
+      const m = this.#measureCtx.measureText("Hxbdfhklgjpqy");
+      const asc = m.fontBoundingBoxAscent;
+      const desc = Math.abs(m.fontBoundingBoxDescent ?? 0);
+      if (asc && asc + desc > 0) ratio = asc / (asc + desc);
+    } catch {
+      /* metrics unavailable — keep default */
+    }
+    this.#ascentCache.set(fontFamily, ratio);
+    return ratio;
+  }
+
+  /**
+   * RENDERED alphabetic-baseline position for a CSS font-family, as a fraction
+   * of font-size, measured the way the browser actually lays the font out
+   * (line-height:1) — which can differ from the glyph bounding-box ascent
+   * (#ascentRatio) that PDF.js positions with. A zero-height inline marker with
+   * `vertical-align:baseline` sits exactly on the baseline; its offset from the
+   * line-box top is the ratio. This is what we must match when we swap fonts:
+   * the embedded face's rendered baseline lands elsewhere than the substitute's
+   * bbox ascent, which is why the overlay drifted up. Cached per family.
+   */
+  #baselineRatio(fontFamily) {
+    if (!fontFamily) return 0.8;
+    const key = "bl:" + fontFamily;
+    if (this.#ascentCache.has(key)) return this.#ascentCache.get(key);
+    let ratio = 0.8;
+    try {
+      const probe = document.createElement("div");
+      probe.style.cssText =
+        "position:absolute;left:-99999px;top:0;visibility:hidden;white-space:nowrap;line-height:1;font-size:1000px;font-family:" +
+        fontFamily;
+      probe.textContent = "Hxbdfhklgjpqy";
+      const marker = document.createElement("span");
+      marker.style.cssText =
+        "display:inline-block;width:1px;height:0;vertical-align:baseline";
+      probe.append(marker);
+      document.body.append(probe);
+      const pr = probe.getBoundingClientRect();
+      const mr = marker.getBoundingClientRect();
+      if (pr.height > 0) ratio = (mr.top - pr.top) / pr.height;
+      probe.remove();
+    } catch {
+      /* keep default */
+    }
+    this.#ascentCache.set(key, ratio);
+    return ratio;
+  }
+
   /** True when the item is set in a math/symbol/mono/small-caps/bold face.
    *  The font objects are already resolved in commonObjs once the canvas has
    *  rendered. */
@@ -859,50 +928,21 @@ export class TypographyEngine {
           wordIndex = result.wordIndex;
           batch.push({ pair, parts: result.parts, rect });
         }
-        // Mask pass: one white box PER RENDERED SPAN, covering its canvas
-        // duplicate plus ink overshoot (italics, descenders, accents): ±28%
-        // height vertical, ±max(2px, 12% height) horizontal. A mask need only
-        // cover the glyphs we redraw — the gaps BETWEEN spans are inter-word
-        // whitespace (no canvas ink) and need no cover. So, unlike an earlier
-        // per-run bounding box that bridged those gaps, a skipped heading,
-        // caption leader, or figure label sitting in a gap (even on a slightly
-        // offset baseline that a bbox would have swallowed) is never whited
-        // out. As a second guard, each box is clamped back from any obstacle
-        // its padding would otherwise reach. Every rendered span — bolded or
-        // kept-in-original-face — sits in the text layer above the mask, so the
-        // kept inline math still survives.
-        for (const { rect: r } of batch) {
-          if (!(r.width > 0) || !(r.height > 0)) continue;
-          const padY = r.height * 0.28;
-          const padX = Math.max(2, r.height * 0.12);
-          let L = r.left - padX;
-          let R = r.right + padX;
-          let T = r.top - padY;
-          let B = r.bottom + padY;
-          for (const o of obstacleRects) {
-            if (o.right <= L || o.left >= R || o.bottom <= T || o.top >= B) continue;
-            // Obstacle reaches into the padding — pull the nearest padded edge
-            // back to it, but never past the span's own glyph rect.
-            if (o.left >= r.right) R = Math.min(R, o.left);
-            else if (o.right <= r.left) L = Math.max(L, o.right);
-            else if (o.top >= r.bottom) B = Math.min(B, o.top);
-            else if (o.bottom <= r.top) T = Math.max(T, o.bottom);
-          }
-          if (R - L <= 0 || B - T <= 0) continue;
-          const m = document.createElement("div");
-          m.style.left = `${L - layerRect.left}px`;
-          m.style.top = `${T - layerRect.top}px`;
-          m.style.width = `${R - L}px`;
-          m.style.height = `${B - T}px`;
-          mask.append(m);
-        }
-        // Content + font pass (no per-span masks).
+        // Content + font pass: rewrite each span as bold-prefix + rest, swap in
+        // the chosen face, and RE-SEAT THE BASELINE. PDF.js set each span's top
+        // from the ascent ratio of the font it assigned, so its baseline = the
+        // canvas baseline; our face's ratio differs, which would slide the
+        // glyphs off that baseline (rendering visibly higher/lower than the
+        // canvas, and leaving the mask short of the canvas descenders). Shift by
+        // the ratio difference, in `em` so it survives zoom/DPI re-layout.
+        // Geometry is re-measured AFTER this pass, so masks and width correction
+        // track what is actually rendered at the corrected position.
         for (const entry of batch) {
           const { pair, parts, keep } = entry;
           const span = pair.div;
           if (keep) {
             // Inline math / special-font run: kept in its original face on top
-            // of the run mask (content and font untouched, never bolded).
+            // of the mask (content/font/position untouched, never bolded).
             span.dataset.fxKeep = "1";
             continue;
           }
@@ -912,6 +952,7 @@ export class TypographyEngine {
             scaleX: span.style.getPropertyValue("--scale-x"),
             fontFamily: span.style.fontFamily,
             wordSpacing: span.style.wordSpacing,
+            marginTop: span.style.marginTop,
           });
           const frag = document.createDocumentFragment();
           for (const part of parts) {
@@ -925,19 +966,76 @@ export class TypographyEngine {
             }
           }
           span.replaceChildren(frag);
+          const origFamily = span.style.fontFamily;
           const family = this.#fontFamilyFor(pair);
-          if (family) span.style.fontFamily = family;
+          if (family && family !== origFamily) {
+            span.style.fontFamily = family;
+            // PDF.js placed the line-box top at baseline − fontHeight ×
+            // ascentRatio(origFamily) (glyph-bbox ascent of the font it
+            // assigned), so the substitute's baseline lands on the canvas
+            // baseline. Our face's RENDERED baseline sits at a different
+            // fraction, so re-seat it: shift by the difference between where
+            // PDF.js put the box (origFamily bbox ascent) and where our face
+            // actually draws its baseline (em-relative, scale-invariant).
+            const dEm = this.#ascentRatio(origFamily) - this.#baselineRatio(family);
+            if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
+          }
           span.dataset.fxDone = "1";
         }
-        // Read pass 2 + write pass 2: restore the span's pristine rendered
-        // width (the font swap and bolding change the natural width).
-        // Preferred correction is word-spacing — glyphs keep their natural
-        // shapes and the line reads naturally; spans with too few spaces
-        // (or needing too much per-space correction) fall back to scaling
-        // the --scale-x custom property. PDF.js composes the span transform
-        // as rotate(--rotate) scaleX(--scale-x) scale(--min-font-size-inv);
-        // only the custom property may be adjusted — writing
-        // style.transform would wipe the other parts.
+        // Re-measure pass: one layout flush. The post-change rect is the bolded
+        // text in the new face at the corrected baseline.
+        for (const entry of batch) entry.rect2 = entry.pair.div.getBoundingClientRect();
+
+        // Mask pass: one white box PER RENDERED SPAN, covering its canvas
+        // duplicate plus ink overshoot (italics, descenders, accents): ±28%
+        // height vertical, ±max(2px, 12% height) horizontal. A mask need only
+        // cover the glyphs we redraw — the gaps BETWEEN spans are inter-word
+        // whitespace (no canvas ink) and need no cover. So, unlike an earlier
+        // per-run bounding box that bridged those gaps, a skipped heading,
+        // caption leader, or figure label sitting in a gap (even on a slightly
+        // offset baseline that a bbox would have swallowed) is never whited
+        // out. As a second guard, each box is clamped back from any obstacle its
+        // padding would otherwise reach. The box's VERTICAL extent comes from
+        // the re-measured rect (the corrected, canvas-aligned baseline) while
+        // its HORIZONTAL extent comes from the pristine rect (the canvas glyph
+        // width, which the width correction below restores). Every rendered span
+        // sits in the text layer above the mask, so kept inline math survives.
+        for (const { rect, rect2 } of batch) {
+          const r2 = rect2 || rect;
+          if (!(rect.width > 0) || !(r2.height > 0)) continue;
+          const h = r2.height;
+          const padY = h * 0.28;
+          const padX = Math.max(2, h * 0.12);
+          let L = rect.left - padX;
+          let R = rect.right + padX;
+          let T = r2.top - padY;
+          let B = r2.bottom + padY;
+          for (const o of obstacleRects) {
+            if (o.right <= L || o.left >= R || o.bottom <= T || o.top >= B) continue;
+            // Obstacle reaches into the padding — pull the nearest padded edge
+            // back to it, but never past the span's own glyph rect.
+            if (o.left >= rect.right) R = Math.min(R, o.left);
+            else if (o.right <= rect.left) L = Math.max(L, o.right);
+            else if (o.top >= r2.bottom) B = Math.min(B, o.top);
+            else if (o.bottom <= r2.top) T = Math.max(T, o.bottom);
+          }
+          if (R - L <= 0 || B - T <= 0) continue;
+          const m = document.createElement("div");
+          m.style.left = `${L - layerRect.left}px`;
+          m.style.top = `${T - layerRect.top}px`;
+          m.style.width = `${R - L}px`;
+          m.style.height = `${B - T}px`;
+          mask.append(m);
+        }
+        // Width pass: restore the span's pristine rendered width (the font swap
+        // and bolding change the natural width). Preferred correction is
+        // word-spacing — glyphs keep their natural shapes and the line reads
+        // naturally; spans with too few spaces (or needing too much per-space
+        // correction) fall back to scaling the --scale-x custom property. PDF.js
+        // composes the span transform as
+        // rotate(--rotate) scaleX(--scale-x) scale(--min-font-size-inv); only
+        // the custom property may be adjusted — writing style.transform would
+        // wipe the other parts.
         //
         // Both corrections are kept SCALE-INVARIANT so they survive a zoom /
         // window move / DPI change that re-lays-out the text layer at a new
@@ -945,10 +1043,10 @@ export class TypographyEngine {
         // dimensionless, and word-spacing is written in `em` (relative to the
         // font size) rather than px, so the gap scales with the text. A px gap
         // would stay fixed while the glyphs grew/shrank, collapsing the spacing.
-        for (const { pair, rect, keep } of batch) {
+        for (const { pair, rect, rect2, keep } of batch) {
           if (keep) continue; // unchanged content/font — width is already exact
           const span = pair.div;
-          const newWidth = span.getBoundingClientRect().width;
+          const newWidth = (rect2 || span.getBoundingClientRect()).width;
           if (!(newWidth > 0) || Math.abs(newWidth - rect.width) <= 0.5) continue;
           const prevScale =
             parseFloat(span.style.getPropertyValue("--scale-x")) || 1;

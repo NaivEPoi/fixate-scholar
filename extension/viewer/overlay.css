@@ -118,6 +118,21 @@
   font-weight: 600;
 }
 
+/* hyperref's default link styling draws BORDER BOXES around links (its
+   defaults: cyan for URLs, red for internal refs, green for citations). PDF.js
+   renders these from the annotation's /Border, and they float ABOVE and around
+   the text: the link's logical rectangle (/Rect) is taller than, and sits above,
+   the displayed glyphs, so the box never lines up with the words. Most viewers
+   and the printed paper don't show them, and FixateScholar supplies its own
+   citation/reference affordances, so in reading mode suppress the native link
+   borders — nothing floats over the text. Toggling off restores the native
+   rendering (boxes included). The clickable link region is unaffected. */
+#viewerContainer.fx-on .annotationLayer .linkAnnotation {
+  border: none !important;
+  outline: none !important;
+  background: none !important;
+}
+
 /* Citation and in-paper reference coloring. Fixed, high-contrast colors —
    citations a strong blue, in-paper references a strong red — chosen for
    readability on the (white) page rather than matching the document's own
