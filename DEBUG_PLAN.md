@@ -73,6 +73,45 @@ Confirmed, ranked by impact:
 7. **Selectability (issue 8).** Not reproduced (selBad 0); revisit after
    whiteout fix with a real Selection-API drag test.
 
+## Round 2 (user follow-up, 2026-06-17 cont.)
+
+User, on the arXiv "Attention Is All You Need" PDF, reported: (a) a box "going
+upper than the original text" around the tensor2tensor URL; (b) "overlay glyphs
+look higher than original"; (c) "mask cuts the lower part of the original glyph
+like g in acknowledgements". Hint: "logical text location may differ from the
+displayed text location — match the displayed position."
+
+Findings + fixes:
+- (a) The box was NOT our mask — it is PDF.js rendering the PDF's own hyperref
+  link border (hyperref defaults: cyan URLs, red internal refs, green cites),
+  present even with the extension OFF (`section.linkAnnotation`, computed border
+  `1px rgb(0,255,255)`). Suppressed in reading mode via overlay.css
+  (`#viewerContainer.fx-on .annotationLayer .linkAnnotation{border/outline/
+  background:none}`). Verified: border `1px cyan` → `0px`, box gone, links still
+  clickable (test/verify-links.mjs, test/probe-url.mjs).
+- (b)+(c) ROOT CAUSE (the "logical vs displayed" issue): PDF.js positions each
+  text-span's line-box top at `baseline − fontHeight × ascentRatio(assignedFont)`
+  using the GLYPH-BBOX ascent of the substitute font it assigns (here it renders
+  the text layer in `sans-serif`). That substitute's RENDERED baseline lands on
+  the canvas baseline (verified: native text layer colored red sits exactly on
+  the black canvas, fx off). When we swap in the embedded font, its RENDERED
+  baseline (≠ its glyph-bbox ascent) lands ~2-3px higher → overlay sits above the
+  canvas, and the box-derived mask falls short of the canvas descenders. Canvas-
+  pixel probe confirmed overlay ~5px high (Range) / descenders cut.
+  FIX in engine.mjs: re-seat each processed span's baseline with
+  `margin-top = ascentRatio(origFamily) − baselineRatio(newFamily)` em (scale-
+  invariant), where `#ascentRatio` = glyph-bbox ratio (matches PDF.js) and
+  `#baselineRatio` = the font's actual RENDERED baseline ratio (measured with a
+  `vertical-align:baseline` marker). Restructured the work loop so masks are
+  built from the CORRECTED, re-measured vertical geometry (mask vertical from
+  the post-shift rect; horizontal from the pristine rect that width-correction
+  restores). marginTop is saved in pristine + reset in #restorePage.
+  Verified: red overlay now sits on the black canvas; mask band covers
+  descenders. New probes: test/probe-offset.mjs, probe-vshift.mjs,
+  probe-canvas.mjs (reads canvas pixels, clusters dark rows to isolate a line),
+  probe-overlap.mjs (red-overlay / mask / native-text-layer captures),
+  probe-url.mjs, verify-links.mjs.
+
 ## Progress log
 
 - 2026-06-17: Explored codebase. Baseline papers.mjs PASSES (coverage gap
