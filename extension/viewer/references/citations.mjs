@@ -25,6 +25,9 @@ export class ReferencesFeature {
   /** Called with the Abstract heading position (front matter ends there). */
   onContentStart = null;
 
+  /** Called with the document-wide body-text height once known. */
+  onBodyHeight = null;
+
   constructor(app) {
     this.#app = app;
     this.#popup = new CitationPopup(app);
@@ -37,6 +40,19 @@ export class ReferencesFeature {
         const lines = await extractLines(pdfDocument);
         this.#entries = parseReferences(lines);
         globalThis.__fxRefCount = this.#entries.length; // test introspection
+        // Document-wide body height (char-weighted height mode over every
+        // page) — body text dominates the whole document, so a single
+        // small-text-heavy page can't skew it.
+        const hHist = new Map();
+        for (const l of lines) {
+          if (!l.h || !l.text) continue;
+          const b = Math.round(l.h * 2) / 2;
+          hHist.set(b, (hHist.get(b) || 0) + l.text.length);
+        }
+        let bodyH = null;
+        let bestW = 0;
+        for (const [b, w] of hHist) if (w > bestW) { bestW = w; bodyH = b; }
+        if (bodyH) await this.onBodyHeight?.(bodyH);
         const contentStart = findContentStart(lines);
         if (contentStart) await this.onContentStart?.(contentStart);
         const { heading, body } = findReferencesBody(lines);

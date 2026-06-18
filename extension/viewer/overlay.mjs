@@ -86,6 +86,7 @@ const references = new ReferencesFeature(app);
 // title, authors, emails).
 references.onRefsRegion = (boxes) => engine.setRefsRegion(boxes);
 references.onContentStart = (pos) => engine.setContentStart(pos);
+references.onBodyHeight = (h) => engine.setBodyHeight(h);
 
 function applyStyleVars(s) {
   const root = document.documentElement.style;
@@ -124,6 +125,25 @@ app.eventBus.on("textlayerrendered", async (evt) => {
   if (evt.error) return;
   await engine.onTextLayerRendered(evt.source);
   references.onTextLayerRendered(evt.source);
+});
+
+// Disable the PDF's own in-document jump links (a citation "[35]" or a "Figure
+// 3" cross-reference whose annotation scrolls the page away). Clicking a
+// citation should open the reference card instead — which carries its own
+// "Reference ↓" button — so we neutralise the native internal links and let
+// the click fall through to our citation hit-targets. External links (DOI,
+// URLs) keep their href and stay clickable.
+app.eventBus.on("annotationlayerrendered", (evt) => {
+  const pageDiv = evt.source?.div ?? evt.source?.pageDiv;
+  const layer = pageDiv?.querySelector?.(".annotationLayer")
+    ?? evt.source?.annotationLayer?.div
+    ?? (evt.pageNumber && app.pdfViewer.getPageView(evt.pageNumber - 1)?.annotationLayer?.div);
+  if (!layer) return;
+  for (const a of layer.querySelectorAll("a")) {
+    const href = a.getAttribute("href") || "";
+    if (/^(https?|mailto|tel):/i.test(href)) continue; // external link — keep
+    a.style.pointerEvents = "none"; // internal dest — click falls through to us
+  }
 });
 
 // Our typography masks the canvas glyphs and shows the text-layer spans in the

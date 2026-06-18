@@ -53,10 +53,23 @@ export class TypographyEngine {
   #pending = new Map(); // pageNumber -> cancel flag holder
   #refsBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — bibliography region
   #contentStart = null; // { page, y } — the Abstract heading; front matter above it
+  #bodyHeight = null; // document-wide body-text height (from the refs extractor)
 
   constructor(app, settings) {
     this.#app = app;
     this.#settings = settings;
+  }
+
+  /** Document-wide body-text height (char-weighted height mode over every
+   *  page, computed by the references extractor). Used by the size filter so a
+   *  small-text-heavy page can't skew the body size and drop real prose.
+   *  Re-processes rendered pages since the size cut may now differ. */
+  setBodyHeight(h) {
+    if (!h || h === this.#bodyHeight) return Promise.resolve();
+    this.#bodyHeight = h;
+    if (!this.#enabled) return Promise.resolve();
+    this.#restoreAll();
+    return this.#processAll();
   }
 
   /** The article body starts here (Abstract heading). Cover pages and the
@@ -666,14 +679,17 @@ export class TypographyEngine {
     };
     const skipSet = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold);
     for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
-    // The dominant body size must come from actual prose: bibliography, table,
-    // and caption text (often smaller) would skew it on pages they dominate,
-    // and then real body text gets skipped as "larger than body".
-    const dominant = this.#dominantHeight(
-      allPairs.filter(
-        (p) => !skipSet.has(p.div) && !inRefsBox(p.item),
-      ),
-    );
+    // Body-text height for the size filter. Prefer the document-wide body
+    // height (from the references extractor, which reads every page) — a single
+    // page can be dominated by small text (an appendix beside a big table, a
+    // page of footnotes), skewing a per-page mode small and then dropping real
+    // body prose as "larger than body". Fall back to the per-page mode until
+    // the document-wide value arrives.
+    const dominant =
+      this.#bodyHeight ||
+      this.#dominantHeight(
+        allPairs.filter((p) => !skipSet.has(p.div) && !inRefsBox(p.item)),
+      );
     // Document-level cut from setContentStart; until it arrives, a per-page
     // fast path keeps the common single-cover case (Abstract on page 1) right.
     // y grows upward in PDF coordinates: "above the heading" means y greater.
@@ -704,10 +720,13 @@ export class TypographyEngine {
       // Block classification (#classifyBlocks) owns content-type: anything not
       // body text — headings, captions, tables, figures, equations — is here.
       if (skipSet.has(div)) return false;
-      // Secondary size net for stray off-body items the block pass let through.
-      if (dominant && item?.height && !keepGlyph) {
-        if (item.height < dominant * 0.85) return false;
-        if (item.height > dominant * 1.15) return false;
+      // Backup net for an over-sized heading/title the block pass let through.
+      // Only the LARGER-than-body cut remains: a smaller-than-body cut would
+      // drop legitimate small body text (footnotes, and appendices or notes set
+      // a point smaller than the main body). The threshold is the DOCUMENT body
+      // height, so a small-text-heavy page can't skew it and clip real prose.
+      if (dominant && item?.height && !keepGlyph && item.height > dominant * 1.2) {
+        return false;
       }
       // Special-font (math/mono/small-caps) body spans are NOT excluded here:
       // they stay in the candidate set so the write pass can render them
@@ -794,27 +813,52 @@ export class TypographyEngine {
             rect: pair.div.getBoundingClientRect(),
           });
         }
-        // Write pass: masks + content + font.
-        for (const entry of batch) {
-          const { pair, parts, rect, keep } = entry;
-          const span = pair.div;
-          // Cover the canvas glyph snugly. The vertical pad spans ascender/
-          // descender ink past the advance box; the horizontal pad stays
-          // minimal so adjacent canvas glyphs (inline math, mono identifiers,
-          // subscripts) are never shaved by a neighbouring span's mask.
-          const padY = rect.height * 0.16;
-          const padX = Math.max(0.5, rect.height * 0.02);
+        // Mask pass: one white box per contiguous same-line RUN of rendered
+        // spans, not one per span. Merging the per-glyph boxes removes the
+        // edges that used to clip adjacent inline symbols / ghost the canvas /
+        // look shifted. A run breaks at a wide x-gap (a column gutter, or
+        // excluded canvas content such as a URL/figure between words) so the
+        // mask never whites out something we don't re-render. Every rendered
+        // span — bolded or kept-in-original-face — sits in the text layer above
+        // the mask, so the kept inline math still survives.
+        const sorted = batch
+          .filter((e) => e.rect.width > 0)
+          .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+        const runs = [];
+        let run = null;
+        for (const { rect } of sorted) {
+          if (
+            run &&
+            Math.abs(rect.top - run.top) < run.h * 0.5 &&
+            rect.left - run.right < run.h
+          ) {
+            run.top = Math.min(run.top, rect.top);
+            run.left = Math.min(run.left, rect.left);
+            run.right = Math.max(run.right, rect.right);
+            run.bottom = Math.max(run.bottom, rect.bottom);
+            run.h = Math.max(run.h, rect.height);
+          } else {
+            run = { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, h: rect.height };
+            runs.push(run);
+          }
+        }
+        for (const r of runs) {
+          const padY = r.h * 0.16;
+          const padX = Math.max(0.5, r.h * 0.04);
           const m = document.createElement("div");
-          m.style.left = `${rect.left - layerRect.left - padX}px`;
-          m.style.top = `${rect.top - layerRect.top - padY}px`;
-          m.style.width = `${rect.width + 2 * padX}px`;
-          m.style.height = `${rect.height + 2 * padY}px`;
+          m.style.left = `${r.left - layerRect.left - padX}px`;
+          m.style.top = `${r.top - layerRect.top - padY}px`;
+          m.style.width = `${r.right - r.left + 2 * padX}px`;
+          m.style.height = `${r.bottom - r.top + 2 * padY}px`;
           mask.append(m);
-
+        }
+        // Content + font pass (no per-span masks).
+        for (const entry of batch) {
+          const { pair, parts, keep } = entry;
+          const span = pair.div;
           if (keep) {
-            // Inline math / special-font run: mask its canvas glyph and let
-            // the original (unbolded, original-face) text-layer span show on
-            // top of the masks. Content and font are left untouched.
+            // Inline math / special-font run: kept in its original face on top
+            // of the run mask (content and font untouched, never bolded).
             span.dataset.fxKeep = "1";
             continue;
           }
