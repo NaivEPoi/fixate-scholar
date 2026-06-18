@@ -51,7 +51,8 @@ try {
   for (let i = 0; i < 20; i++) { await sleep(700); const n = await ev(`(window.PDFViewerApplication.pdfViewer.getPageView(${PAGE-1})?.textLayer?.div?.querySelectorAll('span[data-fx-done]').length??0)`); if (n > 0) break; }
   await sleep(1200);
   const doneCount = `(window.PDFViewerApplication.pdfViewer.getPageView(${PAGE-1})?.textLayer?.div?.querySelectorAll('span[data-fx-done]').length??0)`;
-  console.log("baseline done:", await ev(doneCount));
+  const baseline = await ev(doneCount);
+  console.log("baseline done:", baseline);
 
   // Override visibility to "hidden".
   await ev(`(()=>{window.__hidden=true;Object.defineProperty(document,'hidden',{configurable:true,get:()=>window.__hidden});Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>window.__hidden?'hidden':'visible'});return document.hidden;})()`);
@@ -66,8 +67,13 @@ try {
   await sleep(3000);
   const afterVisible = await ev(doneCount);
   const overlaps = await ev(`(()=>{const div=window.PDFViewerApplication.pdfViewer.getPageView(${PAGE-1}).textLayer.div;const done=[...div.querySelectorAll('span[data-fx-done]')];const rs=done.map(s=>s.getBoundingClientRect()).sort((a,b)=>(a.top-b.top)||(a.left-b.left));let o=0;for(let i=1;i<rs.length;i++){if(Math.abs(rs[i-1].top-rs[i].top)<rs[i-1].height*0.5&&rs[i].left<rs[i-1].right-2)o++;}return o;})()`);
-  console.log("done after VISIBLE (expect >100):", afterVisible, " overlaps:", overlaps);
-  console.log(whileHidden < afterVisible * 0.5 && afterVisible > 100 ? "PASS: paused while hidden, resumed when visible" : "FAIL");
+  console.log(`done after VISIBLE (expect ~baseline ${baseline}):`, afterVisible, " overlaps:", overlaps);
+  // PASS = processing was deferred while hidden, then resumed to ~baseline
+  // with no jammed spacing (overlaps stay near zero), regardless of how dense
+  // the probe page is.
+  const resumed = afterVisible >= Math.max(20, baseline * 0.9);
+  const deferred = whileHidden < Math.max(5, afterVisible * 0.5);
+  console.log(deferred && resumed && overlaps <= 3 ? "PASS: paused while hidden, resumed when visible" : "FAIL");
   ws.close();
 } finally {
   browser.kill();

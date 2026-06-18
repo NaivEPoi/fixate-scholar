@@ -94,3 +94,40 @@ Confirmed, ranked by impact:
   links, disables only citation links (overlay handler rewired).
 - Bash quirk: background commands DO inherit the foreground cwd here, but
   always `cd` to be safe; write logs to `test/out/` (abs paths in scripts).
+- 2026-06-17 (cont.): Verified the remaining issues with `test/interact.mjs`
+  (links/cites/selection) and the existing `debug-hidden.mjs` /
+  `debug-relayout.mjs`:
+  - Issue 5 (citation alignment): NOT a real bug. Cite hit-targets overlap
+    their colored `[X]` at fraction 1.0 (15/16). The diagnostic's citeGap=522
+    was a noisy nearest-cite-c metric (matched a hit to a far cite-c on
+    another line), not real misalignment.
+  - Issue 8 (selectability): NOT a real bug. Programmatic selection over a
+    processed span returns its text; body/ref hit-tests reach `.textLayer`;
+    only citation hit-targets sit on top (intended, for click). selBad=0.
+  - Issue 2 (layout collapse on window/monitor switch): `debug-hidden`
+    confirms processing PAUSES while `document.hidden` and resumes (0 while
+    hidden → baseline when visible, overlaps≈1). `debug-relayout` (DPI 1→2 +
+    size change = monitor switch) keeps overlaps at 1 (no collapse); the §7
+    DevLyzer page — one of the user's screenshots — renders clean after.
+    (debug-hidden's "FAIL" is only its `>100` done-count threshold being
+    wrong for the sparse 59-span p10.)
+  - Issue 7 (font randomly changes): the eviction→fallback path is mitigated
+    by the `document.fonts` `loadingdone` re-process (overlay.mjs); normal
+    relayout keeps embedded `g_*` faces + sizes stable. Hard to reproduce the
+    actual eviction headless; no additional defect found.
+  Net: of 9 reported issues, 1/3/9 fixed+verified, 4 fixed, 2 verified-ok,
+  5/6/8 not-real/not-reproduced, 7 mitigated.
+- 2026-06-17 (final verification): FULL corpus regression `node
+  test/papers.mjs` → ALL 7 PAPERS PASS (proseOk/headingClean/tableOk/linkOk
+  everywhere — no under-processing, no new heading/table leaks). Fidelity
+  diagnostic true-whiteout: 5GBaseChecker 0, Two-column D 0, arXiv 2.
+  npm test (naming + 32 unit) green. debug-hidden PASS threshold fixed
+  (compare to page baseline, not a fixed >100).
+  KNOWN MINOR RESIDUALS (not in the user's list, low visual impact):
+  - arXiv p3/p6: 2 single-character inline-math glyphs ("i","U") skipped and
+    covered by a neighbour mask — a math-glyph KEEP edge case, not the
+    heading/caption class. Pre-existing; chase later if it matters.
+  - peek residual ~155/paper (was 1410): mostly the clamp deliberately pulling
+    a word's overshoot back from an adjacent skipped span (correct tradeoff:
+    a ≤~3px ink sliver beats whiting out the heading), plus 1 tall figure-span
+    outlier per paper (peekMax). Not visually significant.
