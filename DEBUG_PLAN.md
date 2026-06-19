@@ -159,6 +159,43 @@ tableLeak=0, capProse=2, skipPara=0. Root causes + fixes (engine.mjs):
 Round-3 net: keepFallback 0 and tableLeak 0 on ALL 7 papers; capProse 0 on all
 except the one B residual; skipPara only front-matter emails (correct).
 
+## Round 4 (user follow-up, 2026-06-18)
+
+User: dense/math-heavy body paragraphs not bolded (3.1 Problem Statement, the
+DevLyzer §7.1/§7.3 paragraphs, "Evaluating collaborative learning", the §9.2
+mishandling list). My earlier audit missed them because it treated
+`data-fx-table` (skipSet) lines as legitimately skipped.
+
+Added a `skipBody` audit metric (data-fx-table spans that are clearly body
+prose) + a gated skip-reason tagger (`globalThis.__fxDebug` → `data-fx-why`).
+On 5GBaseChecker: skipBody=31, reasons blk-table 14, line-cells 4,
+caption-absorb 10, blk-figlabel 2 (refs author lists, correct). Fixes
+(engine.mjs):
+
+- **blk-table / line-cells (justified prose mistaken for a table).** Justified
+  body lines stretch inter-word spaces wide enough that `maxCells` counts them
+  as column gaps (cells≥3 / maxCells≥4). Restored the documented RUNNING-PROSE
+  exception: a block averaging ≥4 lowercase words/row (or a line with ≥4
+  lowercase words) is prose, not a table. Pseudocode (ALGO_LEAD) still skips.
+- **caption-absorb (captions swallowing the body below).** Tightened the
+  line-level caption continuation-absorption: cap 14→6 lines, gap break
+  1.8h→1.5h, and stop at a bold run-in heading. Broadened REF_PROSE to allow
+  punctuation after the number ("Table 4, and present …") so a wrapped in-text
+  ref line isn't a false caption leader.
+
+Result: skipBody 31→16, and ~14 of the 16 are CORRECT skips (real Table
+captions, legend abbreviations, run-in headings, refs author lists). Real
+residuals: 2 lines of §7.3 body still absorbed by Figure 4's caption; 1 §9.2
+list line (blk-offsize). diagnose B: whiteout 0→2 (single math chars `d`/`q`,
+cov 0.71 — partial, same minor class as the known arXiv residual), peek up
+(more body processed near math obstacles → benign for redrawn spans),
+refColored 106→131. Full papers.mjs corpus 7/7 PASS, table untouched-probes
+intact (no real table un-skipped); npm test 32/32. 3.1 verified bolded with
+math symbols in the original font.
+
+Commits on `main` (unpushed since the round-2 push): 4758a4a (round 3),
+a276b22 (round 4).
+
 ## Progress log
 
 - 2026-06-17: Explored codebase. Baseline papers.mjs PASSES (coverage gap
