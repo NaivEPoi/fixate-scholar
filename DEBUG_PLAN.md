@@ -112,6 +112,53 @@ Findings + fixes:
   probe-overlap.mjs (red-overlay / mask / native-text-layer captures),
   probe-url.mjs, verify-links.mjs.
 
+## Round 3 (user follow-up, 2026-06-18)
+
+User reported, after merge: (1) "fallback fonts are still in the processed pdf
+— use the original font/style for math symbols"; (2) "this table still gets
+processed" (Table 8, p19 of 5GBaseChecker); (3) "some paragraphs are not
+processed" (e.g. "Figure 5 shows the cumulative number of queries…").
+
+Audit (`test/audit.mjs`, new) on Two-column B found: keepFallback=570,
+tableLeak=0, capProse=2, skipPara=0. Root causes + fixes (engine.mjs):
+
+- (1)+(2) ONE root cause: "keep" glyphs (math/special-font runs, symbols,
+  subscripts, single chars, version strings) were MASKED and RE-RENDERED in
+  the text layer, which PDF.js sets to a generic substitute face (sans-serif /
+  monospace) → math lost its font. On Table 8 the Baseband-Version and
+  Found-Issues cells are such keep glyphs, so the table "looked processed".
+  Now that masks are per-span + obstacle-clamped, the keep re-draw is
+  unnecessary. FIX: keep glyphs are EXCLUDED from candidates entirely — left
+  on the CANVAS in the document's own face — and become obstacles
+  (`obstacleDivs` now `/\S/`, so pure-symbol spans count) so neighbouring
+  masks clamp around them. Removed all keep/`_keep`/`fxKeep` redraw code.
+  Result: keepFallback 570→0; Table 8 cells all stay on canvas (original font).
+- (3) "Figure N shows …" / "Algorithm 1 in Appendix …" — an in-text reference
+  opening a running sentence (label+number followed by a LOWERCASE word) was
+  matched by CAP_LEAD / ALGO_LEAD and skipped as a caption/listing. FIX: added
+  `REF_PROSE` guard → `isCaptionLead` / `isAlgoLead` (and the figure-label
+  rule) skip ONLY genuine captions/listings ("Figure 5:", "Figure 5. ",
+  "Algorithm 1 StateSynth", standalone). "Figure 5 shows…" now processed.
+
+- (3b) Corpus audit (`test/audit.mjs` on all 7 papers) found two more in-text
+  "Figure/Table/Algorithm N <verb>" prose refs wrongly skipped. Added a
+  debug skip-reason tagger (`globalThis.__fxDebug` → `data-fx-why`, gated, zero
+  prod impact) to find the path:
+  - Two-column A p15 "Figure 8 shows the coverage growth over time…" → skipped
+    by **caption-absorb**: a caption above it absorbed downward into this body
+    sentence. FIX: caption continuation-absorption now BREAKS at a REF_PROSE
+    line (a new "Figure N shows…" sentence is body, not caption continuation).
+    Verified: A capProse 1→0.
+  - Two-column B p10 "Algorithm 1 in Appendix A." → skipped by the **block
+    heading rule**: two-column layout puts it on the same baseline as the
+    left-column "7.2 Checking Properties" heading, so the heading block sweeps
+    it up. NOT masked (canvas, original font, just not bolded). Left as a
+    KNOWN MINOR RESIDUAL — fixing the two-column heading/baseline grouping is
+    risky vs the 1-phrase payoff.
+
+Round-3 net: keepFallback 0 and tableLeak 0 on ALL 7 papers; capProse 0 on all
+except the one B residual; skipPara only front-matter emails (correct).
+
 ## Progress log
 
 - 2026-06-17: Explored codebase. Baseline papers.mjs PASSES (coverage gap

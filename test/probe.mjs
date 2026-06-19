@@ -65,6 +65,7 @@ try {
   await new Promise((r) => (ws.onopen = r));
   await send("Page.enable");
   await sleep(2500);
+  await ev(`globalThis.__fxDebug = true`);
   await ev(`chrome.storage.sync.set({ enabled: true })`);
   for (let i = 0; i < 30; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 50) break; }
   await ev(`window.PDFViewerApplication.page = ${PAGE}`);
@@ -79,7 +80,7 @@ try {
     const flags = (s) => (s.dataset.fxDone ? "DONE" : s.dataset.fxKeep ? "KEEP" : s.dataset.fxTable ? "TABLE" : "canvas");
     const rr = (r) => ({ l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });
     const ov = (a, b) => { const w = Math.min(a.right, b.right) - Math.max(a.left, b.left); const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top); return w > 0 && h > 0 ? w * h : 0; };
-    const hits = leaves.filter((s) => s.textContent.includes(q) && flags(s) === "canvas");
+    const hits = leaves.filter((s) => s.textContent.includes(q));
     const out = [];
     for (const s of hits.slice(0, 6)) {
       const r = s.getBoundingClientRect();
@@ -94,7 +95,7 @@ try {
       const near = leaves.filter((x) => { const xr = x.getBoundingClientRect(); return Math.abs(xr.top - r.top) < r.height * 0.6 && Math.abs(xr.left - r.left) < r.width * 6; })
         .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
         .map((x) => ({ t: x.textContent.trim().slice(0, 14), f: flags(x), l: Math.round(x.getBoundingClientRect().left) }));
-      out.push({ text: s.textContent.trim().slice(0, 30), flag: flags(s), rect: rr(r), covering: cov, near });
+      out.push({ text: s.textContent.trim().slice(0, 30), flag: flags(s), why: s.dataset.fxWhy || null, rect: rr(r), covering: cov, near });
     }
     // Full dump of the first hit's baseline: every leaf span (x, flag) and
     // every mask covering that y — to see the run/gap structure exactly.
@@ -143,5 +144,5 @@ try {
   try { ws?.close(); } catch {}
   browser.kill();
   await sleep(500);
-  rmSync(userDataDir, { recursive: true, force: true });
+  try { rmSync(userDataDir, { recursive: true, force: true }); } catch {}
 }

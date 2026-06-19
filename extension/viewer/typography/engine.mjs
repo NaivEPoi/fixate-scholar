@@ -285,6 +285,14 @@ export class TypographyEngine {
     const CAP_LEAD = /^(?:Fig(?:ure)?\.?|Tab(?:le)?\.?|TABLE|FIGURE|Algorithm|Listing)\s*\d/;
     const HEAD_LEAD = /^(?:\d+(?:\.\d+)*\.?|[A-Z]\d*[.:]|[IVX]{1,5}\.)(?:$|\s+[A-Z(])/;
     const ALGO_LEAD = /^(?:\d{1,3}:|Require:|Ensure:|Input:|Output:|Algorithm\s+\d+)/;
+    // An in-text reference opening a running sentence ("Figure 5 shows …",
+    // "Table 8 lists …", "Algorithm 1 in Appendix …"): the label+number is
+    // followed by a LOWERCASE word, so it is body prose, not a caption or a
+    // listing header (those read "Figure 5: …", "Figure 5. …", "Algorithm 1
+    // StateSynth", or stand alone). Such lines must be emphasized, not skipped.
+    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|Tab(?:le)?|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*\d+[a-z]?\s+[a-zà-ÿ]/;
+    const isCaptionLead = (t) => CAP_LEAD.test(t) && !REF_PROSE.test(t);
+    const isAlgoLead = (t) => ALGO_LEAD.test(t) && !REF_PROSE.test(t);
 
     const lowerWords = (its) => {
       let lc = 0;
@@ -404,7 +412,8 @@ export class TypographyEngine {
       });
     };
 
-    const skipBlock = (b) => { for (const p of b.items) skip.add(p.div); };
+    const dbg = (div, why) => { if (globalThis.__fxDebug) div.dataset.fxWhy = why; };
+    const skipBlock = (b, why) => { for (const p of b.items) { skip.add(p.div); dbg(p.div, why || "block"); } };
     // A run-in heading that opens a body block ("Minimizing duplicate states.
     // We also …" / "A1: … reuse. To address …"): skip the leading bold/glyph
     // run so the heading stays pristine on the canvas (a kept redraw renders
@@ -416,6 +425,7 @@ export class TypographyEngine {
         const glyphBit = t.length < 2 || !/[A-Za-zÀ-ÿ]/.test(t);
         if (!isSpecial(its[j]) && !glyphBit) break; // first body word
         skip.add(its[j].div);
+        dbg(its[j].div, "leadrun");
       }
     };
 
@@ -430,21 +440,24 @@ export class TypographyEngine {
         const offSize = b.h < dominant * 0.82 || b.h > dominant * 1.18;
 
         // Caption → skip whole block, plus the figure/table body in the block
-        // directly above it in this column (figures are captioned below).
-        if (CAP_LEAD.test(b.lead)) {
+        // directly above it in this column (figures are captioned below). An
+        // in-text "Figure N shows …" prose ref is NOT a caption (REF_PROSE).
+        if (isCaptionLead(b.lead)) {
           skipBlock(b);
           const prev = blocks[bi - 1];
           if (prev && b.yTop - prev.yBot < pageH * 0.16 && lowerWords(prev.items) < 5) skipBlock(prev);
           continue;
         }
         // Table / pseudocode listing.
-        if (cells >= 3 || ALGO_LEAD.test(b.lead) || (spc >= 0.5 && cells >= 2)) { skipBlock(b); continue; }
+        if (cells >= 3 || isAlgoLead(b.lead) || (spc >= 0.5 && cells >= 2)) { skipBlock(b); continue; }
         // Heading: short, not a sentence, label- / bold- / large-led.
         if (b.rows.length <= 2 && lc <= 3 &&
             (HEAD_LEAD.test(b.lead) || b.leadBold || b.h > dominant * 1.15)) { skipBlock(b); continue; }
         // Figure label / displayed equation: almost no prose, with a non-body
-        // face, an off-body size, or just a few glyphs.
-        if (lc < 2 && (spc >= 0.3 || offSize || b.items.length <= 3)) { skipBlock(b); continue; }
+        // face, an off-body size, or just a few glyphs. A short trailing prose
+        // line that is an in-text reference ("…in Algorithm 1 in Appendix A.")
+        // has few lowercase words but IS body — spare it (REF_PROSE).
+        if (lc < 2 && (spc >= 0.3 || offSize || b.items.length <= 3) && !REF_PROSE.test(b.lead)) { skipBlock(b); continue; }
         // Off-size block with little prose (footnotes, sub/superscript rows).
         if (offSize && lc < 4) { skipBlock(b); continue; }
 
@@ -465,6 +478,7 @@ export class TypographyEngine {
         const glyphBit = t.length < 2 || !/[A-Za-zÀ-ÿ]/.test(t);
         if (!isSpecial(its[j]) && !glyphBit) break; // first body word
         skip.add(its[j].div);
+        dbg(its[j].div, "runin");
       }
     };
     for (const ln of lines) {
@@ -482,18 +496,18 @@ export class TypographyEngine {
         const bx0 = twoColumn && ax >= centerX ? centerX : vx0;
         const bx1 = twoColumn && ax < centerX ? centerX : vx0 + pageW;
         const band = its.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
-        if (ALGO_LEAD.test(leadStr)) {
+        if (isAlgoLead(leadStr)) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
           // prose between bold keywords.
-          for (const p of band) skip.add(p.div);
+          for (const p of band) { skip.add(p.div); dbg(p.div, "line-algo"); }
         } else if (HEAD_LEAD.test(leadStr)) {
-          if (lowerWords(band) <= 3) for (const p of band) skip.add(p.div);
+          if (lowerWords(band) <= 3) for (const p of band) { skip.add(p.div); dbg(p.div, "line-head"); }
           else if (isSpecial(lead)) skipHeadingRun(its, a);
         } else if (maxCells([{ items: band }]) >= 4) {
           // A table row that block grouping merged into a text block: several
           // wide column gaps on one baseline (running prose never has 4+).
-          for (const p of band) skip.add(p.div);
+          for (const p of band) { skip.add(p.div); dbg(p.div, "line-cells"); }
         } else if (isBold(lead)) {
           skipHeadingRun(its, a);
         }
@@ -515,7 +529,7 @@ export class TypographyEngine {
       }
       for (const a of starts) {
         const lead = its[a];
-        if (!lead || !CAP_LEAD.test(lead.item.str.trim())) continue;
+        if (!lead || !isCaptionLead(lead.item.str.trim())) continue;
         const ax = lead.item.transform[4];
         // Full-width (spanning legend) only when an item actually crosses the
         // centre; a column caption merely reaching the gutter stays in-column,
@@ -530,14 +544,17 @@ export class TypographyEngine {
         const inBand = (p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1;
         const leadH = lines[k].h;
         let prevY = lines[k].y;
-        for (const p of lines[k].items.filter(inBand)) skip.add(p.div);
+        for (const p of lines[k].items.filter(inBand)) { skip.add(p.div); dbg(p.div, "caption"); }
         for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 14; m++) {
           const bandM = lines[m].items.filter(inBand);
           if (!bandM.length) continue;
           if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.8) break; // gap
           if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
-          if (CAP_LEAD.test(bandM[0].item.str.trim())) break; // next caption
-          for (const p of bandM) skip.add(p.div);
+          if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
+          // A new in-text reference sentence ("Figure 8 shows …") is body prose,
+          // not caption continuation — stop absorbing here.
+          if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" "))) break;
+          for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
           prevY = lines[m].y;
           absorbed++;
         }
@@ -775,17 +792,18 @@ export class TypographyEngine {
       const text = div.textContent;
       const trimmed = text ? text.trim() : "";
       if (!trimmed) return false;
-      // "Keep" glyphs are rendered on top of the masks in their own face,
-      // never bolded: a special-font run (math/mono/small-caps/bold display), a
-      // span with no Latin letters (subscripts, operators), OR a single
-      // character (an italic variable like "I", a lone digit, a paren). These
-      // must reach the write pass so they get their OWN mask and re-render on
-      // top — otherwise the size / length filters below drop them, they stay
-      // only on the canvas, and a neighbouring glyph's mask clips them (the
-      // narrow ones, e.g. the "I" in an "(I₃, I₄)" marker, vanish at fit zoom).
-      const keepGlyph =
-        isSpecial({ item }) || !/[A-Za-zÀ-ɏ]/.test(trimmed) || trimmed.length < 2;
-      pair._keep = keepGlyph;
+      // Math/special glyphs stay on the CANVAS in the document's own face and
+      // are never processed: a special-font run (math/mono/small-caps/bold
+      // display), a span with no Latin letters (subscripts, operators,
+      // bracketed numbers), or a single character (an italic variable like "I",
+      // a lone digit/paren). PDF.js renders the text layer in a generic
+      // substitute face, so re-drawing these would change the math's font and
+      // weight; instead we leave them exactly as the document set them. They
+      // are picked up as obstacles (see obstacleDivs), so neighbouring per-span
+      // masks clamp around them and never white them out.
+      if (isSpecial({ item }) || !/[A-Za-zÀ-ɏ]/.test(trimmed) || trimmed.length < 2) {
+        return false;
+      }
       // Block classification (#classifyBlocks) owns content-type: anything not
       // body text — headings, captions, tables, figures, equations — is here.
       if (skipSet.has(div)) return false;
@@ -794,14 +812,9 @@ export class TypographyEngine {
       // drop legitimate small body text (footnotes, and appendices or notes set
       // a point smaller than the main body). The threshold is the DOCUMENT body
       // height, so a small-text-heavy page can't skew it and clip real prose.
-      if (dominant && item?.height && !keepGlyph && item.height > dominant * 1.2) {
+      if (dominant && item?.height && item.height > dominant * 1.2) {
         return false;
       }
-      // Special-font (math/mono/small-caps) body spans are NOT excluded here:
-      // they stay in the candidate set so the write pass can render them
-      // visible on top of the masks (without bolding). Otherwise a bolded
-      // neighbour's mask would white out an adjacent inline math glyph that
-      // lives only on the canvas. They are diverted to "keep" in #work.
       if (item?.transform) {
         const x = item.transform[4];
         const y = item.transform[5];
@@ -845,7 +858,7 @@ export class TypographyEngine {
           p.div &&
           p.div.isConnected &&
           !candidateDivs.has(p.div) &&
-          /[A-Za-zÀ-ÿ0-9]/.test(p.div.textContent || ""),
+          /\S/.test(p.div.textContent || ""),
       )
       .map((p) => p.div);
     let obstacleRects = null;
@@ -911,18 +924,12 @@ export class TypographyEngine {
           // leave it on the canvas (no mask, no emphasis) so the skipped copy
           // survives.
           if (overlapsObstacle(rect)) continue;
-          // Keep glyphs (math-heavy / special-font runs, lone symbols, and
-          // single characters — flagged _keep in the filter) are kept in their
-          // original face, not bolded, but masked and re-rendered on TOP of the
-          // masks so a neighbouring processed span's mask can't clip them.
-          const result = pair._keep
-            ? null
-            : emphasizeParts(pair.div.textContent, settings, wordIndex);
+          const result = emphasizeParts(pair.div.textContent, settings, wordIndex);
           if (!result) {
-            // Keep: mask the canvas glyph and show the original text-layer
-            // glyph (unchanged face, no bold) on top — so it survives a
-            // neighbouring mask instead of being whited out.
-            batch.push({ pair, keep: true, rect });
+            // Math-heavy text or a wrapped URL/email continuation: leave it on
+            // the canvas in its original face, and add it to the obstacles so
+            // neighbouring masks clamp around it instead of whiting it out.
+            if (rect.width > 0 && rect.height > 0) obstacleRects.push(rect);
             continue;
           }
           wordIndex = result.wordIndex;
@@ -938,15 +945,8 @@ export class TypographyEngine {
         // Geometry is re-measured AFTER this pass, so masks and width correction
         // track what is actually rendered at the corrected position.
         for (const entry of batch) {
-          const { pair, parts, keep } = entry;
+          const { pair, parts } = entry;
           const span = pair.div;
-          if (keep) {
-            // Inline math / special-font run: kept in its original face on top
-            // of the mask (content/font/position untouched, never bolded).
-            span.dataset.fxKeep = "1";
-            continue;
-          }
-
           this.#pristine.set(span, {
             html: span.innerHTML,
             scaleX: span.style.getPropertyValue("--scale-x"),
@@ -1043,8 +1043,7 @@ export class TypographyEngine {
         // dimensionless, and word-spacing is written in `em` (relative to the
         // font size) rather than px, so the gap scales with the text. A px gap
         // would stay fixed while the glyphs grew/shrank, collapsing the spacing.
-        for (const { pair, rect, rect2, keep } of batch) {
-          if (keep) continue; // unchanged content/font — width is already exact
+        for (const { pair, rect, rect2 } of batch) {
           const span = pair.div;
           const newWidth = (rect2 || span.getBoundingClientRect()).width;
           if (!(newWidth > 0) || Math.abs(newWidth - rect.width) <= 0.5) continue;
