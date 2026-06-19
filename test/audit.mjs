@@ -88,6 +88,19 @@ const PROBE = `(() => {
       }
     }
 
+    // skipBody: data-fx-table (skipSet) leaf spans that are clearly BODY prose
+    // (>=6 lowercase words, low special-char ratio) — a paragraph the block
+    // classifier wrongly skipped. Reports the skip reason (data-fx-why).
+    const skipBody = [];
+    for (const s of div.querySelectorAll("span[data-fx-table]")) {
+      const txt = s.textContent.trim();
+      const lw = (txt.match(/[a-zà-ÿ]{2,}/g) || []).filter((w) => LOWER.test(w)).length;
+      if (lw < 6) continue;
+      const sp = (txt.match(/[^\x00-\x7F]|[=+*/^<>|\\{}]/g) || []).length;
+      if (sp / Math.max(1, txt.length) > 0.25) continue; // mostly math → real
+      skipBody.push({ t: txt.slice(0, 46), why: s.dataset.fxWhy || null, lw });
+    }
+
     // skipPara: contiguous unprocessed body-prose lines (exclude refs pages).
     let skipRun = 0, skipSamples = [];
     if (!refPages.has(page)) {
@@ -107,8 +120,8 @@ const PROBE = `(() => {
       if (cur >= 3 && sample) { skipRun++; if (skipSamples.length < 3) skipSamples.push(sample); }
     }
 
-    if (keepBad.length || tableLeak || capProse.length || skipRun)
-      out.push({ page, keepBad: keepBad.length, keepSample: keepBad.slice(0, 4), tableLeak, capProse: capProse.slice(0, 4), skipRun, skipSamples });
+    if (keepBad.length || tableLeak || capProse.length || skipRun || skipBody.length)
+      out.push({ page, keepBad: keepBad.length, keepSample: keepBad.slice(0, 4), tableLeak, capProse: capProse.slice(0, 4), skipRun, skipSamples, skipBody: skipBody.slice(0, 6) });
   }
   return out;
 })()`;
@@ -125,19 +138,21 @@ try {
   ws = new WebSocket(tab.webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
   await sleep(2500);
+  await ev(`globalThis.__fxDebug = true`);
   await ev(`chrome.storage.sync.set({ enabled: true })`);
   for (let i = 0; i < 40; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 100) break; }
   const pages = await ev(`window.PDFViewerApplication.pagesCount`);
   for (let p = 1; p <= pages; p++) { await ev(`window.PDFViewerApplication.page = ${p}`); await sleep(1500); }
   const res = await ev(PROBE);
-  let kb = 0, tl = 0, cp = 0, sk = 0;
-  for (const r of res) { kb += r.keepBad; tl += r.tableLeak; cp += r.capProse.length; sk += r.skipRun; }
-  console.log(`TOTALS keepFallback=${kb} tableLeak=${tl} capProse=${cp} skipPara=${sk}\n`);
+  let kb = 0, tl = 0, cp = 0, sk = 0, sb = 0;
+  for (const r of res) { kb += r.keepBad; tl += r.tableLeak; cp += r.capProse.length; sk += r.skipRun; sb += r.skipBody.length; }
+  console.log(`TOTALS keepFallback=${kb} tableLeak=${tl} capProse=${cp} skipPara=${sk} skipBody=${sb}\n`);
   for (const r of res) {
-    console.log(`p${r.page}: keepBad=${r.keepBad} tableLeak=${r.tableLeak} capProse=${r.capProse.length} skipRun=${r.skipRun}`);
+    console.log(`p${r.page}: keepBad=${r.keepBad} tableLeak=${r.tableLeak} capProse=${r.capProse.length} skipRun=${r.skipRun} skipBody=${r.skipBody.length}`);
     if (r.keepBad) console.log(`   keep:`, JSON.stringify(r.keepSample));
     if (r.capProse.length) console.log(`   capProse:`, JSON.stringify(r.capProse));
     if (r.skipRun) console.log(`   skip:`, JSON.stringify(r.skipSamples));
+    if (r.skipBody.length) console.log(`   skipBody:`, JSON.stringify(r.skipBody));
   }
   writeFileSync(join(root, "test", "out", `audit-${FILTER.replace(/\W+/g, "")}.json`), JSON.stringify(res, null, 2));
 } catch (e) { console.error("audit error:", e); }

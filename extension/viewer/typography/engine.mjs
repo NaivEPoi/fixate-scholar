@@ -290,7 +290,7 @@ export class TypographyEngine {
     // followed by a LOWERCASE word, so it is body prose, not a caption or a
     // listing header (those read "Figure 5: …", "Figure 5. …", "Algorithm 1
     // StateSynth", or stand alone). Such lines must be emphasized, not skipped.
-    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|Tab(?:le)?|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*\d+[a-z]?\s+[a-zà-ÿ]/;
+    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|Tab(?:le)?|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*\d+[a-z]?\s*[,;.]?\s+[a-zà-ÿ]/;
     const isCaptionLead = (t) => CAP_LEAD.test(t) && !REF_PROSE.test(t);
     const isAlgoLead = (t) => ALGO_LEAD.test(t) && !REF_PROSE.test(t);
 
@@ -443,23 +443,30 @@ export class TypographyEngine {
         // directly above it in this column (figures are captioned below). An
         // in-text "Figure N shows …" prose ref is NOT a caption (REF_PROSE).
         if (isCaptionLead(b.lead)) {
-          skipBlock(b);
+          skipBlock(b, "blk-caption");
           const prev = blocks[bi - 1];
-          if (prev && b.yTop - prev.yBot < pageH * 0.16 && lowerWords(prev.items) < 5) skipBlock(prev);
+          if (prev && b.yTop - prev.yBot < pageH * 0.16 && lowerWords(prev.items) < 5) skipBlock(prev, "blk-capprev");
           continue;
         }
-        // Table / pseudocode listing.
-        if (cells >= 3 || isAlgoLead(b.lead) || (spc >= 0.5 && cells >= 2)) { skipBlock(b); continue; }
+        // Pseudocode listing (always skipped, even with prose-looking operands).
+        if (isAlgoLead(b.lead)) { skipBlock(b, "blk-algo"); continue; }
+        // Table: wide column gaps (cells) or special-font label columns. Spare
+        // RUNNING PROSE — a justified body line stretches its inter-word spaces
+        // wide enough to read as column gaps, but it averages ≥4 lowercase words
+        // per line (a table cell has few). Without this, dense body paragraphs
+        // and bulleted prose lists are wrongly skipped as tables.
+        const proseDense = lc >= b.rows.length * 4;
+        if ((cells >= 3 || (spc >= 0.5 && cells >= 2)) && !proseDense) { skipBlock(b, "blk-table"); continue; }
         // Heading: short, not a sentence, label- / bold- / large-led.
         if (b.rows.length <= 2 && lc <= 3 &&
-            (HEAD_LEAD.test(b.lead) || b.leadBold || b.h > dominant * 1.15)) { skipBlock(b); continue; }
+            (HEAD_LEAD.test(b.lead) || b.leadBold || b.h > dominant * 1.15)) { skipBlock(b, "blk-heading"); continue; }
         // Figure label / displayed equation: almost no prose, with a non-body
         // face, an off-body size, or just a few glyphs. A short trailing prose
         // line that is an in-text reference ("…in Algorithm 1 in Appendix A.")
         // has few lowercase words but IS body — spare it (REF_PROSE).
-        if (lc < 2 && (spc >= 0.3 || offSize || b.items.length <= 3) && !REF_PROSE.test(b.lead)) { skipBlock(b); continue; }
+        if (lc < 2 && (spc >= 0.3 || offSize || b.items.length <= 3) && !REF_PROSE.test(b.lead)) { skipBlock(b, "blk-figlabel"); continue; }
         // Off-size block with little prose (footnotes, sub/superscript rows).
-        if (offSize && lc < 4) { skipBlock(b); continue; }
+        if (offSize && lc < 4) { skipBlock(b, "blk-offsize"); continue; }
 
         // Body text → process. Strip a leading run-in heading if present.
         if (b.leadBold || HEAD_LEAD.test(b.lead)) skipLeadRun(b);
@@ -504,9 +511,10 @@ export class TypographyEngine {
         } else if (HEAD_LEAD.test(leadStr)) {
           if (lowerWords(band) <= 3) for (const p of band) { skip.add(p.div); dbg(p.div, "line-head"); }
           else if (isSpecial(lead)) skipHeadingRun(its, a);
-        } else if (maxCells([{ items: band }]) >= 4) {
+        } else if (maxCells([{ items: band }]) >= 4 && lowerWords(band) < 4) {
           // A table row that block grouping merged into a text block: several
-          // wide column gaps on one baseline (running prose never has 4+).
+          // wide column gaps on one baseline. Running prose is spared (a
+          // justified line shows wide gaps but has ≥4 lowercase words).
           for (const p of band) { skip.add(p.div); dbg(p.div, "line-cells"); }
         } else if (isBold(lead)) {
           skipHeadingRun(its, a);
@@ -545,15 +553,21 @@ export class TypographyEngine {
         const leadH = lines[k].h;
         let prevY = lines[k].y;
         for (const p of lines[k].items.filter(inBand)) { skip.add(p.div); dbg(p.div, "caption"); }
-        for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 14; m++) {
+        // Absorb the caption's own continuation lines only — captions are
+        // short. A small line cap and a tighter gap stop the sweep from
+        // running on into the body paragraph that follows the caption.
+        for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 6; m++) {
           const bandM = lines[m].items.filter(inBand);
           if (!bandM.length) continue;
-          if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.8) break; // gap
+          if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.5) break; // gap
           if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
           if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
           // A new in-text reference sentence ("Figure 8 shows …") is body prose,
           // not caption continuation — stop absorbing here.
           if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" "))) break;
+          // A bold run-in heading ("Evaluating collaborative learning.") opens a
+          // new body paragraph below the caption — stop before swallowing it.
+          if (isBold(bandM[0])) break;
           for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
           prevY = lines[m].y;
           absorbed++;
