@@ -89,5 +89,5 @@ try {
 } finally {
   browser.kill();
   await sleep(500);
-  rmSync(userDataDir, { recursive: true, force: true });
+  try { rmSync(userDataDir, { recursive: true, force: true }); } catch {}
 }
