@@ -41,10 +41,19 @@
     </select>
   </label>
 
+  <label class="row switch" title="When off, PDFs open in the browser's built-in viewer, so its Gemini reading tools and other PDF extensions can handle them">
+    <span>Open PDFs in FixateScholar</span>
+    <input type="checkbox" id="intercept">
+  </label>
+
   <label class="row switch" title="Don't open this site's PDFs in FixateScholar">
     <span>Bypass current site</span>
     <input type="checkbox" id="bypassSite">
   </label>
+
+  <div class="row" id="openHereRow" style="display: none">
+    <button type="button" id="openHere">Open this PDF in FixateScholar</button>
+  </div>
 
   <div class="row footer">
     <a href="#" id="openOptions">All settings</a>

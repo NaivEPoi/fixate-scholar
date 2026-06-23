@@ -66,8 +66,17 @@
 
   <h2>PDF interception</h2>
   <label>
-    Bypassed sites (one hostname per line) — PDFs from these open in Chrome's native viewer:
+    <input type="checkbox" id="intercept"> Open PDFs in FixateScholar
+    <p class="hint">When on, PDF links open in FixateScholar's reader. Turn this
+    off to let PDFs open in the browser's built-in viewer instead — so its PDF
+    tools (including Gemini's “ask about this PDF”) and other PDF extensions can
+    read them. FixateScholar stays one click away: use the toolbar button on an
+    open PDF, or right-click a link and choose “Open in FixateScholar”.</p>
+  </label>
+  <label>
+    Bypassed sites (one hostname per line) — PDFs from these open in the browser's native viewer:
     <textarea id="bypassOrigins" placeholder="example.com&#10;intranet.mycompany.org"></textarea>
+    <p class="hint">A per-site exception while interception is on.</p>
   </label>
 
   <p class="hint">

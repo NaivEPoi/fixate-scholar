@@ -33,7 +33,14 @@ function registerRules() {
 }
 
 async function applyRules() {
-  const rules = [
+  // Master switch. When interception is off we register NO redirect rules, so
+  // every PDF navigation reaches the browser's native viewer (and any other
+  // PDF-handling extension / the built-in Gemini reading tools). We still issue
+  // an updateSessionRules whose removeRuleIds clears any managed rule left over
+  // from when it was on, so flipping the switch takes effect immediately.
+  const { intercept = true } = await chrome.storage.sync.get("intercept");
+
+  const rules = !intercept ? [] : [
     // Top-level navigations to a *.pdf URL: redirect at the request stage
     // (before any response exists), so the browser never receives a PDF
     // response on the tab for a download manager (IDM, FDM, …) to grab. This
@@ -138,7 +145,8 @@ chrome.runtime.onStartup.addListener(registerRules);
 registerRules();
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes.bypassOrigins) registerRules();
+  if (area === "sync" && (changes.bypassOrigins || changes.intercept))
+    registerRules();
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -155,6 +163,8 @@ chrome.webNavigation.onBeforeNavigate.addListener(
   async (details) => {
     if (details.frameId !== 0) return;
     if (!/^file:.*\.pdf$/i.test(details.url)) return;
+    const { intercept = true } = await chrome.storage.sync.get("intercept");
+    if (!intercept) return;
     if (!(await chrome.extension.isAllowedFileSchemeAccess())) return;
     chrome.tabs.update(details.tabId, {
       url: `${VIEWER}?file=${encodeURIComponent(details.url)}`,
