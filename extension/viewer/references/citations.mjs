@@ -198,7 +198,17 @@ export class ReferencesFeature {
       });
       // Citation link → falls through to our hit-target/card; in-paper
       // reference link (Figure/Table/Section/…) → native jump preserved.
-      a.style.pointerEvents = overlapsCite ? "none" : "";
+      // PDF.js renders each link as <section class="linkAnnotation"><a></a>
+      // </section>, and the SECTION — not the <a> — is the topmost box sitting
+      // over the glyphs. Disabling only the <a> leaves the section eating clicks
+      // on the citation number (its hyperref /Rect usually aligns with the
+      // number, not the surrounding brackets), so the click never reaches our
+      // hit-target below: the brackets stay clickable but the number does not.
+      // Toggle pointer-events on the wrapping section too.
+      const box = a.closest("section") || a;
+      const val = overlapsCite ? "none" : "";
+      a.style.pointerEvents = val;
+      box.style.pointerEvents = val;
     }
   }
 }
