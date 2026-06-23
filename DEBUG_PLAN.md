@@ -297,3 +297,36 @@ highlight visible on arXiv + Two-column B (screenshots in test/out/);
 copy-event full text on both. Regression: `npm test` 32/32, `node
 test/papers.mjs` 7/7 PASS (linkOk true everywhere), `node test/verify-links.mjs`
 ALL PASSED.
+
+## Round 5 — coexist with the built-in PDF viewer (Gemini) and other PDF extensions
+
+User ask: "make the reader compatible with builtin gemini and other extensions."
+
+Why it conflicted: interception works by a DNR redirect of every top-level PDF
+navigation into our `chrome-extension://.../viewer.html?file=` page. The browser's
+built-in PDF tools (incl. Gemini "ask about this PDF") and other PDF extensions
+read the **native** PDF viewer at the original http(s) URL; they cannot see into
+an extension viewer page. The Google Scholar PDF Reader avoids this by NOT
+redirecting — it leaves the PDF in the native viewer and injects a sidebar via
+content scripts, so Gemini still reads it. We cannot adopt that model without
+losing the typography feature (native PDFium exposes no restylable text layer),
+so "compatible" here means: step aside cleanly when asked.
+
+Also found: the DNR rules were registered unconditionally — the `enabled`
+setting only toggles typography inside the viewer, so there was no real global
+off switch for interception (only the per-site `bypassOrigins` denylist).
+
+Fix: a master `intercept` setting (default true, distinct from `enabled`).
+- `applyRules()` reads it; when false, `rules = []` and removeRuleIds still
+  clears managed ids, so flipping it takes effect immediately (DNR replace).
+- `storage.onChanged` re-registers on `intercept` change too.
+- the `file://*.pdf` webNavigation rewrite is gated on it.
+- popup + options expose "Open PDFs in FixateScholar"; per-site bypass row is
+  hidden when interception is off. Popup adds an on-demand "Open this PDF in
+  FixateScholar" button for a native-viewer .pdf tab (context-menu open already
+  worked regardless of the switch).
+
+Verify: `node test/diag-intercept.mjs` — default ids [201,202,203]; intercept=
+false → []; intercept=true → [201,202,203]; 0 SW errors. Regression: `node
+test/diag-dnr.mjs` still PASS (no duplicate-id under concurrent writes); `npm
+test` 32/32.
