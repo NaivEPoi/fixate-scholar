@@ -13,6 +13,14 @@ export const DEFAULTS = Object.freeze({
   boldWeight: 600,
   fontMode: "original", // "original" | "atkinson" | "inter" | "literata"
   bypassOrigins: [],
+  // Master switch for PDF interception. When false the extension registers no
+  // redirect rules, so PDFs open in the browser's native viewer — letting the
+  // built-in PDF tools (incl. Gemini "ask about this PDF") and other PDF
+  // extensions handle them. FixateScholar stays available on demand (toolbar
+  // button, right-click "Open in FixateScholar"). Default on (unchanged
+  // behavior). Distinct from `enabled`, which only toggles typography inside
+  // the viewer.
+  intercept: true,
 });
 
 const hasStorage = typeof chrome !== "undefined" && chrome.storage?.sync;

@@ -254,3 +254,79 @@ a276b22 (round 4).
     a word's overshoot back from an adjacent skipped span (correct tradeoff:
     a ≤~3px ink sliver beats whiting out the heading), plus 1 tall figure-span
     outlier per paper (peekMax). Not visually significant.
+
+## Round 5 (2026-06-21): citation number clickable + selection highlight + copy
+
+User report: "the citation only allows click on '[' and ']'. The number inside
+is not clickable. Also, when selecting the text, the shadowed region does not
+appear — use the same effect as selecting the default PDF. Also, copy from text
+should work."
+
+Root causes (all confirmed live via new diagnostics, then fixed):
+- **Citation number not clickable** — PDF.js wraps each link as
+  `<section class="linkAnnotation"><a></a></section>`; the SECTION (not the `<a>`)
+  is the top-most box over the glyphs. `reconcileLinks` only set the inner `<a>`
+  to `pointer-events:none`, so the section kept eating clicks. hyperref's link
+  `/Rect` aligns with the NUMBER (not the brackets the citation style adds), so
+  the brackets fell to our `.fx-cite-hit` (clickable) while the number sat under
+  the live section (dead). `document.elementsFromPoint` at the digit centre
+  showed `section.linkAnnotation pe=auto` topmost. Fix: `reconcileLinks` now
+  toggles pointer-events on `a.closest("section")` as well as the `<a>`.
+- **No selection highlight** — stock viewer.css sets
+  `.textLayer ::selection { background: transparent }` (glyphs are transparent on
+  stock, real glyphs on canvas, so a highlight would double up). In reading mode
+  the spans ARE the visible glyphs, so selection painted nothing. Fix in
+  overlay.css: `#viewerContainer.fx-on .textLayer ::selection{background:rgb(0
+  120 215/.35)}` (+ `::-moz-selection`) — native-looking translucent blue,
+  higher specificity (id+2 classes) than the stock rule.
+- **Copy** — already worked at the DOM level (the copy event fired with the full
+  selected text, `copyAll:false` so pdf.js's select-all handler did NOT
+  intercept); the perceived failure was the invisible selection + the section
+  swallowing drags over citations. No code change needed; verified.
+
+New diagnostics (test/): `diag-select-cite.mjs` (per-citation digit/bracket hit
+coverage + selection toString), `diag-hittest.mjs` (elementsFromPoint at
+bracket vs digit centre, native-link pe/rect), `diag-drag.mjs` (real CDP
+mouse-drag selection → toString + copy-event capture + screenshot),
+`diag-click.mjs` (real click on the digit opens the card; select-across-citation
+copies the [N]).
+
+Verification: digit topmost = `a.fx-cite-hit` on every citation (arXiv); real
+click on the number opens the card ("[13]…Sepp Hochreiter…"); selection
+highlight visible on arXiv + Two-column B (screenshots in test/out/);
+copy-event full text on both. Regression: `npm test` 32/32, `node
+test/papers.mjs` 7/7 PASS (linkOk true everywhere), `node test/verify-links.mjs`
+ALL PASSED.
+
+## Round 5 — coexist with the built-in PDF viewer (Gemini) and other PDF extensions
+
+User ask: "make the reader compatible with builtin gemini and other extensions."
+
+Why it conflicted: interception works by a DNR redirect of every top-level PDF
+navigation into our `chrome-extension://.../viewer.html?file=` page. The browser's
+built-in PDF tools (incl. Gemini "ask about this PDF") and other PDF extensions
+read the **native** PDF viewer at the original http(s) URL; they cannot see into
+an extension viewer page. The Google Scholar PDF Reader avoids this by NOT
+redirecting — it leaves the PDF in the native viewer and injects a sidebar via
+content scripts, so Gemini still reads it. We cannot adopt that model without
+losing the typography feature (native PDFium exposes no restylable text layer),
+so "compatible" here means: step aside cleanly when asked.
+
+Also found: the DNR rules were registered unconditionally — the `enabled`
+setting only toggles typography inside the viewer, so there was no real global
+off switch for interception (only the per-site `bypassOrigins` denylist).
+
+Fix: a master `intercept` setting (default true, distinct from `enabled`).
+- `applyRules()` reads it; when false, `rules = []` and removeRuleIds still
+  clears managed ids, so flipping it takes effect immediately (DNR replace).
+- `storage.onChanged` re-registers on `intercept` change too.
+- the `file://*.pdf` webNavigation rewrite is gated on it.
+- popup + options expose "Open PDFs in FixateScholar"; per-site bypass row is
+  hidden when interception is off. Popup adds an on-demand "Open this PDF in
+  FixateScholar" button for a native-viewer .pdf tab (context-menu open already
+  worked regardless of the switch).
+
+Verify: `node test/diag-intercept.mjs` — default ids [201,202,203]; intercept=
+false → []; intercept=true → [201,202,203]; 0 SW errors. Regression: `node
+test/diag-dnr.mjs` still PASS (no duplicate-id under concurrent writes); `npm
+test` 32/32.

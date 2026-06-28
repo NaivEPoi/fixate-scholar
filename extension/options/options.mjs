@@ -11,9 +11,11 @@ $("fontMode").value = settings.fontMode;
 $("fractionRow").style.display = settings.emphasisMode === "fraction" ? "" : "none";
 $("boldWeight").value = settings.boldWeight;
 $("saccade").value = settings.saccade;
+$("intercept").checked = settings.intercept;
 $("bypassOrigins").value = settings.bypassOrigins.join("\n");
 
 $("enabled").addEventListener("change", (e) => setSettings({ enabled: e.target.checked }));
+$("intercept").addEventListener("change", (e) => setSettings({ intercept: e.target.checked }));
 $("emphasisMode").addEventListener("change", (e) => {
   $("fractionRow").style.display = e.target.value === "fraction" ? "" : "none";
   setSettings({ emphasisMode: e.target.value });
