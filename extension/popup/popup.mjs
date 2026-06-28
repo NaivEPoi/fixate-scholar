@@ -2,8 +2,11 @@ import { getSettings, setSettings } from "../viewer/settings-client.mjs";
 
 const $ = (id) => document.getElementById(id);
 
+const VIEWER = chrome.runtime.getURL("vendor/pdfjs/web/viewer.html");
+
 const settings = await getSettings();
 $("enabled").checked = settings.enabled;
+$("intercept").checked = settings.intercept;
 $("fraction").value = settings.fraction;
 $("fractionOut").textContent = `${Math.round(settings.fraction * 100)}%`;
 $("boldWeight").value = settings.boldWeight;
@@ -32,15 +35,24 @@ $("openOptions").addEventListener("click", (e) => {
   chrome.runtime.openOptionsPage();
 });
 
-// Per-site bypass for the active tab's origin.
+// Per-site bypass + on-demand open for the active tab.
 const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 let origin = null;
+let pdfUrl = null; // a PDF URL we could open in our viewer on demand
 try {
   const tabUrl = new URL(tab?.url ?? "");
   if (tabUrl.protocol.startsWith("http")) origin = tabUrl.hostname;
   // Inside our viewer, offer bypassing the *document's* host.
   if (tabUrl.protocol === "chrome-extension:" && tabUrl.searchParams.get("file")) {
     origin = new URL(tabUrl.searchParams.get("file")).hostname;
+  }
+  // A native-viewer PDF tab (http(s)/file URL ending in .pdf): offer a
+  // one-click open in FixateScholar, the on-demand path when interception is
+  // off or the site is bypassed. We can't see the Content-Type from here, so
+  // this catches extension-named PDFs; extensionless ones still use the
+  // right-click "Open in FixateScholar" menu.
+  if (/^(https?|file):$/.test(tabUrl.protocol) && /\.pdf($|[?#])/i.test(tabUrl.pathname + tabUrl.search)) {
+    pdfUrl = tab.url;
   }
 } catch {
   /* chrome:// pages etc. */
@@ -58,5 +70,24 @@ if (!origin) {
       ? [...new Set([...bypassOrigins, origin])]
       : bypassOrigins.filter((o) => o !== origin);
     setSettings({ bypassOrigins: next });
+  });
+}
+
+// Master interception switch. The per-site bypass only matters while
+// interception is on, so hide it (and lean on the on-demand button) when off.
+function reflectIntercept(on) {
+  if (origin) bypassRow.style.display = on ? "" : "none";
+}
+reflectIntercept(settings.intercept);
+$("intercept").addEventListener("change", (e) => {
+  setSettings({ intercept: e.target.checked });
+  reflectIntercept(e.target.checked);
+});
+
+if (pdfUrl) {
+  $("openHereRow").style.display = "";
+  $("openHere").addEventListener("click", async () => {
+    await chrome.tabs.update(tab.id, { url: `${VIEWER}?file=${encodeURIComponent(pdfUrl)}` });
+    window.close();
   });
 }

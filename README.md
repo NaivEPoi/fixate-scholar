@@ -29,6 +29,14 @@ code, fonts, or assets.
   nothing is ever saved to disk just by clicking a link; the toolbar download button
   saves a copy explicitly. Per-site bypass list, per-document "open in native viewer"
   escape hatch, and a context-menu fallback.
+- **Plays well with other PDF tools**: a master **Open PDFs in FixateScholar** switch
+  (popup and options) governs interception. Turn it off and PDFs open in the browser's
+  built-in viewer instead — so its PDF tools (including Gemini's "ask about this PDF")
+  and other PDF extensions can read them. FixateScholar interception works by redirecting
+  the PDF into its own viewer page, which those tools can't see into; turning it off (or
+  bypassing a site) hands the PDF back to the native viewer. The reader stays one click
+  away: the toolbar's **Open this PDF in FixateScholar** button on an open PDF, or
+  right-click a link → **Open in FixateScholar**.
 - **References & citations** (academic papers): detects the bibliography, links in-text
   citations like `[12]` or `(Smith et al., 2020)` to their entries, and shows a hover
   preview of the entry. Citations and in-paper references (Figure/Table/Section/…) are

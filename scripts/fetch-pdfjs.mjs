@@ -141,4 +141,19 @@ patch(
   `connect-src * blob: data: file:`,
 );
 
+// Patch 4: allow inline style="…" ATTRIBUTES on the viewer page. The stock CSP
+// only allows inline <style> ELEMENTS (style-src-elem) and leaves style-src-attr
+// to fall back to `style-src 'self'`, which blocks inline style attributes —
+// some Chromium builds apply one during page layout (annotation / print code
+// paths), logging "Applying inline style violates … style-src 'self'". Safe on
+// this trusted page: it renders only the user's own PDF (text → canvas and
+// textContent, never innerHTML, so a PDF can't inject DOM/styles) and
+// script-src 'self' already blocks injected scripts.
+patch(
+  "web/viewer.html",
+  `style-src-elem 'self' 'unsafe-inline';`,
+  `style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline';`,
+  `style-src-attr 'unsafe-inline'`,
+);
+
 console.log("Done. Load the ./extension directory as an unpacked extension.");

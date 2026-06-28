@@ -133,6 +133,23 @@
   background: none !important;
 }
 
+/* Visible text selection. Stock PDF.js makes the text-layer glyphs transparent
+   (the real glyphs are on the canvas) and therefore sets
+   `.textLayer ::selection { background: transparent }` so a drag doesn't paint a
+   highlight over invisible text. In reading mode the text-layer spans ARE the
+   visible glyphs, so that transparent selection leaves a drag with no highlight
+   at all — selecting looks broken even though the text is selected (and copies).
+   Restore a native-looking translucent blue selection band (matching the
+   browser's own PDF viewer); the alpha keeps the glyphs readable, and the canvas
+   text under unprocessed spans shows through. Higher specificity than the stock
+   rule (id + two classes), and loaded after it, so it wins. */
+#viewerContainer.fx-on .textLayer ::selection {
+  background: rgb(0 120 215 / 0.35);
+}
+#viewerContainer.fx-on .textLayer ::-moz-selection {
+  background: rgb(0 120 215 / 0.35);
+}
+
 /* Citation and in-paper reference coloring. Fixed, high-contrast colors —
    citations a strong blue, in-paper references a strong red — chosen for
    readability on the (white) page rather than matching the document's own
