@@ -672,121 +672,6 @@ export class TypographyEngine {
     return ratio;
   }
 
-  /**
-   * Per-page empirical baseline calibration — the "support any zoom" correction.
-   * The font-ratio re-seat (#ascentRatio − #baselineRatio) assumes the browser
-   * renders the overlay glyph's baseline exactly where PDF.js rasterized the
-   * canvas glyph's baseline. At a high device-pixel ratio and/or a non-100% zoom
-   * the two renderers diverge by a few pixels — the overlay drifts above the
-   * canvas, so processed text no longer sits where the original glyphs are. The
-   * fix is to MEASURE the leftover offset at the current scale rather than model
-   * it: we can't read the overlay's own pixels, but we can read the canvas. For a
-   * spread of processed body spans, compare the canvas glyph's true baseline
-   * (ink bottom minus the font's ink descent for that text — which cancels the
-   * per-font/per-text bias) against where the ratio correction will place the
-   * overlay baseline, and return the median leftover as an `em` to fold into
-   * every span's margin-top. Returns 0 unless the drift is consistent and
-   * clearly beyond measurement noise (~2px), so the aligned DPR-1 / 100% case is
-   * never perturbed. Re-runs on every (re)process, so it self-adjusts to zoom,
-   * DPI and the embedded font in use.
-   */
-  #calibrateBaseline(pageView, pairs) {
-    try {
-      const canvas = pageView.canvas || pageView.div.querySelector("canvas");
-      if (!canvas) return 0;
-      const cr = canvas.getBoundingClientRect();
-      if (!(cr.width > 0) || !(cr.height > 0)) return 0;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      const sx = canvas.width / cr.width;
-      const sy = canvas.height / cr.height;
-      this.#measureCtx ??= document.createElement("canvas").getContext("2d");
-      // Viewport-px y of the canvas ink bottom for the dark-row cluster that
-      // crosses yc (picks the largest such cluster, so an adjacent line whose
-      // ink brushes the band can't win).
-      const inkBottom = (x0, x1, yc, half) => {
-        const px0 = Math.max(0, Math.floor((x0 - cr.left) * sx));
-        const px1 = Math.min(canvas.width, Math.ceil((x1 - cr.left) * sx));
-        const py0 = Math.max(0, Math.floor((yc - half - cr.top) * sy));
-        const py1 = Math.min(canvas.height, Math.ceil((yc + half - cr.top) * sy));
-        if (px1 <= px0 || py1 <= py0) return null;
-        let data;
-        try { data = ctx.getImageData(px0, py0, px1 - px0, py1 - py0).data; } catch { return null; }
-        const W = px1 - px0, H = py1 - py0;
-        const dark = new Array(H);
-        for (let r = 0; r < H; r++) {
-          let n = 0;
-          for (let c = 0; c < W; c++) {
-            const o = (r * W + c) * 4;
-            if (data[o + 3] > 40 && 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2] < 140) n++;
-          }
-          dark[r] = n >= 2;
-        }
-        const tol = Math.ceil(2 * sy);
-        const ycDev = (yc - cr.top) * sy;
-        let bottom = null, bestRows = -1, s = -1, gap = 0;
-        for (let r = 0; r <= H; r++) {
-          if (r < H && dark[r]) { if (s < 0) s = r; gap = 0; }
-          else if (s >= 0) {
-            gap++;
-            if (gap > tol || r === H) {
-              const a = s, b = r - gap;
-              if (ycDev >= a - tol && ycDev <= b + tol && b - a >= bestRows) { bestRows = b - a; bottom = b; }
-              s = -1; gap = 0;
-            }
-          }
-        }
-        return bottom == null ? null : cr.top + (py0 + bottom) / sy;
-      };
-
-      const resid = [], heights = [];
-      const step = Math.max(1, Math.floor(pairs.length / 24));
-      for (let k = 0; k < pairs.length && resid.length < 14; k += step) {
-        const pair = pairs[k];
-        const div = pair.div;
-        const text = div.textContent ? div.textContent.trim() : "";
-        if (text.length < 5 || /[gjpqy]/.test(text)) continue; // descenders skew the ink bottom
-        const r = div.getBoundingClientRect();
-        if (!(r.width > 4) || !(r.height > 4)) continue;
-        const emH = r.height; // visual em-box ≈ visual font size (line-height:1)
-        const fs = parseFloat(getComputedStyle(div).fontSize) || emH;
-        const origFamily = div.style.fontFamily;
-        const family = this.#fontFamilyFor(pair) || origFamily;
-        // Where the ratio correction will place the overlay baseline.
-        const predBaseline = r.top + this.#ascentRatio(origFamily) * emH;
-        // The font's ink descent below the baseline for THIS text, in visual px —
-        // removes the per-font/per-text bias so an aligned page reads ~0.
-        let descent = 0;
-        try {
-          this.#measureCtx.font = `${Math.max(4, Math.round(fs))}px ${family}`;
-          descent = Math.max(0, this.#measureCtx.measureText(text).actualBoundingBoxDescent || 0) * (emH / fs);
-        } catch { /* keep 0 */ }
-        const ink = inkBottom(r.left, r.right, (r.top + r.bottom) / 2, emH * 0.75);
-        if (ink == null) continue;
-        resid.push(ink - descent - predBaseline);
-        heights.push(emH);
-      }
-      if (resid.length < 4) return 0;
-      const sorted = [...resid].sort((a, b) => a - b);
-      const median = (sorted[Math.floor((sorted.length - 1) / 2)] + sorted[Math.ceil((sorted.length - 1) / 2)]) / 2;
-      const mad = resid.map((x) => Math.abs(x - median)).sort((a, b) => a - b)[Math.floor(resid.length / 2)];
-      const medH = [...heights].sort((a, b) => a - b)[Math.floor(heights.length / 2)] || 1;
-      if (globalThis.__fxDebug) {
-        globalThis.__fxBaselineCalib = {
-          page: pageView.id, dpr: typeof window !== "undefined" ? window.devicePixelRatio : null,
-          scale: this.#app.pdfViewer?.currentScale, n: resid.length,
-          medianPx: +median.toFixed(2), mad: +mad.toFixed(2), emPx: +medH.toFixed(2),
-        };
-      }
-      // Correct only a consistent drift clearly beyond noise; otherwise leave the
-      // ratio formula alone (no DPR-1 / 100% regression).
-      if (Math.abs(median) < 2 || mad > 2.5) return 0;
-      const clamped = Math.max(-0.4 * medH, Math.min(0.4 * medH, median));
-      return clamped / medH;
-    } catch {
-      return 0;
-    }
-  }
-
   /** True when the item is set in a math/symbol/mono/small-caps/bold face.
    *  The font objects are already resolved in commonObjs once the canvas has
    *  rendered. */
@@ -991,8 +876,6 @@ export class TypographyEngine {
       )
       .map((p) => p.div);
     let obstacleRects = null;
-    let calibEm = 0; // per-page empirical baseline offset (see #calibrateBaseline)
-    let calibComputed = false;
     let wordIndex = 0;
     let i = 0;
 
@@ -1025,14 +908,6 @@ export class TypographyEngine {
           const r = d.getBoundingClientRect();
           if (r.width > 0 && r.height > 0) obstacleRects.push(r);
         }
-      }
-      // Once per page, on a live layout, measure the canvas-vs-overlay baseline
-      // drift at the CURRENT zoom / device-pixel ratio and fold it into every
-      // span's correction below. Zero unless the drift is consistent and clearly
-      // beyond noise, so the aligned (DPR-1, 100%) case is untouched.
-      if (!calibComputed) {
-        calibComputed = true;
-        calibEm = this.#calibrateBaseline(pageView, pairs);
       }
       // True when a rect substantially overlaps a skipped (obstacle) span.
       // Some PDFs carry a DUPLICATE text-layer span for the same glyphs (e.g. a
@@ -1107,20 +982,19 @@ export class TypographyEngine {
           span.replaceChildren(frag);
           const origFamily = span.style.fontFamily;
           const family = this.#fontFamilyFor(pair);
-          const swap = family && family !== origFamily;
-          if (swap) span.style.fontFamily = family;
-          // Re-seat the baseline. PDF.js placed the line-box top at baseline −
-          // fontHeight × ascentRatio(origFamily) (glyph-bbox ascent of the font
-          // it assigned), so the substitute's baseline lands on the canvas
-          // baseline. Our face's RENDERED baseline sits at a different fraction,
-          // so shift by the difference (em-relative, scale-invariant). Then add
-          // calibEm — the per-page measured canvas-vs-overlay drift at the
-          // current zoom / DPI (see #calibrateBaseline) — applied even when the
-          // family is unchanged, since the renderer divergence is independent of
-          // our font swap.
-          const usedFamily = swap ? family : origFamily;
-          const dEm = this.#ascentRatio(origFamily) - this.#baselineRatio(usedFamily) + calibEm;
-          if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
+          if (family && family !== origFamily) {
+            span.style.fontFamily = family;
+            // PDF.js placed the line-box top at baseline − fontHeight ×
+            // ascentRatio(origFamily) (glyph-bbox ascent of the font it
+            // assigned), so the substitute's baseline lands on the canvas
+            // baseline. Our face's RENDERED baseline sits at a different
+            // fraction, so re-seat it: shift by the difference between where
+            // PDF.js put the box (origFamily bbox ascent) and where our face
+            // actually draws its baseline (em-relative, so it survives zoom/DPI
+            // re-layout — verified aligned at 175% scaling × 125% zoom).
+            const dEm = this.#ascentRatio(origFamily) - this.#baselineRatio(family);
+            if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
+          }
           span.dataset.fxDone = "1";
         }
         // Re-measure pass: one layout flush. The post-change rect is the bolded

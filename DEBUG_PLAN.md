@@ -330,3 +330,84 @@ Verify: `node test/diag-intercept.mjs` — default ids [201,202,203]; intercept=
 false → []; intercept=true → [201,202,203]; 0 SW errors. Regression: `node
 test/diag-dnr.mjs` still PASS (no duplicate-id under concurrent writes); `npm
 test` 32/32.
+
+## Round 6 (2026-06-22): DNR race, CSP inline-style, Chrome harness, high-DPI baseline
+
+User reported (Chrome): "Rule with id 203 does not have a unique ID", "No available
+adapters", CSP "Applying inline style violates style-src 'self'", and the
+processed glyph position "not aligned with the original again in chrome".
+Display scaling: 175%; in-viewer zoom: 125%. "support all zooms."
+
+- **DNR 203** — race between concurrent registerRules() (onInstalled + onStartup +
+  top-level + storage.onChanged). Each snapshots getSessionRules() before any
+  write, then re-adds the same static ids. Fix (service-worker.mjs): serialize via
+  a promise chain + make removeRuleIds a superset of addRules (self-healing atomic
+  replace). Verified by hammering 12 concurrent registrations → 0 errors.
+- **CSP inline-style** — PDF.js's stock viewer.html CSP allows inline <style>
+  ELEMENTS (style-src-elem 'unsafe-inline') but leaves style-src-attr to fall back
+  to `style-src 'self'`, blocking inline style ATTRIBUTES that some Chromium
+  layout paths apply. Added `style-src-attr 'unsafe-inline'` to viewer.html AND a
+  fetch-pdfjs patch-4 (safe: trusted page, no untrusted DOM, script-src 'self').
+  Did NOT reproduce in the engine-identical Edge harness (our code is CSSOM-clean)
+  — the relaxation resolves it regardless of which path emits it.
+- **"No available adapters"** — benign WebGPU message (GPU process exposes no
+  WebGPU adapter; PDF.js falls back to 2D canvas). No permission/adapter needed.
+- **Chrome can no longer load unpacked extensions via CLI.** Chrome auto-updated
+  to 149.0.7827.197 and REMOVED the `--disable-features=DisableLoadExtensionCommandLineSwitch`
+  escape hatch — `--load-extension` is ignored (only about:blank loads). Also:
+  Chrome blocks direct top-level nav to a web_accessible_resource (viewer.html →
+  chrome-error://chromewebdata) and blocks remote debugging on the default
+  profile. ⇒ Use **EDGE** for extension automation (loads unpacked, allows direct
+  viewer nav). Real-DPI repro: run **headful Edge on the actual display**
+  (`--headful` in test/diag-baseline.mjs / test/diag-csp.mjs) — devicePixelRatio
+  is then the true OS scaling (1.75). `--force-device-scale-factor` in headless
+  does NOT reproduce the canvas-vs-text renderer divergence.
+- **Baseline at high DPI — VERIFIED ALIGNED, no code change.** At the user's real
+  175% × 125% (headful Edge, dpr 1.75), the existing em-based ratio correction
+  (#ascentRatio − #baselineRatio) renders the overlay ON the canvas glyphs:
+  x-ray (red overlay over black canvas) shows alignment on the abstract (g_d0_f3,
+  p2) and body (g_d0_f1, p3); metric medBotErr ≈ −2.2…−2.5 (aligned). The user's
+  page-1 reading (+1.33, 2 samples) was font-confounded/noisy or stale code. The
+  reported misalignment is almost certainly STALE CODE — reloading the extension
+  loads the current (aligned) build. A canvas-pixel empirical calibration
+  (#calibrateBaseline) was prototyped to "dynamically calculate per zoom/DPI" but
+  REVERTED: (a) unnecessary — the formula is already aligned at the reported
+  settings; (b) getImageData can't read the canvas backing store synchronously at
+  processPage-end and off-screen prefetch pages have an unpainted canvas, so it
+  measured 0 samples; (c) not worth the complexity/risk for an unreproducible
+  drift. The em-based correction is inherently scale-invariant → supports all
+  zooms (verified). New: test/diag-chrome.mjs, diag-csp.mjs, diag-baseline.mjs
+  (--headful/--dsf/--zoom/--attach), live-chrome.mjs, chrome-load-check.mjs.
+  Regression: npm test 32/32, papers.mjs 7/7 PASS.
+
+## Round 7 (2026-06-22): THE real "misaligned after ~30s idle" bug — PDF.js idle font eviction
+
+User: the overlay misalignment is real and reproducible — it appears after leaving
+the window idle ~30s (the x-ray screenshot just made it visible by showing the
+canvas under the overlay). NOT stale code (corrects the round-6 guess).
+
+ROOT CAUSE (reproduced + confirmed via test/diag-idle.mjs): PDF.js's
+PDFRenderingQueue has `CLEANUP_TIMEOUT = 30000`; 30s after the last render
+activity it fires `onIdle = PDFViewerApplication._cleanup`, which calls
+`pdfDocument.cleanup()` → evicts the document's embedded font faces. Our visible
+reading-mode spans are styled with those exact faces (`font-family: g_d0_f*`), so
+once evicted the browser re-lays the overlay in a WIDER fallback font. Measured:
+after 33s idle every processed span grew +30–46px wide, mask coverage fell 1.0→~0.9,
+text drifted right of the canvas glyphs and off its masks. Nothing reloads the
+font (eviction fires no font event — `loadingdone` is load-only), so it stays
+broken until a re-render. This is the same failure family as round-1 "font
+randomly changes / layout collapse on window switch" but triggered by the idle
+timer, hence the reliable ~30s.
+
+FIX (extension/viewer/overlay.mjs): wrap `app.pdfRenderingQueue.onIdle` so that
+while reading mode is on it runs PDF.js's harmless page-view cleanup
+(pdfViewer.cleanup + thumbnail) but SKIPS the font-evicting `pdfDocument.cleanup()`.
+Installed at overlay init, before the document loads, so the idle timer is only
+ever scheduled with the wrapper (no pending original-cleanup timeout). Original
+behaviour restored when fx is off. The `document.fonts loadingdone` → refresh
+handler stays as a backstop for browser-driven eviction.
+
+VERIFIED: test/diag-idle.mjs after 33s idle → dW=0, maskCov stays 1.0, font stays
+g_d0_f8 (was +30–46px before). Headful real-DPI x-ray (175% × 125% zoom) after 33s
+idle: overlay still sits on the canvas glyphs. npm test 32/32, papers.mjs 7/7 PASS.
+New harness: test/diag-idle.mjs; diag-csp.mjs gained --idle=<sec>.

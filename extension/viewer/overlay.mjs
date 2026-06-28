@@ -88,6 +88,33 @@ references.onRefsRegion = (boxes) => engine.setRefsRegion(boxes);
 references.onContentStart = (pos) => engine.setContentStart(pos);
 references.onBodyHeight = (h) => engine.setBodyHeight(h);
 
+// PDF.js runs an idle cleanup 30s after the last render activity
+// (CLEANUP_TIMEOUT in pdf_rendering_queue.js) whose handler calls
+// `pdfDocument.cleanup()` — that evicts the document's embedded font faces.
+// Our visible reading-mode spans are styled with those exact faces
+// (`font-family: g_*`), so once they're gone the browser re-lays the overlay in
+// a WIDER fallback font: the text outgrows its per-span masks and drifts off the
+// canvas glyphs, and nothing reloads the font, so it stays broken. That is the
+// "after ~30s of sitting idle the processed text doubles / goes misaligned" bug.
+// While reading mode is on, run PDF.js's harmless page-view cleanup but SKIP the
+// font-evicting document cleanup. Installed here, before the document loads, so
+// the idle timer is only ever scheduled with this wrapper (the original handler
+// is never bound into a pending timeout). Restored behaviour when fx is off.
+const renderingQueue = app.pdfRenderingQueue;
+if (renderingQueue && typeof renderingQueue.onIdle === "function") {
+  const originalOnIdle = renderingQueue.onIdle;
+  renderingQueue.onIdle = function fxIdleCleanup() {
+    if (!engine.enabled) return originalOnIdle();
+    // Keep memory tidy without touching the fonts the overlay depends on.
+    try {
+      app.pdfViewer?.cleanup();
+      app.pdfThumbnailViewer?.cleanup();
+    } catch (e) {
+      console.warn("FixateScholar: idle cleanup failed", e);
+    }
+  };
+}
+
 function applyStyleVars(s) {
   const root = document.documentElement.style;
   root.setProperty("--fx-bold-weight", String(s.boldWeight));
