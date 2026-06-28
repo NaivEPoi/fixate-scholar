@@ -14,6 +14,10 @@ import { fileURLToPath } from "node:url";
 
 const FILTER = process.argv.slice(2).find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe")) ?? "arXiv";
 const DSF = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--dsf="))?.slice(6) ?? "0");
+const HEADFUL = process.argv.includes("--headful");
+const ZOOMV = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "0");
+const PG = parseInt(process.argv.slice(2).find((a) => a.startsWith("--page="))?.slice(7) ?? "1", 10);
+const IDLE = parseInt(process.argv.slice(2).find((a) => a.startsWith("--idle="))?.slice(7) ?? "0", 10);
 const PAPERS = {
   "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
   "arXiv": "https://arxiv.org/pdf/1706.03762",
@@ -27,7 +31,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
 const browser = spawn("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=${PORT}`, ...(HEADFUL ? [] : ["--headless=new"]), "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,1800",
   ...(DSF ? [`--force-device-scale-factor=${DSF}`, "--high-dpi-support=1"] : []),
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,
@@ -71,6 +75,8 @@ try {
   for (let i = 0; i < 25; i++) { storageOk = await ev(`!!(typeof chrome!=='undefined' && chrome.storage && chrome.storage.sync)`).catch(() => false); if (storageOk) break; await sleep(400); }
   if (storageOk) await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
   for (let i = 0; i < 40; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 80) break; }
+  if (ZOOMV) { await ev(`window.PDFViewerApplication.pdfViewer.currentScale = ${ZOOMV}`).catch(() => {}); await sleep(2500); }
+  if (PG > 1) { await ev(`window.PDFViewerApplication.page = ${PG}`).catch(() => {}); await sleep(2800); }
   // Open a citation popup (exercise popup.mjs DOM building).
   await ev(`(() => { const a = document.querySelector('.fx-cite-hit'); if (a) { a.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })); a.dispatchEvent(new MouseEvent('click', { bubbles: true })); } return !!a; })()`).catch(() => {});
   await sleep(1500);
@@ -89,16 +95,22 @@ try {
   // X-ray mode: hide the white masks and paint the processed overlay glyphs
   // semi-transparent red, so any overlay-vs-canvas (black ink) vertical offset
   // is directly visible. The overlay should sit exactly on the canvas glyphs.
+  if (IDLE) { console.log(`...sitting idle ${IDLE}s (triggers PDF.js 30s cleanup)...`); await sleep(IDLE * 1000); }
   const XRAY = process.argv.includes("--xray");
   if (XRAY) await ev(`(() => { const s = document.createElement('style'); s.textContent = '.fx-mask{display:none!important} #viewerContainer.fx-on .textLayer span[data-fx-done], #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b{color:rgba(220,0,0,.7)!important;-webkit-text-stroke:0!important}'; document.head.append(s); })()`).catch(() => {});
   // Screenshot a tight body region for visual baseline inspection.
   const clip = await ev(`(() => {
-    const div = window.PDFViewerApplication.pdfViewer.getPageView(0).textLayer.div;
-    const done = [...div.querySelectorAll('span[data-fx-done]')].filter(s => { const r = s.getBoundingClientRect(); return r.top > 80 && r.bottom < window.innerHeight - 80; });
-    if (done.length < 4) return null;
-    const a = done[2].getBoundingClientRect();
-    return ${process.argv.includes("--xray")} ? { x: Math.max(0, a.left - 10), y: Math.max(0, a.top - 10), width: 380, height: 64 } : { x: Math.max(0, a.left - 20), y: Math.max(0, a.top - 16), width: 760, height: 120 };
+    const v = window.PDFViewerApplication.pdfViewer;
+    const div = v.getPageView(v.currentPageNumber - 1).textLayer.div;
+    const done = [...div.querySelectorAll('span[data-fx-done]')].filter(s => { const r = s.getBoundingClientRect(); return r.top > 60 && r.bottom < window.innerHeight - 60 && r.width > 20; });
+    if (done.length < 2) return null;
+    const a = done[Math.min(2, done.length - 1)].getBoundingClientRect();
+    return ${process.argv.includes("--xray")} ? { x: Math.max(0, a.left - 10), y: Math.max(0, a.top - 10), width: 420, height: 76 } : { x: Math.max(0, a.left - 20), y: Math.max(0, a.top - 16), width: 760, height: 120 };
   })()`).catch(() => null);
-  if (clip) { const shot = await send("Page.captureScreenshot", { format: "png", clip: { ...clip, scale: XRAY ? 4 : DSF ? 1.5 : 2 } }); const fn = `csp-baseline-${FILTER.replace(/\W+/g, "")}${DSF ? "-dsf" + DSF : ""}${XRAY ? "-xray" : ""}.png`; writeFileSync(join(root, "test", "out", fn), Buffer.from(shot.data, "base64")); console.log("\nsaved", fn); }
+  const fn = `csp-baseline-${FILTER.replace(/\W+/g, "")}${DSF ? "-dsf" + DSF : ""}${HEADFUL ? "-hf" : ""}${ZOOMV ? "-z" + ZOOMV : ""}-p${PG}${XRAY ? "-xray" : ""}.png`;
+  const shotParams = clip ? { format: "png", clip: { ...clip, scale: XRAY ? 4 : DSF ? 1.5 : 2 } } : { format: "png" };
+  const shot = await send("Page.captureScreenshot", shotParams);
+  writeFileSync(join(root, "test", "out", fn), Buffer.from(shot.data, "base64"));
+  console.log("\nsaved", fn, clip ? "(tight)" : "(full viewport — sparse page)");
 } catch (e) { console.error("csp probe error:", e); }
 finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }

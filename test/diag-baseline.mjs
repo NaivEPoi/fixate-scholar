@@ -20,6 +20,12 @@ const ZOOM = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="
 // --remote-debugging-port=PORT (the user's real profile, real display DPI), and
 // measure the viewer tab they already have open. No browser is spawned.
 const ATTACH = parseInt(process.argv.slice(2).find((a) => a.startsWith("--attach="))?.slice(9) ?? "0", 10);
+// --headful: render in a real Edge window on the actual display, so
+// devicePixelRatio is the user's true OS scaling (e.g. 1.75) and the canvas-vs-
+// text renderer divergence reproduces (forced --device-scale-factor in headless
+// does not). Edge (same Chromium) allows loading the extension + opening the
+// viewer directly, unlike updated Chrome.
+const HEADFUL = process.argv.includes("--headful");
 const PAPERS = { "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf", "arXiv": "https://arxiv.org/pdf/1706.03762" };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
@@ -29,7 +35,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
 const browser = ATTACH ? null : spawn("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=${PORT}`, ...(HEADFUL ? [] : ["--headless=new"]), "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,1800",
   ...(DSF ? [`--force-device-scale-factor=${DSF}`, "--high-dpi-support=1"] : []),
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,
@@ -85,8 +91,13 @@ try {
     await ev(`globalThis.__fxDebug = true`).catch(() => {});
     await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`).catch(() => {});
     for (let i = 0; i < 40; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 80) break; }
-    if (ZOOM) { await ev(`window.PDFViewerApplication.pdfViewer.currentScale = ${ZOOM}`); await sleep(2500); }
-    await ev(`window.PDFViewerApplication.page = ${PAGE}`); await sleep(2800);
+    if (ZOOM) { await ev(`window.PDFViewerApplication.pdfViewer.currentScale = ${ZOOM}`); await sleep(2000); }
+    // Navigate AFTER setting zoom so the target page renders (canvas painted)
+    // while visible — matching the real scroll-into-view flow the calibration
+    // depends on. Re-navigate + brief wait ensures its textlayerrendered (hence
+    // processPage + calibration) fires with a painted canvas.
+    await ev(`window.PDFViewerApplication.page = 1`); await sleep(500);
+    await ev(`window.PDFViewerApplication.page = ${PAGE}`); await sleep(3500);
   }
   await ev(HELPER);
   const out = await ev(`(() => {
@@ -112,7 +123,7 @@ try {
     const med = (a) => { if (!a.length) return null; const x=[...a].sort((p,q)=>p-q); return r2(x[Math.floor(x.length/2)]); };
     return { dpr: window.devicePixelRatio, pdfZoom: Math.round(window.PDFViewerApplication.pdfViewer.currentScale*1000)/1000, page: ${PAGE}, n: topErrs.length, medTopErr: med(topErrs), medBotErr: med(botErrs), rows };
   })()`);
-  const calib = await ev(`globalThis.__fxBaselineCalib || null`).catch(() => null);
+  const calib = await ev(`(globalThis.__fxBaselineCalib || {})[window.PDFViewerApplication.pdfViewer.currentPageNumber] || null`).catch(() => null);
   console.log(`dsf=${DSF || 1} zoom=${ZOOM || "default"}  ${JSON.stringify({ dpr: out.dpr, pdfZoom: out.pdfZoom, n: out.n, medTopErr: out.medTopErr, medBotErr: out.medBotErr })}  calib=${JSON.stringify(calib)}`);
 } catch (e) { console.error("baseline diag error:", e); }
 finally { try { ws?.close(); } catch {} browser?.kill(); await sleep(500); if (!ATTACH) { try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} } }
