@@ -125,6 +125,10 @@ export class ReferencesFeature {
       if (!entries.length) continue;
       for (const seg of segments) {
         if (seg.end <= cite.start || seg.start >= cite.end) continue;
+        // Don't annotate the bibliography's own entry "[N]" markers (the engine
+        // tags refs-region spans data-fx-refs): the reference list is left as the
+        // author set it, no hover/click cards on its own numbers (F1).
+        if (seg.span.dataset.fxRefs) continue;
         const localStart = Math.max(0, cite.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
         for (const rect of rangeRects(seg.span, localStart, localEnd)) {

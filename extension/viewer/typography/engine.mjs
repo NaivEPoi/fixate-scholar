@@ -192,6 +192,9 @@ export class TypographyEngine {
     for (const d of layerDiv.querySelectorAll("[data-fx-table]")) {
       delete d.dataset.fxTable;
     }
+    for (const d of layerDiv.querySelectorAll("[data-fx-refs]")) {
+      delete d.dataset.fxRefs;
+    }
   }
 
   /**
@@ -300,15 +303,20 @@ export class TypographyEngine {
         for (const w of p.item.str.trim().split(/\s+/)) if (LOWER_WORD.test(w)) lc++;
       return lc;
     };
-    // Column-gap-separated cells in a row (a wide gap = a column boundary).
-    const maxCells = (rows) => {
+    // Column-gap-separated cells in a row (a wide gap = a column boundary). The
+    // gap multiplier controls how wide a gap must be to count: the default 1.5×
+    // catches column boundaries AND a justified line's stretched inter-word
+    // spaces; a larger multiplier (e.g. 3×) catches ONLY true column gaps, since
+    // justification never stretches a space that far — used to spot a table row
+    // even when a cell holds a prose phrase (whose mask would white out the rules).
+    const maxCells = (rows, mult = 1.5) => {
       let m = 0;
       for (const r of rows) {
         let cells = 1;
         for (let k = 1; k < r.items.length; k++) {
           const prev = r.items[k - 1].item;
           const gap = r.items[k].item.transform[4] - (prev.transform[4] + (prev.width ?? 0));
-          if (gap > Math.max(prev.height || 8, r.items[k].item.height || 8) * 1.5) cells++;
+          if (gap > Math.max(prev.height || 8, r.items[k].item.height || 8) * mult) cells++;
         }
         m = Math.max(m, cells);
       }
@@ -443,9 +451,17 @@ export class TypographyEngine {
         // directly above it in this column (figures are captioned below). An
         // in-text "Figure N shows …" prose ref is NOT a caption (REF_PROSE).
         if (isCaptionLead(b.lead)) {
-          skipBlock(b, "blk-caption");
           const prev = blocks[bi - 1];
           if (prev && b.yTop - prev.yBot < pageH * 0.16 && lowerWords(prev.items) < 5) skipBlock(prev, "blk-capprev");
+          // A caption is short. A LONG, prose-dense caption-led block is a
+          // caption that block-grouping MERGED with the body paragraph below it
+          // (no whitespace gap between them); skipping it whole would drop the
+          // body (the round-4 regression — A p10/p14, C p08/p11, F p04). Leave
+          // such a block to the dedicated caption pass (which skips only the
+          // caption lead + its short continuation) so the body is processed.
+          // Genuine captions (≤4 lines) are still skipped whole here.
+          const captionBodyMerged = b.rows.length >= 5 && lc >= b.rows.length * 4;
+          if (!captionBodyMerged) skipBlock(b, "blk-caption");
           continue;
         }
         // Pseudocode listing (always skipped, even with prose-looking operands).
@@ -488,6 +504,12 @@ export class TypographyEngine {
         dbg(its[j].div, "runin");
       }
     };
+    const bandExtent = (band, ln) => ({
+      y: ln.y, h: ln.h,
+      x0: Math.min(...band.map((p) => p.item.transform[4])),
+      x1: Math.max(...band.map((p) => p.item.transform[4] + (p.item.width ?? 0))),
+    });
+    const tableLines = []; // confirmed table rows (skipped via cells) — for cohesion
     for (const ln of lines) {
       const its = ln.items;
       const starts = [0];
@@ -516,8 +538,50 @@ export class TypographyEngine {
           // wide column gaps on one baseline. Running prose is spared (a
           // justified line shows wide gaps but has ≥4 lowercase words).
           for (const p of band) { skip.add(p.div); dbg(p.div, "line-cells"); }
+          if (band.length) tableLines.push(bandExtent(band, ln));
+        } else if (maxCells([{ items: band }], 2.2) >= 4) {
+          // A table row whose cell holds a full phrase (so it has ≥4 lowercase
+          // words and escapes the rule above): if it ALSO has ≥4 wide gaps
+          // (>2.2× line height — true column boundaries that justification never
+          // produces, as its stretched spaces stay well under that), it is still
+          // a table row. Skip it so its mask doesn't white out the table's rules
+          // and make the table unreadable (F3).
+          for (const p of band) { skip.add(p.div); dbg(p.div, "line-cells-wide"); }
+          if (band.length) tableLines.push(bandExtent(band, ln));
         } else if (isBold(lead)) {
           skipHeadingRun(its, a);
+        }
+      }
+    }
+
+    // Table-region pass (F3). A table row whose cell holds a full phrase (≥4
+    // lowercase words), or a tall cell's wrapped continuation lines (only that
+    // cell's words, no column gaps), escape the per-row table tests above and
+    // would be processed — the resulting white masks then cover the table's
+    // rules and make it unreadable. Group the CONFIRMED table rows (skipped via
+    // cells, ≥4 wide gaps & few lowercase words — justified prose never qualifies)
+    // into table regions and skip every span inside each region's bounding box,
+    // so the whole table stays on the canvas. Body above/below the table is
+    // outside the box; justified prose forms no region.
+    if (tableLines.length >= 2) {
+      const rowsT = tableLines.slice().sort((a, b) => b.y - a.y); // top → bottom
+      const regions = [];
+      for (const t of rowsT) {
+        const reg = regions.find((r) =>
+          r.yBot - t.y >= -1 && r.yBot - t.y < Math.max(t.h, r.h) * 4 && t.x0 < r.x1 + 2 && t.x1 > r.x0 - 2);
+        if (reg) { reg.yBot = Math.min(reg.yBot, t.y); reg.x0 = Math.min(reg.x0, t.x0); reg.x1 = Math.max(reg.x1, t.x1); reg.h = Math.max(reg.h, t.h); reg.n++; }
+        else regions.push({ yTop: t.y, yBot: t.y, x0: t.x0, x1: t.x1, h: t.h, n: 1 });
+      }
+      for (const reg of regions) {
+        if (reg.n < 2) continue; // a single stray multi-gap row isn't a table
+        for (const p of items) {
+          if (skip.has(p.div)) continue;
+          const y = p.item.transform[5];
+          const x = p.item.transform[4];
+          if (y <= reg.yTop + reg.h * 0.5 && y >= reg.yBot - reg.h * 1.2 && x >= reg.x0 - 2 && x <= reg.x1 + 2) {
+            skip.add(p.div);
+            dbg(p.div, "table-region");
+          }
         }
       }
     }
@@ -556,10 +620,13 @@ export class TypographyEngine {
         // Absorb the caption's own continuation lines only — captions are
         // short. A small line cap and a tighter gap stop the sweep from
         // running on into the body paragraph that follows the caption.
-        for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 6; m++) {
+        for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 4; m++) {
           const bandM = lines[m].items.filter(inBand);
           if (!bandM.length) continue;
-          if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.5) break; // gap
+          // A paragraph break (the body paragraph after the caption) shows a
+          // slightly larger gap than caption-internal leading; 1.3× catches it
+          // while sparing tight multi-line captions (F2: stop eating body).
+          if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.3) break; // gap
           if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
           if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
           // A new in-text reference sentence ("Figure 8 shows …") is body prose,
@@ -779,6 +846,9 @@ export class TypographyEngine {
     };
     const skipSet = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold);
     for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
+    // Tag bibliography-region spans so the references feature can skip annotating
+    // the reference list's own "[N]" entry markers with citation cards (F1).
+    for (const p of allPairs) if (p.div && inRefsBox(p.item)) p.div.dataset.fxRefs = "1";
     // Body-text height for the size filter. Prefer the document-wide body
     // height (from the references extractor, which reads every page) — a single
     // page can be dominated by small text (an appendix beside a big table, a
