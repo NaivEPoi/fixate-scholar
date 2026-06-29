@@ -5,3 +5,4 @@ dist/
 *.zip
 test/fixtures/*.pdf
 test/out/
+scratch_*
