@@ -4,7 +4,35 @@ Produced by the per-page audit (`test/review-capture.mjs` overlays +
 `test/review-workflow.mjs` review/verify). Each issue is verified against the
 screenshot before listing. Rules: `TESTING.md` Section 3.
 
-Status: **review complete; F1 + F2 + F3 all FIXED & validated.**
+Status: **review complete; F1-F5 all FIXED & validated.**
+
+### Round 2 (2026-07-08) — 5 new papers from the updated yilud.me
+Corpus grew to 12 papers (5GCVerif, 5GShield, AFC-Diss, ACL, UC-Scheme added;
+82 new pages captured & reviewed). New findings, all fixed:
+- **F5 (HIGH) — citations silently disabled on narrow-gutter templates.**
+  extractor.mjs joined items within 2× font height; ACL/LNCS-style gutters
+  (~1.8×h) fit under that, so the left column's last words merged with the right
+  column's "References" heading → heading regex never matched → parseReferences
+  returned 0 entries → `annotatePage` never ran: **zero citation cards/coloring
+  on the whole document** (ACL + 5GShield). Fix: a join that crosses the page
+  center is only allowed at word-space scale (<0.8×h) — full-width lines still
+  join (word spaces are ~0.3×h), gutters never do. Validated: ACL 0→91 entries
+  (author-year citations now colored + carded), 5GShield 0→67; refs pages
+  correctly untouched (ACL p13). Bonus: fixed entry parsing on the old corpus
+  (F 13→23 refs, arXiv 47→68).
+- **F2 residual — 3-row caption+body merged block.** The ≥5-row guard missed a
+  caption merged with just 2 body lines (5GCVerif p03 "NF interactions. Figure 2
+  shows…"). Lowered to ≥3 rows; genuine ≤4-line captions are still fully skipped
+  by the dedicated caption pass. Validated: p03 body freed, captions stay red.
+- **REF_PROSE parenthetical.** "Listing 3 (representative of CVE-…, simplified
+  for exposition), we place…" — a body sentence — was caption-skipped because "("
+  follows the number (ACL p19). REF_PROSE now accepts `(`+lowercase as prose.
+  Validated: p19 done 93→98, caption-absorb 0; real "Listing 3:" caption still red.
+- Verified correct (no change needed): 5GCVerif p08 Table 4 (prose-filled cells
+  correctly red), UC-Scheme p16 + ACL p13 bibliographies untouched, AFC-Diss
+  clean, 5GShield table-region fired (p3/p11), ACL long wrapped captions
+  correctly absorbed, sequence-diagram labels not damaging figures.
+- Regression: npm test 32/32; papers.mjs 7/7 PASS ×3.
 
 ### Fix results (2026-06-22)
 - **F1 FIXED** — engine tags refs-region spans `data-fx-refs`; `citations.mjs`

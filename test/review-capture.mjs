@@ -24,6 +24,12 @@ const PAPERS = {
   "Two-column E": "https://yilud.me/SIB-Auth.pdf",
   "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
   "arXiv": "https://arxiv.org/pdf/1706.03762",
+  // Added 2026-07 from the updated yilud.me publications list.
+  "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
+  "5GShield": "https://yilud.me/5GShield.pdf",
+  "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",
+  "ACL": "https://yilud.me/2026.acl-long.2136.pdf",
+  "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
 };
 const ONLY = process.argv.slice(2).find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe"));
 const TARGETS = ONLY ? [ONLY] : Object.keys(PAPERS);

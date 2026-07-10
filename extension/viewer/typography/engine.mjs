@@ -289,11 +289,19 @@ export class TypographyEngine {
     const HEAD_LEAD = /^(?:\d+(?:\.\d+)*\.?|[A-Z]\d*[.:]|[IVX]{1,5}\.)(?:$|\s+[A-Z(])/;
     const ALGO_LEAD = /^(?:\d{1,3}:|Require:|Ensure:|Input:|Output:|Algorithm\s+\d+)/;
     // An in-text reference opening a running sentence ("Figure 5 shows …",
-    // "Table 8 lists …", "Algorithm 1 in Appendix …"): the label+number is
-    // followed by a LOWERCASE word, so it is body prose, not a caption or a
-    // listing header (those read "Figure 5: …", "Figure 5. …", "Algorithm 1
-    // StateSynth", or stand alone). Such lines must be emphasized, not skipped.
-    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|Tab(?:le)?|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*\d+[a-z]?\s*[,;.]?\s+[a-zà-ÿ]/;
+    // "Table 8 lists …", "Algorithm 1 in Appendix …", "Listing 3
+    // (representative of …"): the label+number is followed by a LOWERCASE word
+    // — directly or inside a parenthetical — so it is body prose, not a caption
+    // or a listing header (those read "Figure 5: …", "Figure 5. …",
+    // "Algorithm 1 StateSynth", or stand alone). Such lines must be
+    // emphasized, not skipped.
+    // Punctuation after the number may be a run of closers — a WRAPPED in-text
+    // ref line can start "Figure 4), and (v) restarting …". A colon is NOT in
+    // the class: "Figure 5: …" is always a caption. The parenthetical
+    // alternative requires ≥2 lowercase letters so a single-letter SUBFIGURE
+    // label — "Figure 5 (a) …", a caption — is not mistaken for prose
+    // ("Listing 3 (representative of …" still is).
+    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|Tab(?:le)?|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*\d+[a-z]?\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})/;
     const isCaptionLead = (t) => CAP_LEAD.test(t) && !REF_PROSE.test(t);
     const isAlgoLead = (t) => ALGO_LEAD.test(t) && !REF_PROSE.test(t);
 
@@ -453,14 +461,17 @@ export class TypographyEngine {
         if (isCaptionLead(b.lead)) {
           const prev = blocks[bi - 1];
           if (prev && b.yTop - prev.yBot < pageH * 0.16 && lowerWords(prev.items) < 5) skipBlock(prev, "blk-capprev");
-          // A caption is short. A LONG, prose-dense caption-led block is a
+          // A caption is short. A prose-dense caption-led block of ≥3 rows is a
           // caption that block-grouping MERGED with the body paragraph below it
           // (no whitespace gap between them); skipping it whole would drop the
-          // body (the round-4 regression — A p10/p14, C p08/p11, F p04). Leave
-          // such a block to the dedicated caption pass (which skips only the
-          // caption lead + its short continuation) so the body is processed.
-          // Genuine captions (≤4 lines) are still skipped whole here.
-          const captionBodyMerged = b.rows.length >= 5 && lc >= b.rows.length * 4;
+          // body (the round-4 regression — A p10/p14, C p08/p11, F p04, and at
+          // ≥3 rows 5GCVerif p03's caption + two body lines). Leave such a
+          // block to the dedicated caption pass (which skips only the caption
+          // lead + its short continuation) so the body is processed. Genuine
+          // short captions still end up fully skipped: 1-2-row caption blocks
+          // are skipped whole here, and a 3-4-line dense caption that is spared
+          // here is consumed by the caption pass's lead+absorption instead.
+          const captionBodyMerged = b.rows.length >= 3 && lc >= b.rows.length * 4;
           if (!captionBodyMerged) skipBlock(b, "blk-caption");
           continue;
         }
