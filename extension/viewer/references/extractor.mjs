@@ -38,6 +38,7 @@ export async function extractLines(pdfDocument) {
       }
     }
     const lines = [];
+    const centerX = page.view[0] + pageWidth / 2;
     for (const r of rows) {
       r.items.sort((a, b) => a.x - b.x);
       let cur = null;
@@ -46,10 +47,20 @@ export async function extractLines(pdfDocument) {
         // height in typical two-column templates) while exceeding word spacing
         // — sized by the smaller item so a large heading can't inflate it.
         // Items in clearly different font sizes never share a line.
+        // Some templates (ACL, LNCS) use a NARROW gutter (~1.8× font height)
+        // that fits under the 2× threshold, merging the left column's last
+        // words with the right column's first (e.g. body + the "References"
+        // heading — which then never matches the heading regex and disables
+        // the whole citations feature). A gutter gap straddles the page
+        // CENTER; a genuine full-width line only ever has word-sized spaces
+        // there. So a gap that crosses the center may only be bridged when it
+        // is word-spacing sized (< 0.8× the font height).
         const gap = cur ? it.x - cur.endX : 0;
+        const crossesCenter = cur && cur.endX < centerX && it.x > centerX;
+        const joinMax = Math.min(cur ? cur.h : it.h, it.h) * (crossesCenter ? 0.8 : 2);
         const differentFont =
           cur && Math.abs(cur.h - it.h) > Math.max(cur.h, it.h) * 0.25;
-        if (cur && !differentFont && gap < Math.min(cur.h, it.h) * 2) {
+        if (cur && !differentFont && gap < joinMax) {
           cur.text += (gap > Math.max(cur.h, it.h) * 0.15 ? " " : "") + it.str;
           cur.endX = Math.max(cur.endX, it.x + it.w);
         } else {

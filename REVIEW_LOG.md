@@ -29,7 +29,34 @@ Papers (yilud.me, from test/review-capture.mjs `PAPERS`):
 
 Review method: per-page JSON triage across all 99 pages (cheap) + visual
 confirmation of flagged pages (A p10, C p08). Findings consolidated in
-REVIEW_FINDINGS.md (F1/F2/F3). Review COMPLETE.
+REVIEW_FINDINGS.md (F1/F2/F3). Review COMPLETE for the original corpus.
+
+## Round 2 (2026-07-08): updated yilud.me — 5 NEW papers
+
+Enumerated from https://yilud.me/sitemap.xml → publication pages (11 pubs total;
+6 were already in the corpus). New entries added to test/review-capture.mjs:
+
+| Paper | PDF | Pages | Captured | Reviewed | Issues |
+|---|---|---|---|---|---|
+| 5GCVerif | /5GCVerif-ccs23.pdf | 15 | ☑ | ☑ | F2-residual p03 (fixed); p08 Table 4 verified correct |
+| 5GShield | /5GShield.pdf | 20 | ☑ | ☑ | F5 cites=0 (fixed: 0→67 entries) |
+| AFC-Diss | /afc_testing_DISS.pdf | 4 | ☑ | ☑ | clean |
+| ACL | /2026.acl-long.2136.pdf | 25 | ☑ | ☑ | F5 cites=0 (fixed: 0→91 entries); p19 REF_PROSE paren (fixed) |
+| UC-Scheme | /UC_Scheme.pdf | 18 | ☑ | ☑ | clean (p16 = refs page, correctly untouched; table-region fired p8 ✓) |
+
+Round-2 findings (all FIXED, see REVIEW_FINDINGS.md):
+- **F5 (HIGH):** extractor merged narrow-gutter columns (ACL ~18pt gutter < the 2×h
+  join threshold) → "References" heading merged with the other column's text →
+  never matched → 0 entries → the ENTIRE citations feature silently disabled on
+  ACL + 5GShield. Fix (extractor.mjs): a gap crossing the page CENTER only joins
+  at word-space scale (<0.8×h). ACL 0→91 entries (author-year cites now blue),
+  5GShield 0→67. Side benefit: better parsing on old corpus (F 13→23, arXiv 47→68).
+- **F2 residual:** caption + 2 body lines = 3-row merged block, under the ≥5-row
+  guard → threshold lowered to ≥3 (5GCVerif p03 freed; genuine ≤4-line captions
+  still fully skipped via the caption pass).
+- **REF_PROSE paren:** "Listing 3 (representative of …" body sentence skipped as a
+  caption (ACL p19) → REF_PROSE accepts a parenthetical lowercase continuation.
+- Regression after all fixes: npm test 32/32; papers.mjs 7/7 PASS (run 3×).
 
 Capture tool: `test/review-capture.mjs`. Review workflow: `test/review-workflow.mjs`
 (run via the Workflow tool with `args` = enumerated page items). Spot-check of
