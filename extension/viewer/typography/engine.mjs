@@ -35,6 +35,12 @@ const SPECIAL_FONT = new RegExp(
 // duplicate states."). Kept (masked + redrawn) bold text renders lighter than
 // the canvas, so such headings are skipped to the canvas instead.
 const BOLD_FONT = /Bold|bold|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])/;
+// Italic faces — used ONLY for styled run-in paragraph leads ("Establishing
+// privacy-preserving mutual authentication …:" set in underlined italics):
+// processing such a lead erases its UNDERLINE (canvas art hugging the glyphs)
+// with the mask. Ordinary inline italic emphasis is untouched (the rule below
+// requires the italic run to open the line and end with a colon).
+const ITALIC_FONT = /Italic|italic|Oblique|Slanted|cmti|cmmi|-It(?![a-z])|Libertine\w*I(?![a-zA-Z])/;
 
 // Bundled reading fonts (SIL OFL, vendored by scripts/fetch-pdfjs.mjs);
 // @font-face rules live in overlay.css. These ship real 700 weights, so
@@ -276,11 +282,15 @@ export class TypographyEngine {
    *   4. classify each block; everything that is not body text is skipped.
    * Captions are skipped whole — treated as part of their figure/table.
    */
-  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold) {
+  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic) {
     const skip = new Set();
+    // Divs whose SURROUNDINGS carry structural canvas art hugging the text (a
+    // displayed formula's box frame): masks of neighbouring lines must clamp a
+    // margin away from these, not just off their glyphs.
+    const protect = new Set();
     const items = allPairs.filter((p) => p.item?.transform && p.item.str.trim());
     const lines = this.#lineGroups(items);
-    if (!lines.length) return skip;
+    if (!lines.length) return { skip, protect };
 
     const centerX = vx0 + pageW * 0.5;
     const LOWER_WORD = /^[a-zà-ÿ]{2,}$/;
@@ -339,6 +349,109 @@ export class TypographyEngine {
         if (isSpecial(p)) s += n;
       }
       return t ? s / t : 0;
+    };
+    // Aligned-gap table pass (stream level — the block cutter often splits a
+    // table into 1-2-row blocks, so this can't run per block). A table's cell
+    // boundary produces an inter-item gap containing the SAME x on row after
+    // row; justified prose also stretches spaces past 1.4× line height, but at
+    // VARYING positions, so consecutive prose rows never share one x. For each
+    // stream, find runs of rows sharing a gap-x: ≥3 rows with the gap (rows
+    // wholly on one side of x — wrapped description-cell lines, short label
+    // cells — are absorbed into the run). Everything in the run is a table:
+    // processing its prose cells would lay masks across the table's rules
+    // (whiting out row/column lines) and ghost the cell text where the mask is
+    // clamped by neighbouring cells. Bullet/numbered lists indent at the row
+    // START (no inter-item gap), so they never seed a run.
+    // splitX (the page-centre gutter) — when given, gaps containing splitX are
+    // NEVER band candidates (a two-column page's merged left+right baselines
+    // all share the gutter gap at the same x, which would read as a giant
+    // aligned table), and a detected run skips only the row SEGMENT on the
+    // band's side of the gutter (so a table in one column can't swallow the
+    // other column's body sharing its baselines).
+    const skipAlignedTable = (rows, splitX = null) => {
+      if (rows.length < 3) return;
+      const sorted = rows.slice().sort((a, b) => b.y - a.y); // top → bottom
+      const gapsOf = (r) => {
+        const g = [];
+        for (let k = 1; k < r.items.length; k++) {
+          const prev = r.items[k - 1].item;
+          const a = prev.transform[4] + (prev.width ?? 0);
+          const bx = r.items[k].item.transform[4];
+          if (bx - a > Math.max(prev.height || 8, r.items[k].item.height || 8) * 1.4 &&
+              !(splitX != null && a < splitX && bx > splitX)) g.push([a, bx]);
+        }
+        return g;
+      };
+      // Items of the row segment containing the band (split at the gutter gap
+      // when one exists); the whole row when no gutter gap crosses it.
+      const segItems = (r, band) => {
+        if (splitX == null) return r.items;
+        let cut = null;
+        for (let k = 1; k < r.items.length; k++) {
+          const a = r.items[k - 1].item.transform[4] + (r.items[k - 1].item.width ?? 0);
+          const bx = r.items[k].item.transform[4];
+          if (a < splitX && bx > splitX && bx - a > 2) { cut = (a + bx) / 2; break; }
+        }
+        if (cut == null) return r.items;
+        const mid = (band[0] + band[1]) / 2;
+        return mid < cut ? r.items.filter((p) => p.item.transform[4] < cut) : r.items.filter((p) => p.item.transform[4] >= cut);
+      };
+      const gaps = sorted.map(gapsOf);
+      // ALL inter-item gaps of a row (no minimum width) — a full cell still
+      // leaves its small word-gap at the column boundary.
+      const allGapsOf = (r) => {
+        const g = [];
+        for (let k = 1; k < r.items.length; k++) {
+          const prev = r.items[k - 1].item;
+          const a = prev.transform[4] + (prev.width ?? 0);
+          const bx = r.items[k].item.transform[4];
+          if (bx - a > 1) g.push([a, bx]);
+        }
+        return g;
+      };
+      for (let i = 0; i < sorted.length; i++) {
+        let bestLast = -1;
+        let bestBand = null;
+        for (const g0 of gaps[i]) {
+          // The column boundary is wherever the rows' gaps keep a COMMON
+          // interval — cells fill their column to different widths, so probe
+          // the running INTERSECTION of gaps, not a fixed x.
+          let band = g0.slice();
+          let withGap = 1;
+          let last = i;
+          let ext = i;
+          for (let j = i + 1; j < sorted.length; j++) {
+            if (sorted[j - 1].y - sorted[j].y > Math.max(sorted[j].h, sorted[j - 1].h) * 2.5) break; // vertical gap — table ended
+            // Wide gap intersecting the band → shrink the band, strong row.
+            let hit = null;
+            for (const [a, b] of gaps[j]) {
+              const lo = Math.max(band[0], a);
+              const hi = Math.min(band[1], b);
+              if (hi - lo >= 1.5 && (!hit || hi - lo > hit[1] - hit[0])) hit = [lo, hi];
+            }
+            if (hit) { band = hit; withGap++; last = j; ext = j; continue; }
+            // No wide gap. A SMALL gap still intersecting the band is a full
+            // cell word-breaking at the boundary ("…initi-│Only …"); a row
+            // wholly on one side of the band is a wrapped cell line or label.
+            // Both extend the table, but at most 2 rows past the last strong
+            // row so the run can't creep into the body below. A row COVERING
+            // the band with glyphs is running prose — the run is over.
+            const smallHit = allGapsOf(sorted[j]).some(([a, b]) => Math.min(band[1], b) - Math.max(band[0], a) >= 1.5);
+            const oneSide =
+              sorted[j].items.every((p) => p.item.transform[4] + (p.item.width ?? 0) <= band[0] + 1) ||
+              sorted[j].items.every((p) => p.item.transform[4] >= band[1] - 1);
+            if ((!smallHit && !oneSide) || j - last > 2) break;
+            ext = j;
+          }
+          if (withGap >= 3 && ext > bestLast) { bestLast = ext; bestBand = band; }
+        }
+        if (bestLast >= 0) {
+          for (let k = i; k <= bestLast; k++) {
+            for (const p of segItems(sorted[k], bestBand)) { skip.add(p.div); dbg(p.div, "table-aligned"); }
+          }
+          i = bestLast; // resume after the table
+        }
+      }
     };
 
     // Reference body-text height: char-weighted mode over the whole page.
@@ -488,10 +601,17 @@ export class TypographyEngine {
         if (b.rows.length <= 2 && lc <= 3 &&
             (HEAD_LEAD.test(b.lead) || b.leadBold || b.h > dominant * 1.15)) { skipBlock(b, "blk-heading"); continue; }
         // Figure label / displayed equation: almost no prose, with a non-body
-        // face, an off-body size, or just a few glyphs. A short trailing prose
-        // line that is an in-text reference ("…in Algorithm 1 in Appendix A.")
-        // has few lowercase words but IS body — spare it (REF_PROSE).
-        if (lc < 2 && (spc >= 0.3 || offSize || b.items.length <= 3) && !REF_PROSE.test(b.lead)) { skipBlock(b, "blk-figlabel"); continue; }
+        // face, an off-body size, just a few glyphs, or symbol-dense text (a
+        // displayed formula like "(regReq/authReq)·(¬(deregReq/deregAcpt))*"
+        // is set in a body-sized text face — no font/size signal — but its
+        // punctuation density is far above prose; processing it erases the
+        // formula's box frame with masks). A short trailing prose line that is
+        // an in-text reference ("…in Algorithm 1 in Appendix A.") has few
+        // lowercase words but IS body — spare it (REF_PROSE).
+        const blockText = b.items.map((p) => p.item.str).join("");
+        const nonSpace = blockText.replace(/\s/g, "");
+        const punct = nonSpace.length ? (nonSpace.match(/[^A-Za-z0-9À-ɏ]/g) || []).length / nonSpace.length : 0;
+        if (lc < 2 && (spc >= 0.3 || offSize || b.items.length <= 3 || punct >= 0.15) && !REF_PROSE.test(b.lead)) { skipBlock(b, "blk-figlabel"); continue; }
         // Off-size block with little prose (footnotes, sub/superscript rows).
         if (offSize && lc < 4) { skipBlock(b, "blk-offsize"); continue; }
 
@@ -499,6 +619,16 @@ export class TypographyEngine {
         if (b.leadBold || HEAD_LEAD.test(b.lead)) skipLeadRun(b);
       }
     }
+
+    // Prose-cell tables (see skipAlignedTable): detected per stream, across
+    // block boundaries. ALSO run over the unsplit lines — a table row whose
+    // cell protrudes past the page centre is assigned to the full stream while
+    // its neighbours go to left/right, hiding the table from every stream; the
+    // whole-line pass sees them adjacent again (the gutter is excluded from
+    // band candidates and the skip is segment-bounded, so merged two-column
+    // body baselines are never swept).
+    for (const region of regions) skipAlignedTable(region);
+    if (twoColumn) skipAlignedTable(lines, centerX);
 
     // Line-level heading pass (independent of block grouping, which can merge a
     // heading line into the paragraph below it). At each column's start: a short
@@ -513,6 +643,42 @@ export class TypographyEngine {
         if (!isSpecial(its[j]) && !glyphBit) break; // first body word
         skip.add(its[j].div);
         dbg(its[j].div, "runin");
+      }
+    };
+    // Styled (often UNDERLINED) italic run-in lead: "Establishing
+    // privacy-preserving mutual authentication …:" / "P1: Preventing identity
+    // exposure:" opening a paragraph. Processing it would erase the underline
+    // (canvas art hugging the glyphs) with the mask, so keep the italic run on
+    // the canvas — same policy as bold run-ins. Only runs that OPEN the line
+    // and terminate at a COLON qualify (possibly wrapping onto the next 1-2
+    // lines); ordinary inline italic emphasis stays processed. Short UPRIGHT
+    // entity names inside the italics ("… between UE and gNB under MA+:") may
+    // interleave; a longer roman word ends the run (ordinary body follows).
+    const skipItalicLead = (ln, its, a, bx0, bx1) => {
+      const runDivs = [];
+      let ended = false;
+      let rows = 0;
+      for (let m = lines.indexOf(ln); m < lines.length && rows < 3 && !ended; m++, rows++) {
+        const bandM = (rows === 0 ? its.slice(a) : lines[m].items).filter(
+          (p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1,
+        );
+        if (!bandM.length) break;
+        let any = false;
+        for (const p of bandM) {
+          const t = p.item.str.trim();
+          const glyphBit = t.length < 2 || !/[A-Za-zÀ-ÿ]/.test(t);
+          const shortRoman = t.length <= 5;
+          if (!isItalic(p) && !glyphBit && !shortRoman) { ended = true; break; }
+          runDivs.push(p);
+          any = true;
+          if (/:\s*$/.test(t)) { ended = true; break; }
+        }
+        if (!any) break;
+      }
+      // Qualify only when the run terminates at a colon (a lead-in), not for a
+      // full italic sentence or block (quotes, definitions, theorem bodies).
+      if (ended && runDivs.length && /:\s*$/.test(runDivs.at(-1).item.str.trim())) {
+        for (const p of runDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-ital"); }
       }
     };
     const bandExtent = (band, ln) => ({
@@ -542,8 +708,22 @@ export class TypographyEngine {
           // prose between bold keywords.
           for (const p of band) { skip.add(p.div); dbg(p.div, "line-algo"); }
         } else if (HEAD_LEAD.test(leadStr)) {
-          if (lowerWords(band) <= 3) for (const p of band) { skip.add(p.div); dbg(p.div, "line-head"); }
+          if (lowerWords(band) <= 3) {
+            for (const p of band) {
+              skip.add(p.div);
+              dbg(p.div, "line-head");
+              // An italic-led heading line is often UNDERLINED ("P1:
+              // Preventing identity exposure:"); protect it so the next
+              // line's mask padding clamps a margin below the underline
+              // instead of exactly at the em box (which erases the line).
+              if (isItalic(lead)) protect.add(p.div);
+            }
+          }
           else if (isSpecial(lead)) skipHeadingRun(its, a);
+          // A label-led sentence whose label + lead-in is styled italic
+          // ("P1: Preventing identity exposure: During both …") — skip the
+          // underlined italic lead run, process the rest as body.
+          else if (isItalic(lead)) skipItalicLead(ln, its, a, bx0, bx1);
         } else if (maxCells([{ items: band }]) >= 4 && lowerWords(band) < 4) {
           // A table row that block grouping merged into a text block: several
           // wide column gaps on one baseline. Running prose is spared (a
@@ -559,8 +739,43 @@ export class TypographyEngine {
           // and make the table unreadable (F3).
           for (const p of band) { skip.add(p.div); dbg(p.div, "line-cells-wide"); }
           if (band.length) tableLines.push(bandExtent(band, ln));
+        } else if (band.length >= 3 && lowerWords(band) === 0 &&
+                   (() => { const t = band.map((p) => p.item.str).join("").replace(/\s/g, ""); return t.length >= 8 && ((t.match(/[^A-Za-z0-9À-ɏ]/g) || []).length / t.length) >= 0.15; })()) {
+          // Displayed formula in a body-sized TEXT face ("(regReq/authReq) ·
+          // (¬(deregReq/deregAcpt))* · (authRsp/SMCmd)"): no font/size signal,
+          // and its camelCase identifiers pass the per-span word check — but a
+          // formula line has NO lowercase dictionary words and far more
+          // punctuation than prose. Processing it erases its box frame /
+          // operators with masks; keep the whole line on the canvas.
+          for (const p of band) { skip.add(p.div); protect.add(p.div); dbg(p.div, "line-formula"); }
         } else if (isBold(lead)) {
           skipHeadingRun(its, a);
+        } else if (isItalic(lead) && !skip.has(lead.div)) {
+          skipItalicLead(ln, its, a, bx0, bx1);
+        } else if (!skip.has(lead.div) && /^[A-Z]/.test(leadStr) &&
+                   ax > bx0 + (lead.item.height || 8) * 0.6) {
+          // Regular-weight run-in heading, usually UNDERLINED ("Effectiveness
+          // of ConnSentinel. On our dataset …"): an INDENTED paragraph start
+          // opening with a short sentence — ≤5 words ending in a period,
+          // followed by more prose. There is no font signal (not bold, not
+          // italic), but processing it erases the underline with the mask.
+          // Skip + protect just the short lead run; the paragraph body after
+          // it is processed normally. A paragraph whose first sentence is
+          // genuinely short loses emphasis on ≤5 words — harmless — and
+          // non-indented (justified) lines never enter this branch.
+          const runDivs = [];
+          let words = 0;
+          let closed = false;
+          for (let j = a; j < its.length && !closed; j++) {
+            const t = its[j].item.str.trim();
+            words += t ? t.split(/\s+/).length : 0;
+            if (words > 5) break;
+            runDivs.push(its[j]);
+            if (/[.]\s*$/.test(t)) closed = true;
+          }
+          if (closed && runDivs.length && runDivs.at(-1) !== its.at(-1)) {
+            for (const p of runDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-short"); }
+          }
         }
       }
     }
@@ -652,7 +867,7 @@ export class TypographyEngine {
         }
       }
     }
-    return skip;
+    return { skip, protect };
   }
 
   /** Dominant body-text height (weighted by character count). */
@@ -750,6 +965,110 @@ export class TypographyEngine {
     return ratio;
   }
 
+  /**
+   * Long, thin dark runs on the PAINTED page canvas — table rules, box frames,
+   * underlines, footnote separators — returned as viewport-CSS rects. This is
+   * canvas ART the text layer knows nothing about, so masks must clamp around
+   * these exactly like text obstacles (otherwise a processed neighbour's mask
+   * whites out the rule/underline). Best-effort: returns [] when the canvas is
+   * unavailable or not yet painted (off-screen prefetch) — correctness never
+   * depends on it, coverage just improves when it works. The canvas is painted
+   * before textlayerrendered fires, so the visible-page process pass sees it.
+   * Guards against false positives from glyph rows: a run must be ≥60 CSS px
+   * long, ≤3 CSS px thick after band-merge, and ISOLATED (the rows just above
+   * and below the band are mostly light within its x-extent — an in-glyph row
+   * fails because the glyphs continue above/below).
+   */
+  #detectCanvasRules(pageView) {
+    const out = [];
+    try {
+      const canvas = pageView.canvas || pageView.div.querySelector("canvas");
+      if (!canvas || !canvas.width) return out;
+      const cr = canvas.getBoundingClientRect();
+      if (!(cr.width > 0) || !(cr.height > 0)) return out;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      let data;
+      try { data = ctx.getImageData(0, 0, canvas.width, canvas.height).data; } catch { return out; }
+      const W = canvas.width, H = canvas.height;
+      const sx = cr.width / W, sy = cr.height / H;
+      const isDark = (x, y) => { const i = (y * W + x) * 4; return data[i + 3] > 40 && 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] < 140; };
+      const darkFrac = (x0, x1, y) => {
+        if (y < 0 || y >= H) return 0;
+        let n = 0, d = 0;
+        for (let x = x0; x < x1; x += 2) { n++; if (isDark(x, y)) d++; }
+        return n ? d / n : 0;
+      };
+      const minLen = Math.max(24, Math.round(60 / sx)); // ≥60 CSS px
+      const maxThick = Math.max(2, Math.round(3 / sy)); // ≤3 CSS px
+      // Horizontal runs per row → merge vertically adjacent runs into bands.
+      const bands = []; // {y0,y1,x0,x1}
+      for (let y = 0; y < H; y++) {
+        let run = 0, x0 = 0;
+        for (let x = 0; x <= W; x++) {
+          if (x < W && isDark(x, y)) { if (!run) x0 = x; run++; continue; }
+          if (run >= minLen) {
+            const x1 = x;
+            const prev = bands.findLast?.((b) => b.y1 === y - 1 && x0 < b.x1 + 4 && x1 > b.x0 - 4) ??
+              bands.slice().reverse().find((b) => b.y1 === y - 1 && x0 < b.x1 + 4 && x1 > b.x0 - 4);
+            if (prev) { prev.y1 = y; prev.x0 = Math.min(prev.x0, x0); prev.x1 = Math.max(prev.x1, x1); }
+            else if (bands.length < 800) bands.push({ y0: y, y1: y, x0, x1 });
+          }
+          run = 0;
+        }
+      }
+      for (const b of bands) {
+        if (b.y1 - b.y0 + 1 > maxThick) continue; // too thick — a filled area/image
+        // Isolation: rows just outside the band are mostly light in its span.
+        if (darkFrac(b.x0, b.x1, b.y0 - 2) > 0.35 || darkFrac(b.x0, b.x1, b.y1 + 2) > 0.35) continue;
+        out.push({
+          left: cr.left + b.x0 * sx - 1,
+          right: cr.left + b.x1 * sx + 1,
+          top: cr.top + b.y0 * sy - 1,
+          bottom: cr.top + (b.y1 + 1) * sy + 1,
+        });
+        if (out.length >= 400) break;
+      }
+      // Vertical rules (cell borders, listing frames) — the same scan
+      // transposed. Column step 1, run down y; merge horizontally adjacent.
+      const darkFracV = (y0, y1, x) => {
+        if (x < 0 || x >= W) return 0;
+        let n = 0, d = 0;
+        for (let y = y0; y < y1; y += 2) { n++; if (isDark(x, y)) d++; }
+        return n ? d / n : 0;
+      };
+      const minLenV = Math.max(24, Math.round(60 / sy));
+      const maxThickV = Math.max(2, Math.round(3 / sx));
+      const vbands = []; // {x0,x1,y0,y1}
+      for (let x = 0; x < W; x++) {
+        let run = 0, y0 = 0;
+        for (let y = 0; y <= H; y++) {
+          if (y < H && isDark(x, y)) { if (!run) y0 = y; run++; continue; }
+          if (run >= minLenV) {
+            const y1 = y;
+            const prev = vbands.slice().reverse().find((b) => b.x1 === x - 1 && y0 < b.y1 + 4 && y1 > b.y0 - 4);
+            if (prev) { prev.x1 = x; prev.y0 = Math.min(prev.y0, y0); prev.y1 = Math.max(prev.y1, y1); }
+            else if (vbands.length < 400) vbands.push({ x0: x, x1: x, y0, y1 });
+          }
+          run = 0;
+        }
+      }
+      for (const b of vbands) {
+        if (b.x1 - b.x0 + 1 > maxThickV) continue;
+        if (darkFracV(b.y0, b.y1, b.x0 - 2) > 0.35 || darkFracV(b.y0, b.y1, b.x1 + 2) > 0.35) continue;
+        out.push({
+          left: cr.left + b.x0 * sx - 1,
+          right: cr.left + (b.x1 + 1) * sx + 1,
+          top: cr.top + b.y0 * sy - 1,
+          bottom: cr.top + b.y1 * sy + 1,
+        });
+        if (out.length >= 700) break;
+      }
+    } catch {
+      /* best-effort */
+    }
+    return out;
+  }
+
   /** True when the item is set in a math/symbol/mono/small-caps/bold face.
    *  The font objects are already resolved in commonObjs once the canvas has
    *  rendered. */
@@ -781,6 +1100,22 @@ export class TypographyEngine {
     }
     cache.set(fontName, bold);
     return bold;
+  }
+
+  /** True when the item is set in an italic/oblique face — used to spot
+   *  underlined italic run-in leads (see ITALIC_FONT). */
+  #isItalicFont(pageView, fontName, cache) {
+    if (!fontName) return false;
+    if (cache.has(fontName)) return cache.get(fontName);
+    let italic = false;
+    try {
+      const font = pageView.pdfPage.commonObjs.get(fontName);
+      italic = ITALIC_FONT.test(font?.name ?? "");
+    } catch {
+      /* font not resolved — assume regular text */
+    }
+    cache.set(fontName, italic);
+    return italic;
   }
 
   async #processPage(pageView) {
@@ -842,10 +1177,13 @@ export class TypographyEngine {
     const pageH = vy1 - vy0;
     const fontCache = new Map();
     const boldCache = new Map();
+    const italicCache = new Map();
     const isSpecial = (p) =>
       this.#isSpecialFont(pageView, p.item?.fontName, fontCache);
     const isBold = (p) =>
       this.#isBoldFont(pageView, p.item?.fontName, boldCache);
+    const isItalic = (p) =>
+      this.#isItalicFont(pageView, p.item?.fontName, italicCache);
     const refsBoxes = this.#refsBoxes?.get(pageNumber);
     const inRefsBox = (item) => {
       if (!refsBoxes || !item?.transform) return false;
@@ -855,7 +1193,7 @@ export class TypographyEngine {
         (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2,
       );
     };
-    const skipSet = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold);
+    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic);
     for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
     // Tag bibliography-region spans so the references feature can skip annotating
     // the reference list's own "[N]" entry markers with citation cards (F1).
@@ -984,10 +1322,24 @@ export class TypographyEngine {
       const layerRect = textLayerDiv.getBoundingClientRect();
       if (!obstacleRects) {
         obstacleRects = [];
+        // Canvas line-art (table rules, box frames, underlines, separators)
+        // becomes obstacles too, so masks clamp around it exactly like skipped
+        // text — the text layer alone can't see these.
+        for (const r of this.#detectCanvasRules(pageView)) obstacleRects.push(r);
         for (const d of obstacleDivs) {
           if (!d.isConnected) continue;
           const r = d.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) obstacleRects.push(r);
+          if (!(r.width > 0) || !(r.height > 0)) continue;
+          if (protectSet.has(d)) {
+            // A protected span (displayed formula) has structural canvas art —
+            // its box frame — hugging the glyphs. Expand its obstacle rect
+            // vertically so neighbouring lines' mask padding clamps a margin
+            // BEFORE the frame instead of exactly at the glyphs.
+            const pad = r.height * 0.35;
+            obstacleRects.push({ left: r.left - 3, right: r.right + 3, top: r.top - pad, bottom: r.bottom + pad });
+          } else {
+            obstacleRects.push(r);
+          }
         }
       }
       // True when a rect substantially overlaps a skipped (obstacle) span.
@@ -1114,6 +1466,21 @@ export class TypographyEngine {
             else if (o.right <= rect.left) L = Math.max(L, o.right);
             else if (o.top >= r2.bottom) B = Math.min(B, o.top);
             else if (o.bottom <= r2.top) T = Math.max(T, o.bottom);
+            else {
+              // The obstacle overlaps the glyph rect itself (kerned or abutting
+              // neighbours, slight measurement overlap — e.g. the big "C" of a
+              // small-caps word next to a processed span). Pull the nearest
+              // mask edge back to exclude the intersection, capped so we never
+              // unmask most of our own glyphs: a small canvas peek of our own
+              // duplicate beats whiting out kept text that exists ONLY on the
+              // canvas.
+              const cutL = o.right - L, cutR = R - o.left, cutT = o.bottom - T, cutB = B - o.top;
+              const m = Math.min(cutL, cutR, cutT, cutB);
+              if (m === cutL && cutL <= (R - L) * 0.4) L = o.right;
+              else if (m === cutR && cutR <= (R - L) * 0.4) R = o.left;
+              else if (m === cutT && cutT <= (B - T) * 0.45) T = o.bottom;
+              else if (m === cutB && cutB <= (B - T) * 0.45) B = o.top;
+            }
           }
           if (R - L <= 0 || B - T <= 0) continue;
           const m = document.createElement("div");
