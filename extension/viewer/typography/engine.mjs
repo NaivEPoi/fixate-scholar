@@ -1267,6 +1267,15 @@ export class TypographyEngine {
       if (isSpecial({ item }) || !/[A-Za-zÀ-ɏ]/.test(trimmed) || trimmed.length < 2) {
         return false;
       }
+      // Sub/superscripts of math symbols — the "out"/"in"/"dev" under γ, S,
+      // M — are set well below body size and are only a few characters.
+      // They belong to the math cluster on the canvas: re-drawing such a
+      // fragment ghosts it a fraction off its glyph and its mask can nick
+      // the parent symbol. Footnotes/appendix small text are unaffected
+      // (their spans are full words/lines, not ≤4-char fragments).
+      if (dominant && item?.height && item.height < dominant * 0.8 && trimmed.length <= 4) {
+        return false;
+      }
       // Block classification (#classifyBlocks) owns content-type: anything not
       // body text — headings, captions, tables, figures, equations — is here.
       if (skipSet.has(div)) return false;
@@ -1325,6 +1334,11 @@ export class TypographyEngine {
       )
       .map((p) => p.div);
     let obstacleRects = null;
+    let baselineCal = null; // famKey -> measured marginTop (em) that lands overlay ink on canvas ink
+    // Key by the bare leading family name: the same face reaches spans as
+    // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12,
+    // sans-serif' (PDF.js's own), and both must hit the same entry.
+    const famKey = (f) => f.split(",")[0].replace(/["']/g, "").trim();
     let wordIndex = 0;
     let i = 0;
     // True canvas width of an item, straight from the PDF geometry. The
@@ -1379,6 +1393,82 @@ export class TypographyEngine {
           } else {
             obstacleRects.push(r);
           }
+        }
+        // Baseline snap: measure, per font family, the marginTop (em) that
+        // lands the overlay's rendered ink exactly on the canvas ink. The
+        // metric formula (ascentRatio − baselineRatio) leaves a sub-pixel to
+        // ~1px font-specific residual — enough for a processed word to sit
+        // visibly off the row of a kept neighbour (inline math, mono). The
+        // canvas still holds the original glyphs at this point (masks are
+        // DOM-side and none exist yet), so compare its ink-top under each
+        // pristine span with where the post-swap face would paint, and take
+        // the per-family median. Off-screen / CSS-stretched / low-res
+        // canvases are rejected (metric fallback keeps correctness).
+        baselineCal = new Map();
+        try {
+          const canvas = pageView.canvas;
+          const cr = canvas?.getBoundingClientRect();
+          const csx = cr && cr.width > 0 ? canvas.width / cr.width : 0;
+          const csy = cr && cr.height > 0 ? canvas.height / cr.height : 0;
+          const dpr = window.devicePixelRatio || 1;
+          if (canvas && csx > 0 && csy > dpr * 0.85) {
+            const cctx = canvas.getContext("2d", { willReadFrequently: true });
+            this.#measureCtx ??= document.createElement("canvas").getContext("2d");
+            const samples = new Map();
+            let inspected = 0;
+            for (const pair of pairs) {
+              if (inspected >= 150) break;
+              const div = pair.div;
+              const text = div.textContent;
+              if (!text || text.trim().length < 6) continue;
+              const family = this.#fontFamilyFor(pair) || div.style.fontFamily;
+              if (!family) continue;
+              const key = famKey(family);
+              let arr = samples.get(key);
+              if (!arr) samples.set(key, (arr = []));
+              if (arr.length >= 10) continue;
+              const r = div.getBoundingClientRect();
+              if (!(r.width > 40) || !(r.height > 6)) continue;
+              const x0 = Math.round((r.left - cr.left) * csx) + 2;
+              const x1 = Math.round((r.right - cr.left) * csx) - 2;
+              const y0 = Math.round((r.top - cr.top) * csy) - 3;
+              const y1 = Math.round((r.top - cr.top + r.height * 0.75) * csy);
+              if (x0 < 0 || y0 < 0 || x1 > canvas.width || y1 > canvas.height || x1 - x0 < 20) continue;
+              inspected++;
+              const img = cctx.getImageData(x0, y0, x1 - x0, y1 - y0);
+              let top = -1;
+              for (let y = 0; y < img.height && top < 0; y++) {
+                let dark = 0;
+                for (let x = 0; x < img.width; x++) {
+                  const k = (y * img.width + x) * 4;
+                  if (img.data[k] < 120 && img.data[k + 1] < 120 && img.data[k + 2] < 120 && ++dark >= 2) { top = y; break; }
+                }
+              }
+              if (top < 0) continue;
+              const canvasInkTop = (y0 + top) / csy + cr.top;
+              const fontPx = parseFloat(getComputedStyle(div).fontSize) || r.height;
+              this.#measureCtx.font = `${fontPx}px ${family}`;
+              const asc = this.#measureCtx.measureText(text).actualBoundingBoxAscent;
+              if (!(asc > 0) || !(fontPx > 0)) continue;
+              const predictedNoMargin = r.top + this.#baselineRatio(family) * r.height - asc;
+              arr.push((canvasInkTop - predictedNoMargin) / fontPx);
+            }
+            for (const [family, arr] of samples) {
+              if (arr.length < 3) continue;
+              arr.sort((a, b) => a - b);
+              const med = arr[Math.floor(arr.length / 2)];
+              if (Math.abs(med) <= 0.15) baselineCal.set(family, med);
+            }
+            if (globalThis.__fxDebug) {
+              (globalThis.__fxCal ??= []).push({
+                page: pageNumber,
+                samples: [...samples.entries()].map(([k, a]) => [k.slice(0, 24), a.length]),
+                cal: [...baselineCal.entries()].map(([k, v]) => [k.slice(0, 24), +v.toFixed(4)]),
+              });
+            }
+          }
+        } catch {
+          /* canvas unreadable — the metric fallback below still applies */
         }
       }
       // True when a rect substantially overlaps a skipped (obstacle) span.
@@ -1458,19 +1548,24 @@ export class TypographyEngine {
           span.replaceChildren(frag);
           const origFamily = span.style.fontFamily;
           const family = this.#fontFamilyFor(pair);
-          if (family && family !== origFamily) {
-            span.style.fontFamily = family;
-            // PDF.js placed the line-box top at baseline − fontHeight ×
-            // ascentRatio(origFamily) (glyph-bbox ascent of the font it
-            // assigned), so the substitute's baseline lands on the canvas
-            // baseline. Our face's RENDERED baseline sits at a different
-            // fraction, so re-seat it: shift by the difference between where
-            // PDF.js put the box (origFamily bbox ascent) and where our face
-            // actually draws its baseline (em-relative, so it survives zoom/DPI
-            // re-layout — verified aligned at 175% scaling × 125% zoom).
-            const dEm = this.#ascentRatio(origFamily) - this.#baselineRatio(family);
-            if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
-          }
+          if (family && family !== origFamily) span.style.fontFamily = family;
+          // Re-seat the baseline. Preferred: the per-family CANVAS-MEASURED
+          // margin (baselineCal) — it lands the rendered ink exactly on the
+          // canvas ink, so processed words sit in the same row as kept
+          // neighbours (inline math, mono identifiers). Fallback when the
+          // canvas wasn't measurable: the metric difference between where
+          // PDF.js put the box (origFamily bbox ascent) and where our face
+          // actually draws its baseline. Both are em-relative, so they
+          // survive zoom/DPI re-layout.
+          const fam = family || origFamily;
+          const cal = fam ? baselineCal?.get(famKey(fam)) : undefined;
+          const dEm =
+            cal !== undefined
+              ? cal
+              : family && family !== origFamily
+                ? this.#ascentRatio(origFamily) - this.#baselineRatio(family)
+                : 0;
+          if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
           span.dataset.fxDone = "1";
         }
         // Re-measure pass: one layout flush. The post-change rect is the bolded
