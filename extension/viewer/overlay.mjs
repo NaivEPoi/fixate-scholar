@@ -117,7 +117,13 @@ if (renderingQueue && typeof renderingQueue.onIdle === "function") {
 
 function applyStyleVars(s) {
   const root = document.documentElement.style;
-  root.setProperty("--fx-bold-weight", String(s.boldWeight));
+  // Bundled-face modes: the faces exist only at 400 and 700, so the weight
+  // slider ramps with the nearest real face plus a hairline stroke —
+  // 500/600 use the 400 face + stroke, 700 is the true bold, 800/900 add
+  // stroke on the 700 face. (Stroke is paint-only: no layout impact.)
+  const w = s.boldWeight;
+  root.setProperty("--fx-stack-weight", w >= 700 ? "700" : "400");
+  root.setProperty("--fx-stack-stroke", `${(w >= 700 ? w - 700 : w - 400) / 10000}em`);
   // Emphasis stroke width for original-font mode: 500 → light, 900 → heavy.
   root.setProperty("--fx-stroke", `${(s.boldWeight - 400) / 10000}em`);
   const container =

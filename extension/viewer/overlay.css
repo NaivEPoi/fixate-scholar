@@ -54,8 +54,14 @@
   color: var(--fx-text-color) !important;
 }
 
+/* Bundled reading faces ship only 400 and 700, and CSS maps a 500/600
+   request straight onto the 400 face (emphasis vanishes) while 800/900
+   collapse onto 700. Ramp with the nearest real face + a hairline stroke:
+   500/600 → 400-face + stroke, 700 → true bold, 800/900 → 700-face +
+   stroke. Both custom props are set from the weight slider in overlay.mjs. */
 #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b {
-  font-weight: var(--fx-bold-weight);
+  font-weight: var(--fx-stack-weight, 700);
+  -webkit-text-stroke: var(--fx-stack-stroke, 0) currentColor;
 }
 
 /* Embedded PDF fonts rarely ship a bold variant, and the browser's synthetic

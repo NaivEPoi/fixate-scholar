@@ -308,3 +308,19 @@ script or screenshot another extension's pages — the CDP harness is the way.)
   line-start letters in the user's screenshot did not reproduce at any zoom with current code
   (likely captured pre-reload).
 - Gates: unit 32/32, papers 7/7, diagnose B whiteout 0.
+
+### F15 — weight slider dead/empty at most stops in bundled-font modes
+- Matrix audit (`test/matrix-fonts.mjs`: 4 font modes x 3 weights x Chrome+Edge; per combo it
+  measures width residual vs the PDF item widths, collapsed word-spacing, same-line overlaps,
+  and captures a region): geometry was perfect in all 24 combos (residual <= 0.13px, 0 jams,
+  0 overlaps), but the bundled faces (Atkinson/Inter/Literata) ship only 400 and 700 weights —
+  CSS mapped a 500/600 request onto the 400 face (EMPHASIS VANISHED ENTIRELY) and 800/900 onto
+  the plain 700 face (slider dead above bold).
+- **Fix (overlay.css + overlay.mjs):** the emphasis ramp uses the nearest real face plus a
+  hairline stroke — 500/600 = 400-face + (w-400)/10000em stroke, 700 = true bold,
+  800/900 = 700-face + (w-700)/10000em stroke. Stroke is paint-only (no layout impact), and
+  original-font mode keeps its existing 400-face + stroke ramp. Verified: computed style per
+  combo now ramps monotonically and identically in Chrome and Edge.
+- Harness note: Edge's extension service worker sometimes wedges on a fresh profile (no DNR
+  redirect); matrix-fonts falls back to navigating the viewer URL directly, which Edge permits.
+- Gates: unit 32/32 + naming guard, papers 7/7.
