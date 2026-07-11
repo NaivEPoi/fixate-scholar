@@ -392,9 +392,13 @@ export class TypographyEngine {
           const bx = r.items[k].item.transform[4];
           if (a < splitX && bx > splitX && bx - a > 2) { cut = (a + bx) / 2; break; }
         }
-        if (cut == null) return r.items;
+        // No gutter gap in this row: it may live entirely in ONE column (a
+        // left-only body line swept up while the band sits in the right
+        // column). Split at the gutter itself so only the band's side is
+        // taken — for such a row that is the empty set, never the whole row.
+        const cutX = cut ?? splitX;
         const mid = (band[0] + band[1]) / 2;
-        return mid < cut ? r.items.filter((p) => p.item.transform[4] < cut) : r.items.filter((p) => p.item.transform[4] >= cut);
+        return mid < cutX ? r.items.filter((p) => p.item.transform[4] < cutX) : r.items.filter((p) => p.item.transform[4] >= cutX);
       };
       const gaps = sorted.map(gapsOf);
       // ALL inter-item gaps of a row (no minimum width) — a full cell still
@@ -446,6 +450,7 @@ export class TypographyEngine {
           if (withGap >= 3 && ext > bestLast) { bestLast = ext; bestBand = band; }
         }
         if (bestLast >= 0) {
+          if (globalThis.__fxDebug) (globalThis.__fxAligned ??= []).push({ seed: sorted[i].items.map((p) => p.item.str).join(" ").slice(0, 48), band: bestBand.map((v) => Math.round(v)), n: bestLast - i + 1, split: splitX != null, y: Math.round(sorted[i].y), h: Math.round(sorted[i].h * 10) / 10 });
           for (let k = i; k <= bestLast; k++) {
             for (const p of segItems(sorted[k], bestBand)) { skip.add(p.div); dbg(p.div, "table-aligned"); }
           }
@@ -564,7 +569,14 @@ export class TypographyEngine {
       for (let bi = 0; bi < blocks.length; bi++) {
         const b = blocks[bi];
         const lc = lowerWords(b.items);
-        const cells = maxCells(b.rows);
+        // Cell gaps must come from body-height rows. A block can merge a
+        // paragraph with the figure content below it (small-label rows whose
+        // height sits just inside the block cutter's 0.3 size tolerance); the
+        // figure labels' wide gaps then read as table cells and the whole
+        // paragraph is skipped as a table (B p10 §7.3). Off-size rows are
+        // figure labels / sub- superscript fragments, never table cells — a
+        // real table's rows share the block's height.
+        const cells = maxCells(b.rows.filter((r) => r.h >= b.h * 0.8));
         const spc = specialRatio(b.items);
         const offSize = b.h < dominant * 0.82 || b.h > dominant * 1.18;
 
@@ -596,7 +608,10 @@ export class TypographyEngine {
         // per line (a table cell has few). Without this, dense body paragraphs
         // and bulleted prose lists are wrongly skipped as tables.
         const proseDense = lc >= b.rows.length * 4;
-        if ((cells >= 3 || (spc >= 0.5 && cells >= 2)) && !proseDense) { skipBlock(b, "blk-table"); continue; }
+        if ((cells >= 3 || (spc >= 0.5 && cells >= 2)) && !proseDense) {
+          if (globalThis.__fxDebug) (globalThis.__fxBlkStats ??= []).push({ lead: b.lead.slice(0, 48), rows: b.rows.length, cells, spc: +spc.toFixed(2), lc });
+          skipBlock(b, "blk-table"); continue;
+        }
         // Heading: short, not a sentence, label- / bold- / large-led.
         if (b.rows.length <= 2 && lc <= 3 &&
             (HEAD_LEAD.test(b.lead) || b.leadBold || b.h > dominant * 1.15)) { skipBlock(b, "blk-heading"); continue; }
@@ -841,6 +856,21 @@ export class TypographyEngine {
         const bx1 = wide ? vx0 + pageW : ax < centerX ? centerX : vx0 + pageW;
         const inBand = (p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1;
         const leadH = lines[k].h;
+        // A body paragraph can WRAP so that "Figure 4." lands at a line start
+        // ("… as shown in ⏎ Figure 4. To resolve ψ1 …" — B p10 §7.3). That
+        // line is a mid-paragraph continuation, not a caption: the line
+        // directly above it in the same band is running prose at normal
+        // leading and the same size. A real caption's upstairs neighbour is
+        // figure/table content (sparse or off-size) or a whitespace gap.
+        if (k > 0) {
+          const above = lines[k - 1];
+          const aboveBand = above.items.filter(inBand);
+          const pitch = above.y - lines[k].y;
+          if (aboveBand.length && pitch > 0 &&
+              pitch <= Math.max(leadH, above.h) * 1.45 &&
+              Math.abs(above.h - leadH) <= leadH * 0.2 &&
+              lowerWords(aboveBand) >= 3) continue;
+        }
         let prevY = lines[k].y;
         for (const p of lines[k].items.filter(inBand)) { skip.add(p.div); dbg(p.div, "caption"); }
         // Absorb the caption's own continuation lines only — captions are

@@ -190,6 +190,20 @@ if (typeof document !== "undefined" && document.fonts?.addEventListener) {
 
 app.eventBus.on("documentloaded", () => {
   references.onDocumentLoaded(app.pdfDocument);
+  // The viewer's 30s render-queue-idle cleanup evicts the document's
+  // FontFaces (pdfDocument.cleanup(false)). No font event fires on eviction,
+  // so the page being read silently re-renders our overlay spans in a
+  // substitute face with different metrics — the text visibly drifts up-left
+  // and stays that way until something reloads the fonts. The embedded faces
+  // ARE the visible document whenever the overlay is (or later becomes)
+  // active, and they are small next to the page canvases (which this still
+  // cleans), so always keep them.
+  const doc = app.pdfDocument;
+  if (doc?.cleanup && !doc.__fxCleanupWrapped) {
+    doc.__fxCleanupWrapped = true;
+    const origCleanup = doc.cleanup.bind(doc);
+    doc.cleanup = () => origCleanup(true);
+  }
 });
 
 // Auth-gated or otherwise unfetchable PDFs: offer the native viewer, which
