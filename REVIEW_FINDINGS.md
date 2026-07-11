@@ -324,3 +324,22 @@ script or screenshot another extension's pages — the CDP harness is the way.)
 - Harness note: Edge's extension service worker sometimes wedges on a fresh profile (no DNR
   redirect); matrix-fonts falls back to navigating the viewer URL directly, which Edge permits.
 - Gates: unit 32/32 + naming guard, papers 7/7.
+
+### F16 — align processed text with kept text; keep math sub/superscripts on canvas
+User request: processed (overlay) words must sit in the same row as unprocessed (kept)
+neighbours, kept glyphs must not be clipped, and math sub/superscripts must not be processed.
+- **Sub/superscripts:** candidate filter now rejects spans with item.height < dominant*0.8 AND
+  ≤4 trimmed chars — the "out"/"in"/"dev" fragments under γ/S/M stay on the canvas with their
+  parent symbol (they become obstacles, so no mask can nick the cluster). Footnote small text
+  is unaffected (full-word/line spans). B p10 math clusters are now pixel-crisp canvas.
+- **Baseline snap:** at mask-build time (canvas painted; masks are DOM-side so the backing
+  store still holds the original glyphs) the engine measures, per font family, the marginTop
+  (em) that lands the overlay's predicted ink-top exactly on the canvas ink-top (median of up
+  to 10 span samples per family, ±0.15em clamp, families keyed by bare name since the same
+  face arrives quoted and unquoted). Off-screen / CSS-stretched / low-res canvases are
+  rejected and the old metric formula (ascentRatio − baselineRatio) remains the fallback.
+  Residual on B p10: body face 0.41px → 0.07px; f27 0.87 → 0.01. (The old #calibrateBaseline
+  attempt failed because it ran at processPage-end where the canvas wasn't readable; running
+  at the same point as #detectCanvasRules fixes that.)
+- Gates: unit 32/32, papers 7/7, diagnose B whiteout 0 with peek IMPROVED 588 → 467, font
+  matrix 12 combos unchanged-perfect, divider sweep.
