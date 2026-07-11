@@ -211,3 +211,50 @@ heading lead being red with green body is correct). Confirm against TESTING.md �
 ## Proposed fixes
 
 _(one per confirmed issue: file, rule, change, regression guard)_
+
+## Round 5 — user x-ray report: "overlay in red is not aligned with the glyph" (B p10 §7.3)
+
+The user x-rayed B p10 (DevLyzer §7.3 / Figure 4) and saw doubled red/black text plus black-only
+paragraphs. Root causes found and fixed (F9–F12):
+
+### F9 — 30s idle evicts the document FontFaces; overlay drifts silently (overlay.mjs)
+- PDF.js `_cleanup` fires 30s after the render queue goes idle and calls
+  `pdfDocument.cleanup(false)`, deleting the embedded FontFaces. No font event fires on
+  EVICTION, so the engine's `loadingdone → refresh()` never runs; the visible page re-renders
+  overlay spans in a substitute face with different metrics — text drifts up-left mid-read and
+  stays drifted until something reloads the fonts (scroll to a new page / zoom).
+- **Fix:** wrap `pdfDocument.cleanup` on `documentloaded` to always pass `keepLoadedFonts=true`.
+  Fonts are tiny next to the canvases (still cleaned); the embedded faces ARE the visible
+  document while the overlay is (or later becomes) active.
+
+### F10 — blk-table swallows a paragraph merged with figure labels (engine.mjs)
+- B p10 §7.3: the block cutter merged heading + opening paragraph + Figure 4's label rows
+  (label heights sit just inside the 0.3 size tolerance). The labels' wide gaps counted as
+  table cells (cells=4) and rows=10 pushed the prose-density guard out of reach (lc=32 < 40) →
+  whole paragraph skipped as "blk-table".
+- **Fix:** `maxCells` now only counts rows with `r.h >= b.h*0.8` — cell gaps must come from
+  body-height rows; off-size rows are figure labels / sub- superscript fragments, never cells.
+
+### F11 — caption pass absorbs body after a wrapped "Figure 4." line start (engine.mjs)
+- "… as shown in ⏎ Figure 4. To resolve ψ1 …" wraps so "Figure 4." lands at a line start; the
+  caption pass took it as a caption lead and absorbed 5 body lines ("caption-absorb").
+- **Fix:** veto a caption lead when the line directly above it in the same band is running
+  prose at normal leading (≤1.45× pitch), same size (±20%), with ≥3 lowercase words. A real
+  caption's upstairs neighbour is figure/table content or a whitespace gap.
+
+### F12 — whole-line aligned pass sweeps opposite-column body rows (engine.mjs)
+- In the gutter-split aligned-table pass, `segItems` returned the WHOLE row when the row has no
+  gutter-crossing gap — true for a row living entirely in ONE column. A right-column band's run
+  extended through left-only §7.1 body lines ("resolve any unresolved deviation…",
+  "is considered resolved only if:") and marked them table-aligned.
+- **Fix:** when no per-row cut exists, split at `splitX` itself — for an opposite-column row the
+  band side is the empty set.
+
+### Also
+- `__fxDebug` now records `__fxBlkStats` (blk-table trigger stats) and `__fxAligned` (aligned-run
+  seed/band/extent) for future classification debugging.
+- The residual fresh-render x-ray fringe is ≤1 css px and exists in the NATIVE PDF.js text layer
+  too (extension disabled shows LARGER drift); it is the DOM-text-vs-canvas rasterization floor,
+  invisible in normal (masked) reading mode.
+- Verified: B p10 done 211→248; §7.3 paragraph + "Figure 4. To resolve…" body processed; real
+  caption/figure/tables still skipped. Gates: npm 32/32, papers 7/7, divider sweep 12 papers.
