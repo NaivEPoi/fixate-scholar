@@ -292,3 +292,19 @@ script or screenshot another extension's pages — the CDP harness is the way.)
   invisible in masked reading mode).
 - Gates re-run after the width/mask change: unit 32/32, papers 7/7, diagnose B whiteout 0
   (peek unchanged), 12-paper divider sweep.
+
+### F14 — negative word-spacing fuses words on tight-glue lines (B p14 §9.6)
+- Follow-up to F13 with real-Chrome/Edge side-by-side (chrome-xray now drives BOTH browsers via
+  --browser=, --preset enables fx before load, --find= picks the capture anchor): the browsers
+  render identically post-F13; the user-visible residue was shared. On a line LaTeX already
+  squeezed to minimum inter-word glue ("security policies from specifications. This may,
+  however, yield"), the bolding growth made perSpace ~-3px/space and the word-spacing
+  correction ate the spaces entirely ("securitypoliciesfromspecifications").
+- **Fix:** asymmetric cap — positive perSpace up to 0.45h (justification stretch), negative only
+  to -0.1h; bigger shrinks fall through to --scale-x (2-3% narrower glyphs are invisible,
+  missing spaces are not).
+- Non-bugs confirmed on that page: the serif "5GBaseChecker" in "In contrast, ..." is serif ON
+  THE CANVAS (author inconsistency in the PDF, not a classification miss); the stray red
+  line-start letters in the user's screenshot did not reproduce at any zoom with current code
+  (likely captured pre-reload).
+- Gates: unit 32/32, papers 7/7, diagnose B whiteout 0.

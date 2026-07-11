@@ -1,4 +1,4 @@
-// REAL-CHROME diagnostic: Chrome ≥126 removed --load-extension but exposes
+﻿// REAL-CHROME diagnostic: Chrome â‰¥126 removed --load-extension but exposes
 // CDP `Extensions.loadUnpacked` when started with
 // --enable-unsafe-extension-debugging. This harness launches a side-profile
 // HEADFUL Chrome (real display DPI), loads the unpacked extension via CDP,
@@ -16,6 +16,9 @@ const PAGE = parseInt(POS[1] ?? "10", 10);
 const ZOOMV = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "1.25");
 const IDLE = parseInt(process.argv.slice(2).find((a) => a.startsWith("--idle="))?.slice(7) ?? "0", 10);
 const KEEP = process.argv.includes("--keep");
+const BROWSER = process.argv.slice(2).find((a) => a.startsWith("--browser="))?.slice(10) ?? "chrome";
+const NEEDLE = JSON.stringify(process.argv.slice(2).find((a) => a.startsWith("--find="))?.slice(7) ?? "Consider two deviations");
+const PRESET = process.argv.includes("--preset"); // enable fx BEFORE the paper loads (the user's real flow)
 const PAPERS = {
   "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
   "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
@@ -28,11 +31,16 @@ const userDataDir = "C:\\misc\\Claude_Workspace\\.chrome-fx-debug";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
-const browser = spawn("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", [
+const EXE = BROWSER === "edge"
+  ? "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+  : "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const browser = spawn(EXE, [
   `--remote-debugging-port=${PORT}`,
-  "--enable-unsafe-extension-debugging",
+  ...(BROWSER === "edge"
+    ? [`--load-extension=${EXT}`, `--disable-extensions-except=${EXT}`]
+    : ["--enable-unsafe-extension-debugging"]),
   ...(process.argv.includes("--nofontations") ? ["--disable-features=FontationsFontBackend,FontationsForSystemFonts"] : []),
-  `--user-data-dir=${userDataDir}`,
+  `--user-data-dir=${userDataDir}-${BROWSER}`,
   "--no-first-run", "--no-default-browser-check", "--disable-sync",
   "--window-size=1500,1100", "--window-position=40,40",
   "about:blank",
@@ -65,26 +73,42 @@ try {
   if (!version) throw new Error("Chrome debug port never came up");
   console.log("Browser:", version.Browser);
 
-  // Load the unpacked extension over CDP (browser-level session).
-  const b = await connect(version.webSocketDebuggerUrl);
+  // Load the unpacked extension: Edge still honours --load-extension; Chrome
+  // needs the CDP Extensions.loadUnpacked call.
   let extId = null;
-  try {
-    const r = await b.send("Extensions.loadUnpacked", { path: EXT });
-    extId = r.id;
-    console.log("Extensions.loadUnpacked OK — id:", extId);
-  } catch (e) {
-    console.error("Extensions.loadUnpacked FAILED:", e.message);
-    throw e;
+  if (BROWSER !== "edge") {
+    const b = await connect(version.webSocketDebuggerUrl);
+    try {
+      const r = await b.send("Extensions.loadUnpacked", { path: EXT });
+      extId = r.id;
+      console.log("Extensions.loadUnpacked OK â€” id:", extId);
+    } catch (e) {
+      console.error("Extensions.loadUnpacked FAILED:", e.message);
+      throw e;
+    }
   }
   // Wait for the service worker to register (DNR rules install).
+  let swTarget = null;
   for (let i = 0; i < 50; i++) {
     const t = await http("/json/list");
-    if (t.some((x) => x.type === "service_worker" && x.url.includes(extId))) break;
+    swTarget = t.find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs") && (!extId || x.url.includes(extId)));
+    if (swTarget) break;
     await sleep(300);
   }
+  if (!swTarget) throw new Error("extension service worker never registered");
+  extId ??= new URL(swTarget.url).hostname;
   await sleep(1200);
+  if (PRESET) {
+    // Enable fx BEFORE the paper loads (via the service worker context), so
+    // the first render processes during initial font loading â€” the user's
+    // real flow.
+    const sw = await connect(swTarget.webSocketDebuggerUrl);
+    const r = await sw.send("Runtime.evaluate", { expression: `new Promise((r) => chrome.storage.sync.set({ enabled: true }, () => r("preset-ok")))`, awaitPromise: true, returnByValue: true });
+    console.log("preset:", r.result?.value ?? JSON.stringify(r));
+    try { sw.ws.close(); } catch {}
+  }
 
-  // Open the paper — the extension's DNR rule redirects the .pdf URL to the viewer.
+  // Open the paper â€” the extension's DNR rule redirects the .pdf URL to the viewer.
   const tab = await http(`/json/new?about:blank`, "PUT");
   const p = await connect(tab.webSocketDebuggerUrl);
   await p.send("Page.enable");
@@ -97,18 +121,18 @@ try {
   };
   const where = await ev("location.href.slice(0, 90)");
   console.log("tab is at:", where);
-  if (!where.startsWith("chrome-extension://")) throw new Error("DNR redirect did not fire — viewer not loaded");
+  if (!where.startsWith("chrome-extension://")) throw new Error("DNR redirect did not fire â€” viewer not loaded");
   console.log("devicePixelRatio:", await ev("devicePixelRatio"));
 
-  // Enable fx.
+  // Enable fx (unless preset before load).
   let storageOk = false;
   for (let i = 0; i < 25; i++) { storageOk = await ev(`!!(typeof chrome!=='undefined' && chrome.storage && chrome.storage.sync)`).catch(() => false); if (storageOk) break; await sleep(400); }
-  if (storageOk) await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
+  if (storageOk && !PRESET) await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
   for (let i = 0; i < 40; i++) { await sleep(700); const n = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (n > 80) break; }
   console.log("fx-b spans:", await ev(`document.querySelectorAll('.textLayer .fx-b').length`));
   console.log("cleanup wrapped (post-fix code?):", await ev(`!!window.PDFViewerApplication?.pdfDocument?.__fxCleanupWrapped`));
 
-  await ev(`window.PDFViewerApplication.pdfViewer.currentScale = ${ZOOMV}`).catch(() => {});
+  if (ZOOMV) { await ev(`window.PDFViewerApplication.pdfViewer.currentScale = ${ZOOMV}`).catch(() => {}); }
   await sleep(2000);
   await ev(`window.PDFViewerApplication.page = ${PAGE}`).catch(() => {});
   await sleep(3500);
@@ -153,7 +177,7 @@ try {
   for (const s of metrics.spans) console.log("  ", JSON.stringify(s));
 
   // Ground truth: overlay span rect vs canvas ink extents (css px) for the
-  // §7.3 region spans, fx ON then fx OFF (native text layer).
+  // Â§7.3 region spans, fx ON then fx OFF (native text layer).
   const probeExpr = (label) => `(() => {
     const v = window.PDFViewerApplication.pdfViewer;
     const pv = v.getPageView(${PAGE - 1});
@@ -162,7 +186,7 @@ try {
     const cr = canvas.getBoundingClientRect();
     const sx = canvas.width / cr.width, sy = canvas.height / cr.height;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    const NEEDLES = ["Consider two deviations", ", as shown in", ", the input sequence is", "two deviating output", ", and it has", ", we have"];
+    const NEEDLES = [${NEEDLE}, ", as shown in", ", the input sequence is", "two deviating output", ", and it has", ", we have"];
     const rows = [];
     for (const n of NEEDLES) {
       const s = [...div.querySelectorAll('span')].find(el => el.textContent.includes(n));
@@ -186,11 +210,11 @@ try {
   })()`;
   console.log("--- fx ON: span rect vs canvas ink (dL/dR: +ve = rect right of ink) ---");
   for (const r of await ev(probeExpr("on"))) console.log("  ", JSON.stringify(r));
-  // Every span on the first lines of the §7.3 paragraph, with rects.
+  // Every span on the first lines of the Â§7.3 paragraph, with rects.
   const lineDump = await ev(`(() => {
     const v = window.PDFViewerApplication.pdfViewer;
     const div = v.getPageView(${PAGE - 1}).textLayer.div;
-    const anchor = [...div.querySelectorAll('span')].find(s => s.textContent.includes("Consider two deviations"));
+    const anchor = [...div.querySelectorAll('span')].find(s => s.textContent.includes(${NEEDLE}));
     if (!anchor) return null;
     const ar = anchor.getBoundingClientRect();
     const out = [];
@@ -206,7 +230,7 @@ try {
   const forensic = await ev(`(() => {
     const v = window.PDFViewerApplication.pdfViewer;
     const div = v.getPageView(${PAGE - 1}).textLayer.div;
-    const s = [...div.querySelectorAll('span')].find(el => el.textContent.includes("Consider two deviations"));
+    const s = [...div.querySelectorAll('span')].find(el => el.textContent.includes(${NEEDLE}));
     if (!s) return null;
     const cs = getComputedStyle(s);
     const mk = (html, fam, extra) => {
@@ -241,7 +265,7 @@ try {
   const lastChar = await ev(`(() => {
     const v = window.PDFViewerApplication.pdfViewer;
     const div = v.getPageView(${PAGE - 1}).textLayer.div;
-    const s = [...div.querySelectorAll('span')].find(el => el.textContent.includes("Consider two deviations"));
+    const s = [...div.querySelectorAll('span')].find(el => el.textContent.includes(${NEEDLE}));
     if (!s) return null;
     const r = s.getBoundingClientRect();
     const walker = document.createTreeWalker(s, NodeFilter.SHOW_TEXT);
@@ -264,12 +288,12 @@ try {
     const clip2 = await ev(`(() => {
       const v = window.PDFViewerApplication.pdfViewer;
       const div = v.getPageView(${PAGE - 1}).textLayer.div;
-      const s = [...div.querySelectorAll('span')].find(el => el.textContent.includes("Consider two deviations"));
+      const s = [...div.querySelectorAll('span')].find(el => el.textContent.includes(${NEEDLE}));
       const r = s.getBoundingClientRect();
       return { x: Math.max(0, r.left - 10), y: Math.max(0, r.top - 14), width: Math.min(300, innerWidth - r.left), height: 46 };
     })()`);
     const shot2 = await p.send("Page.captureScreenshot", { format: "png", clip: { ...clip2, scale: 5 } });
-    writeFileSync(join(root, "test", "out", `chrome-micro-${FILTER.replace(/\W+/g, "")}-p${PAGE}.png`), Buffer.from(shot2.data, "base64"));
+    writeFileSync(join(root, "test", "out", `${BROWSER}-micro-${FILTER.replace(/\W+/g, "")}-p${PAGE}.png`), Buffer.from(shot2.data, "base64"));
     console.log("saved micro capture");
   }
   if (storageOk) {
@@ -290,14 +314,14 @@ try {
     const clip = await ev(`(async () => {
       const v = window.PDFViewerApplication.pdfViewer;
       const div = v.getPageView(${PAGE - 1}).textLayer.div;
-      const t = [...div.querySelectorAll('span')].find(s => s.textContent.includes("Consider two deviations")) ||
+      const t = [...div.querySelectorAll('span')].find(s => s.textContent.includes(${NEEDLE})) ||
                 [...div.querySelectorAll('span[data-fx-done]')].find(s => s.getBoundingClientRect().width > 100);
       if (t) { t.scrollIntoView({ block: 'center' }); await new Promise((r) => setTimeout(r, 1800)); }
       const r = t ? t.getBoundingClientRect() : div.getBoundingClientRect();
       return { x: Math.max(0, r.left - 20), y: Math.max(0, r.top - 40), width: 520, height: 340 };
     })()`);
     const shot = await p.send("Page.captureScreenshot", { format: "png", clip: { ...clip, scale: 2.5 } });
-    const fn = join(root, "test", "out", `chrome-${tag}-${FILTER.replace(/\W+/g, "")}-p${PAGE}.png`);
+    const fn = join(root, "test", "out", `${BROWSER}-${tag}-${FILTER.replace(/\W+/g, "")}-p${PAGE}.png`);
     writeFileSync(fn, Buffer.from(shot.data, "base64"));
     console.log("saved", fn);
   };
@@ -309,7 +333,7 @@ try {
     const clip3 = await ev(`(() => {
       const v = window.PDFViewerApplication.pdfViewer;
       const div = v.getPageView(${PAGE - 1}).textLayer.div;
-      const s = [...div.querySelectorAll('span')].find(el => el.textContent.includes("Consider two deviations"));
+      const s = [...div.querySelectorAll('span')].find(el => el.textContent.includes(${NEEDLE}));
       if (!s) return null;
       const r = s.getBoundingClientRect();
       for (const [x, c] of [[r.left, 'blue'], [r.right, 'lime']]) {
@@ -321,7 +345,7 @@ try {
     })()`);
     if (clip3) {
       const shot3 = await p.send("Page.captureScreenshot", { format: "png", clip: { ...clip3, scale: 5 } });
-      writeFileSync(join(root, "test", "out", `chrome-microxray-${FILTER.replace(/\W+/g, "")}-p${PAGE}.png`), Buffer.from(shot3.data, "base64"));
+      writeFileSync(join(root, "test", "out", `${BROWSER}-microxray-${FILTER.replace(/\W+/g, "")}-p${PAGE}.png`), Buffer.from(shot3.data, "base64"));
       console.log("saved micro-xray capture");
     }
   }

@@ -1573,7 +1573,14 @@ export class TypographyEngine {
           }
           const spaces = (span.textContent.match(/ /g) || []).length;
           const perSpace = spaces ? (targetW - natural) / spaces : Infinity;
-          if (spaces >= 2 && Math.abs(perSpace) < rect.height * 0.45) {
+          // Positive word-spacing (justification surplus) can stretch far;
+          // NEGATIVE word-spacing eats the inter-word gaps themselves — on a
+          // line LaTeX already squeezed to minimum glue, even −3px/space
+          // fuses the words ("securitypoliciesfromspecifications", B p14).
+          // Cap the negative side tightly and let --scale-x absorb bigger
+          // shrinks: 2-3% narrower glyphs are invisible, missing spaces are
+          // not.
+          if (spaces >= 2 && perSpace < rect.height * 0.45 && perSpace > rect.height * -0.1) {
             const fontPx = parseFloat(getComputedStyle(span).fontSize) || rect.height;
             span.style.setProperty("--scale-x", 1);
             span.style.wordSpacing = `${perSpace / fontPx}em`;
