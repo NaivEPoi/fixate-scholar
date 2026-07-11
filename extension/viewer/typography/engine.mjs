@@ -1327,6 +1327,15 @@ export class TypographyEngine {
     let obstacleRects = null;
     let wordIndex = 0;
     let i = 0;
+    // True canvas width of an item, straight from the PDF geometry. The
+    // pristine DOM rect can NOT be trusted for this: when the embedded font
+    // wasn't yet usable at text-layer layout time (Chrome), PDF.js measured
+    // the span in the css fallback face and baked a stale --scale-x; once the
+    // real face applies, the span's box no longer equals the canvas width.
+    const vpScale =
+      (pageView.viewport?.rotation ?? 0) % 360 === 0
+        ? pageView.viewport?.scale || 0
+        : 0;
 
     const work = (deadline) => {
       if (holder.cancelled) {
@@ -1410,7 +1419,11 @@ export class TypographyEngine {
             continue;
           }
           wordIndex = result.wordIndex;
-          batch.push({ pair, parts: result.parts, rect });
+          const targetW =
+            vpScale && pair.item?.width > 0
+              ? pair.item.width * vpScale
+              : rect.width;
+          batch.push({ pair, parts: result.parts, rect, targetW });
         }
         // Content + font pass: rewrite each span as bold-prefix + rest, swap in
         // the chosen face, and RE-SEAT THE BASELINE. PDF.js set each span's top
@@ -1478,14 +1491,14 @@ export class TypographyEngine {
         // its HORIZONTAL extent comes from the pristine rect (the canvas glyph
         // width, which the width correction below restores). Every rendered span
         // sits in the text layer above the mask, so kept inline math survives.
-        for (const { rect, rect2 } of batch) {
+        for (const { rect, rect2, targetW } of batch) {
           const r2 = rect2 || rect;
           if (!(rect.width > 0) || !(r2.height > 0)) continue;
           const h = r2.height;
           const padY = h * 0.28;
           const padX = Math.max(2, h * 0.12);
           let L = rect.left - padX;
-          let R = rect.right + padX;
+          let R = rect.left + (targetW || rect.width) + padX;
           let T = r2.top - padY;
           let B = r2.bottom + padY;
           for (const o of obstacleRects) {
@@ -1536,24 +1549,36 @@ export class TypographyEngine {
         // dimensionless, and word-spacing is written in `em` (relative to the
         // font size) rather than px, so the gap scales with the text. A px gap
         // would stay fixed while the glyphs grew/shrank, collapsing the spacing.
-        for (const { pair, rect, rect2 } of batch) {
+        // The correction targets targetW — the item's true canvas width from
+        // the PDF geometry — NOT the pristine DOM width. In Chrome the text
+        // layer can lay out before the embedded FontFace is usable: PDF.js
+        // measures the span in the css fallback face and bakes a stale
+        // --scale-x (e.g. 0.94), which then shrinks the REAL face's glyphs 6%
+        // once it applies — every processed word rendered compressed, canvas
+        // ghosts peeking around inline math (Edge has the face ready at
+        // layout time, so it never showed). Normalizing to --scale-x:1 +
+        // word-spacing against targetW erases the stale scale: glyphs render
+        // at their natural advances (matching the canvas letters) and the
+        // spaces absorb the justification surplus, exactly like the canvas.
+        for (const { pair, rect, rect2, targetW } of batch) {
           const span = pair.div;
           const newWidth = (rect2 || span.getBoundingClientRect()).width;
-          if (!(newWidth > 0) || Math.abs(newWidth - rect.width) <= 0.5) continue;
+          if (!(newWidth > 0)) continue;
           const prevScale =
             parseFloat(span.style.getPropertyValue("--scale-x")) || 1;
-          const spaces = (span.textContent.match(/ /g) || []).length;
           const natural = newWidth / prevScale;
-          const perSpace = spaces ? (rect.width - natural) / spaces : Infinity;
+          if (Math.abs(natural - targetW) <= 0.5) {
+            if (prevScale !== 1) span.style.setProperty("--scale-x", 1);
+            continue;
+          }
+          const spaces = (span.textContent.match(/ /g) || []).length;
+          const perSpace = spaces ? (targetW - natural) / spaces : Infinity;
           if (spaces >= 2 && Math.abs(perSpace) < rect.height * 0.45) {
             const fontPx = parseFloat(getComputedStyle(span).fontSize) || rect.height;
             span.style.setProperty("--scale-x", 1);
             span.style.wordSpacing = `${perSpace / fontPx}em`;
           } else {
-            span.style.setProperty(
-              "--scale-x",
-              (prevScale * rect.width) / newWidth,
-            );
+            span.style.setProperty("--scale-x", targetW / natural);
           }
         }
         i = end;
@@ -1566,7 +1591,14 @@ export class TypographyEngine {
       holder.resolve();
     };
 
-    requestIdleCallback(work, { timeout: 200 });
+    // Measure only with the real faces: if the embedded fonts are still
+    // loading (the Chrome race above), geometry reads would see the fallback.
+    const kick = () => requestIdleCallback(work, { timeout: 200 });
+    if (typeof document !== "undefined" && document.fonts?.ready) {
+      document.fonts.ready.then(kick, kick);
+    } else {
+      kick();
+    }
     return holder.promise;
   }
 }
