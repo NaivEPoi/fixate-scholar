@@ -295,7 +295,15 @@ try {
             const lastDiv = document.querySelector('.page[data-page-number="' + last + '"]');
             const lastSpans = lastDiv?.querySelectorAll('.textLayer span') ?? [];
             if (lastSpans.length > 40) {
-              out.appendixOk = !!lastDiv.querySelector('.textLayer span[data-fx-done]');
+              // Appendix prose must be processed — but a last page that is
+              // entirely a RULED TABLE (e.g. a property/results table) is
+              // correct with nothing processed: masking its cells would white
+              // out the table rules. Accept either processed spans or a page
+              // whose content was deliberately classified as table.
+              const tabled = lastDiv.querySelectorAll('.textLayer span[data-fx-table]').length;
+              out.appendixOk =
+                !!lastDiv.querySelector('.textLayer span[data-fx-done]') ||
+                tabled > lastSpans.length * 0.5;
             }
           }
           app.page = 1;

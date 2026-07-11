@@ -4,7 +4,70 @@ Produced by the per-page audit (`test/review-capture.mjs` overlays +
 `test/review-workflow.mjs` review/verify). Each issue is verified against the
 screenshot before listing. Rules: `TESTING.md` Section 3.
 
-Status: **review complete; F1-F5 all FIXED & validated.**
+Status: **review complete; F1-F5 all FIXED & validated. Round 3 (F6/F7) below.**
+
+### Round 3 (2026-07-09) — divider-line masking + "upper-left shift" (user report)
+Built `test/diag-dividers.mjs`: per page, finds long thin dark runs on the
+PRISTINE canvas backing store (table rules, box frames, separators) and checks
+whether they turn white in the composited (fx-on) page — i.e. masked by us.
+Also `test/dump-stream.mjs` (engine's-eye line/stream geometry dump) and
+`test/shot-region2.mjs` (fx-on vs fx-off matched captures, --find/--zoom).
+
+- **F6 (HIGH, user-visible) — prose-cell tables processed → masks white out the
+  table rules and ghost the cell text.** The "upper-left shift" is this ghost:
+  a processed cell whose mask is clamped by neighbouring cells leaves the canvas
+  copy partially visible beside the overlay copy. Reproduced: B p11 Table 1
+  (9 rules masked), A p12 D3 row, A p20 MI row, A p21 Table 8 (12 rules),
+  A p8 boxed formula (frame erased), small-caps "C" whiteout.
+  Fixes (engine.mjs `#classifyBlocks` + mask pass):
+  1. `skipAlignedTable` — stream-level aligned-gap-band pass: a table's cell
+     boundary keeps a common gap INTERVAL across ≥3 rows (running intersection,
+     e.g. NE∩ES∩RI∩MI = [442,447]); justified prose gaps wander. Full cells
+     word-breaking at the boundary and wrapped cell lines extend runs as weak
+     rows (≤2 past the last strong row); an item CROSSING the band breaks it.
+  2. Whole-LINE aligned pass (twoColumn): a cell protruding past the page centre
+     sends its row to the `full` stream while neighbours go left/right, hiding
+     the table from every stream (A p12 D3). The whole-line pass sees them
+     adjacent; the gutter gap is excluded from band candidates and the skip is
+     SEGMENT-bounded at the gutter, so merged two-column body baselines and the
+     opposite column's body are never swept.
+  3. `line-formula` — a line with ZERO lowercase words, ≥3 items and ≥15%
+     punctuation density is a displayed formula in a text face; skipped, and its
+     divs are PROTECTED: their obstacle rects are expanded ±0.35h vertically so
+     adjacent body masks clamp before the formula's box frame.
+  4. Mask overlap-clamp: an obstacle OVERLAPPING the span's own glyph rect
+     (kerned small-caps "C") previously fell through all clamp branches and got
+     whited; now the nearest mask edge pulls back (capped 40-45%) — a small
+     canvas peek of our own duplicate beats erasing canvas-only text.
+  Validated: B 153 rules / 0 masked (was 9); A 135 rules / 22→2 remaining, both
+  verified visually intact-or-minor (p8 = detector rounding artifact, box frame
+  fully intact at 2×; p15 = table header row nicks, minor). diagnose B
+  whiteout=0; corpus 7/7 PASS.
+- **F8 — underlined run-in leads erased (three variants) + canvas line-art
+  obstacles (2026-07-11).** The remaining "divider lines" were UNDERLINES under
+  run-in paragraph leads: (a) italic "Establishing privacy-preserving mutual
+  authentication … under MA+:" (UC-Scheme p6; Libertine italic is named
+  `LinLibertineTI` — extended ITALIC_FONT; upright entity names ≤5 chars may
+  interleave; run must end at a colon) → `skipItalicLead` skips + protects;
+  (b) the same lead behind a label ("P1: Preventing identity exposure:") takes
+  the `line-head` path — italic-led line-head lines are now protected too;
+  (c) regular-weight underlined leads ("Effectiveness of ConnSentinel.") have
+  NO font signal at all → the general fix: **`#detectCanvasRules`** scans the
+  painted canvas for long (≥60 CSS px), thin (≤3 px), isolated dark runs —
+  table rules, box frames, underlines, separators — and registers them as
+  obstacles, so the existing mask clamps avoid ALL canvas line-art
+  automatically (the canvas paints before textlayerrendered, so the visible
+  pass sees it; off-screen prefetch degrades gracefully to the old behaviour).
+  Validated: 5GShield 53 rules / 0 masked, UC-Scheme p2/p6 0 masked.
+- **F7 — papers.mjs `appendixOk` heuristic**: "last page must have a processed
+  span" is wrong when the last page is entirely a ruled table (A p21 Table 8 —
+  processing it is what destroyed its 12 rules). Now also accepted when >50% of
+  the page's spans are deliberately table-classified.
+- **Alignment re-verified (the actual user question):** fx-on/fx-off captures at
+  zoom 2.5 are pixel-identical on skipped bold text; baseline sweep 0.75×–2× at
+  DPR 1 and real-DPI 1.75 headful — normalized offsets constant (≈4.1/−2.7 per
+  unit zoom). The perceived "shift" was the F6 ghost + PDF.js's low-res base
+  canvas upscale at page-fit (a capture/compositor artifact, identical fx-off).
 
 ### Round 2 (2026-07-08) — 5 new papers from the updated yilud.me
 Corpus grew to 12 papers (5GCVerif, 5GShield, AFC-Diss, ACL, UC-Scheme added;
