@@ -258,3 +258,37 @@ paragraphs. Root causes found and fixed (F9–F12):
   invisible in normal (masked) reading mode.
 - Verified: B p10 done 211→248; §7.3 paragraph + "Figure 4. To resolve…" body processed; real
   caption/figure/tables still skipped. Gates: npm 32/32, papers 7/7, divider sweep 12 papers.
+
+## Round 6 — "fixed in Edge but not Chrome" (F13, real-Chrome verification)
+
+Chrome automation restored: Chrome >=126 exposes CDP `Extensions.loadUnpacked` behind
+`--enable-unsafe-extension-debugging` (the replacement for the removed `--load-extension`).
+New harness `test/chrome-xray.mjs` launches a side-profile headful Chrome (real display DPI),
+loads the unpacked extension over CDP, opens a paper through the DNR redirect, and captures
+x-ray / normal / micro-marker shots plus per-span width forensics. (Claude-in-Chrome cannot
+script or screenshot another extension's pages — the CDP harness is the way.)
+
+### F13 — Chrome font-load race: stale PDF.js --scale-x compresses every processed span
+- In Chrome the text layer lays out BEFORE the embedded FontFace is usable. PDF.js measures
+  each span in the css fallback (sans-serif, wider), bakes `--scale-x ~= 0.94`, and never
+  re-measures. When the real face applies, the stale scale shrinks its glyphs ~6%: every
+  processed word renders compressed, word gaps balloon, canvas ghosts peek around inline
+  math ("out" under "out", slivers at line ends) — the user's Chrome-only "text shift".
+  Edge has the faces ready at layout time, so identical code never showed it.
+- Deceptive part: all DOM rect measurements are self-consistent under the stale scale
+  (fallback-rendered pristine box == canvas width by construction), so the engine's width
+  pass happily "restored" a width that stuffed the whole stale-scale correction into the
+  spaces. Only hidden-clone measurements (same font string, no scale) exposed it.
+- **Fix (engine.mjs width pass):** the correction now targets `targetW = item.width ×
+  viewport.scale` — the item's true canvas width straight from the PDF geometry, immune to
+  any DOM/font race (fallback: pristine rect; skipped on rotated pages). Spans normalize to
+  `--scale-x: 1` + em word-spacing against targetW, so glyphs render at natural advances
+  (matching the canvas letters) and spaces absorb the justification surplus. Mask horizontal
+  extent uses targetW; processing kicks after `document.fonts.ready`.
+- Verified in real Chrome 150 at DPR 1.75: forensic sx=1 / ws~0.12em / live==targetW; span
+  endpoints pinned to canvas ink (micro-marker capture); normal mode clean; 40s-idle capture
+  unchanged (F9 eviction wrapper confirmed working in Chrome). Residual x-ray interior
+  wiggle with pinned endpoints = the native justification-distribution floor (same in Edge,
+  invisible in masked reading mode).
+- Gates re-run after the width/mask change: unit 32/32, papers 7/7, diagnose B whiteout 0
+  (peek unchanged), 12-paper divider sweep.
