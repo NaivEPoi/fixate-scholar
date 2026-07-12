@@ -85,6 +85,8 @@ papers):
 node test/diag-dividers.mjs "<paper>"   # canvas rules/underlines/frames vs masks — masked MUST be 0 on every page
 node test/audit.mjs "<paper>"           # classification issue classes — keepFallback/tableLeak/capProse ≈ 0
 node test/diagnose.mjs "<paper>"        # whiteout MUST be 0; watch the peek total for regressions
+node test/tables.mjs "<paper>"          # NO processed span inside a rule-bounded table zone (exit 1 on offenders)
+node test/skipline.mjs "<paper>"        # unprocessed PROSE lines — only front matter/refs/headings may appear
 ```
 
 ---
@@ -102,6 +104,8 @@ node test/diagnose.mjs "<paper>"        # whiteout MUST be 0; watch the peek tot
 | `node test/diag-dividers.mjs <paper>` | table rules / box frames / underlines / separators vs masks (canvas dark-run scan + composite whiteness) | `masked=0` on every page |
 | `node test/chrome-xray.mjs <paper> <page> [--browser=chrome\|edge] [--preset] [--zoom=N] [--find="text"] [--idle=S] [--shotonly] [--outline]` | REAL-Chrome/Edge captures: normal + x-ray + micro-marker shots, per-span width forensics, idle drift | visual; forensic `sx≈1`, `live == item.width×scale` |
 | `node test/matrix-fonts.mjs <paper> <page> [--browser=…]` | every fontMode × boldWeight combo live: width residual vs PDF item widths, jams, overlaps, computed `.fx-b` style | residual ≤ ~0.2px; jams 0; overlaps 0; weight/stroke ramps monotonically |
+| `node test/tables.mjs <paper> [--pages=A-B]` | no processed text inside tables: horizontal canvas rules chained (≥3 rules, ≥70% overlap, gap ≤15% page height) bound table interiors; flags `span[data-fx-done]` centered inside | `TOTAL offenders: 0` (exit 1 otherwise). Isolated rule PAIRS (underlined run-in leads) form no zone; full-width prose lines + their paragraph continuations are exempt. KNOWN NOISE: UC-Scheme p17 flags 3 prose lines around side-by-side screenshot frames (full-width zones make column-width prose fail the width test) — verified correct rendering; confirm any NEW flag with a capture before touching the engine |
+| `node test/skipline.mjs <paper> [--pages=A-B]` | per column, prose lines (≥4 lowercase words) with no processed/kept span — catches single skipped lines that diagnose's ≥3-line runs miss (contentStart cut, script-window bleed) | only intentional skips: title-page front matter, bibliography pages, heading wrap lines |
 | `node test/dump-stream.mjs <paper> <page> <left\|right\|full> [filter]` | the engine's-eye line/stream geometry (debug `#classifyBlocks`) | inspection |
 | `node test/shot-region2.mjs <paper> <page> [--zoom=] [--find=]` | fx-on vs fx-off matched captures of one region | images should differ only by emphasis |
 
@@ -304,6 +308,23 @@ Lessons from the F1–F16 investigations. Each of these cost hours; don't re-pay
   high-zoom capture, not with either number.
 
 ### DOM measurement traps
+- **`data-fx-why` tags are STICKY across re-processing passes.** bodyHeight /
+  refs arriving re-runs classification; `dbg` never clears old tags, so a
+  why-dump can show a classification the FINAL pass never made (spans tagged
+  `table-region` that the last pass processed, and vice versa). When why and
+  reality disagree, trust a fresh-session probe of `data-fx-done` +
+  `.fx-b` counts (see F25).
+- **Pixel-sampling harnesses must sample the composite at the canvas BACKING
+  scale.** Since the F20 minimum-2× devicePixelRatio override, a 2-backing-px
+  rule downscales to ONE antialiased ~lum-150 CSS pixel in a scale-1
+  screenshot — too light for a `<140` dark threshold and easily missed by a
+  rounded sample row (99%-white false "masked"). Capture with
+  `clip.scale = canvas.width / rect.width` and score the darkest pixel of a
+  3-px window perpendicular to the feature (F22).
+- **Rect-overlap "is it covered" checks false-flag tiny kept fragments.** A
+  neighbouring word's mask may cover most of a 1–2-char sub/superscript's
+  RECT while its ink stays visible (masks are clamped around kept spans at
+  ink precision). Exclude ≤2-char fragments from whiteout-style checks (F22).
 - **A stale PDF.js `--scale-x` makes ALL rect-based checks self-consistent and
   wrong.** When the FontFace wasn't usable at text-layer layout, PDF.js
   measures the fallback face and the pristine box still equals the canvas
@@ -341,6 +362,24 @@ Lessons from the F1–F16 investigations. Each of these cost hours; don't re-pay
 - **/tmp resolves to C:\tmp in node on Windows**; use a real temp dir.
 
 ### Classification pitfalls (worth remembering before adding a rule)
+- **Column-boundary tolerances collide with the NEXT column's x-start.** A
+  table's region reached x=313 (rotated edge labels) while the neighbouring
+  column's wrapped prose lines START at x=315 — a `x ≤ x1+2` start-only test
+  swallowed them (only the indented first line escaped, mimicking a "random
+  middle lines skipped" bug). Test the span's horizontal CENTER against
+  region bounds, never just its start (F25).
+- **Any y-cut derived from a landmark line must exempt the landmark's own
+  baseline.** The front-matter cut (`y ≥ abstractY − 1`) also killed the
+  OTHER column's first body line, which shares the Abstract lead's baseline
+  in two-column title pages (F23). Same family: a symmetric sub/superscript
+  attachment window reaches the NEXT line's baseline — real scripts sit
+  0.25–0.5h from their base; the neighbouring line is ≥1.05h away, so windows
+  must be signed and asymmetric (F24).
+- **Multi-line table cells shed their sub-lines.** Only the first line of a
+  wrapped cell has the row's gap structure; the continuation lines carry one
+  cell's words and pass every per-row test. The region pass must chain the
+  table bottom through non-prose rows (F25) — and `test/tables.mjs` exists to
+  catch what still leaks.
 - Block grouping can MERGE a paragraph with figure-label rows (size tolerance
   0.3): count table-cell gaps only on body-height rows (`r.h ≥ b.h×0.8`).
 - A wrapped body line can START with "Figure 4." — a caption lead is vetoed
@@ -356,6 +395,15 @@ Lessons from the F1–F16 investigations. Each of these cost hours; don't re-pay
   screenshot before chasing.
 
 ### Verification discipline
+- **A clean sweep on a page that SHOULD have findings is suspect — check
+  `done>0` first.** An exception in classification aborts the page's whole
+  processing (done=0), and every "no processed span does X" oracle then
+  passes vacuously. A helper declared after a new pass's call site once threw
+  ONLY on pages where the pass found a table: processing died exactly on
+  table-heavy pages and the 0-offender results there were false greens.
+- Probing a page mid-reprocess reads as a sea of unprocessed prose —
+  `restoreAll` wipes `data-fx-done` and re-marking is incremental. Wait for a
+  page's done-count to be nonzero AND stable across polls (test/skipline.mjs).
 - Rendering bugs can be BROWSER-SPECIFIC (Chrome font-load race; Edge was
   clean with identical code). Verify overlay geometry fixes in both browsers
   via `chrome-xray.mjs --browser=chrome|edge` before concluding.
