@@ -44,7 +44,7 @@ function findHeadingIndex(lines) {
  */
 export function findContentStart(lines) {
   const line = lines.find((l) => l.page <= 5 && /^abstract\.?$/i.test(l.text));
-  return line ? { page: line.page, y: line.y } : null;
+  return line ? { page: line.page, y: line.y, h: line.h } : null;
 }
 
 /**

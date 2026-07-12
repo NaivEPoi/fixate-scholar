@@ -397,3 +397,85 @@ neighbours, kept glyphs must not be clipped, and math sub/superscripts must not 
   F20 dpr override (their composite sampling assumes the native ratio; the engine derives
   scale from canvas.width/rect.width and is correct). Visual captures contradict the flags.
   TODO: make both samplers scale-derive like the engine, then re-run the 12-paper sweeps.
+
+### F22 - harness debt paid: dividers/diagnose samplers fixed for the 2x canvas
+- diag-dividers false-flagged "masked" rules (99% white) because the composite screenshot was
+  captured at scale 1 while the F20 override makes the canvas backing 2x CSS: a 2-backing-px
+  table rule downscales to ONE antialiased ~lum-150 CSS pixel - too light for the dark
+  threshold (140) and often missed entirely by the rounded sample row. Fix: capture the
+  composite at the canvas's own backing scale (min(3, W/cssW)) and score each sample as the
+  darkest pixel of a 3-px window PERPENDICULAR to the rule (white only if the whole window is
+  white). D: was 34 flagged -> rules=109 masked=0. ACL/5GCVerif re-swept clean.
+- diagnose whiteout false-flagged kept sub/superscript fragments ("C" of NF_C on 5GCVerif
+  p12): a neighbouring word's mask covers most of the tiny RECT while the ink stays intact
+  (masks are clamped around kept spans beyond rect arithmetic). Fix: the whiteout probe skips
+  fragments (<= 2 chars AND rect < 14px wide). Visual: p12 renders every NF_C cluster whole.
+
+### F23 - front-matter cut ate the other column's first line (5GShield p1)
+- The candidate filter skipped everything with y >= contentStart.y - 1 on the Abstract's
+  page. In two-column title pages the OTHER column's first body line shares the Abstract
+  lead's baseline ("to them. Although 3GPP [18]..." sits level with "Abstract-We present..."),
+  so exactly that one line was never processed. Fix: contentStart now carries the Abstract
+  line's height and the cut applies only STRICTLY above it (y >= y_abs + 0.6h). The Abstract
+  lead line itself stays covered by the run-in/heading classifiers (skip:runin), not by the
+  front-matter cut.
+
+### F24 - F21's symmetric window bled onto the NEXT line (UC-Scheme 5.2/5.3)
+- The "text a script attaches to" rule used |dy| in (0.08h..1h]: a subscript hanging ~0.3h
+  BELOW one line is ~0.9h ABOVE the next line's baseline, so prose lines FOLLOWING a
+  subscript-heavy line ("Finally, the user signs all the previous computations..." after a
+  List = {H_UID_1, ...} line) lost their processing. Fix: signed asymmetric window - a
+  fragment counts as a superscript of the span only 0.08h..0.6h ABOVE its baseline, as a
+  subscript only 0.08h..0.45h BELOW it. Real scripts sit ~0.25-0.5h; the next line up/down is
+  >= ~1.05h away.
+
+### F25 - table text processed: region tail + neighbour-column swallow (5GShield Table 1)
+- Two defects in the table-REGION pass (F3), found from the user's TABLE 1 screenshot:
+  (a) TAIL LEAK - a multi-line bottom cell's sub-lines sit BELOW the last gap-qualified row
+  and carry only one cell's words, so no row test fires: "Replay protected messages" /
+  "Overshadow broadcast messages" rendered processed inside the table. The region bottom now
+  CHAINS downward through rows whose in-region slice is not running prose (<4 lowercase
+  words, step <= 2.4h); the first prose row ends the chain.
+  (b) NEIGHBOUR SWALLOW - region membership tested only the span's START x <= x1+2. Table 1's
+  rotated Pre-/Post-conn. edge labels stretch the region to x=313 and the next column's
+  wrapped prose lines START at x=315 (inside the +2 slack) - three lines of Sec. 3.2 prose
+  lost their processing (the indented first line at x=330 escaped, making it look like a
+  "random middle lines" bug). Membership now requires the span's horizontal CENTER inside
+  the region; prose running 243 units into the next column is excluded.
+- DEBUGGING LESSON: data-fx-why tags are STICKY across re-processing passes (bodyHeight/refs
+  arriving re-run classification; dbg does not clear). A why-dump can show a classification
+  the FINAL pass never made. Trust a fresh-session DOM probe (data-fx-done + .fx-b count)
+  over data-fx-why when they disagree.
+- NEW TEST test/tables.mjs - engine-independent oracle: horizontal canvas rules chained
+  (>=3 rules, overlap >=70% of the longer, gap <= 15% page height) bound table interiors;
+  any span[data-fx-done] centered in a zone fails the run (exit 1). Isolated rule PAIRS are
+  ignored - two underlined run-in leads in prose would otherwise flag the paragraph between
+  (seen on 5GShield p18). Prose between two STACKED tables can still flag: treat new flags
+  as leads, confirm with a capture.
+
+### F25 (cont.) - defense in depth for ruled tables
+- Iteration on more corpus leaks (A p20 Table 5, D p10/p11 Tables 5/6) showed per-row TEXT
+  heuristics keep losing to ruled tables: rule-separated columns need no whitespace gap
+  (blk-table/aligned-gap see 1 cell), wordy cells trip the proseDense veto, and a 2-column
+  table's tall-cell sub-lines ("Modify a random byte") have no row structure at all.
+- Three layers now cooperate:
+  (1) skipAlignedStarts - ruled-GRID tables sign themselves by interior items STARTING at
+      the same x across >=4 nearby rows (>=5 when the seed row has only one interior start).
+      Bullet/numbered lists (marker rows >=50%) and long-prose-dominated runs are vetoed.
+      Feeds tableLines, as does skipAlignedTable now.
+  (2) region tail-chain accepts wordy CELL rows: a wordy row ends the chain only when it
+      starts at the region's left edge or spans >=75% of the region width (an indented
+      paragraph first line under the table still stops it - protecting exactly the
+      "first line after a table" class).
+  (3) rule-zone guard AT MASK TIME (work(), canvas readable): the tables.mjs oracle applied
+      in-engine - horizontal canvas rules chained (>=3, overlap >=0.7 of longer, gap <=15%
+      page height) bound zones; any remaining candidate CENTERED in a zone stays pristine on
+      the canvas and becomes a mask obstacle (why=table-rules). Full-width lines with >=4
+      lowercase words stay processed (prose between stacked framed listings, F p4 / UC p17).
+      This is the backstop that makes the invariant hold for table structures we have not
+      seen yet.
+- ORDERING BUG during the round, worth remembering: a helper (bandExtent) declared AFTER a
+  new pass's call site threw "Cannot access before initialization" ONLY on pages where the
+  pass found a table - processing aborted (done=0) exactly on table-heavy pages, and the
+  0-offender oracle runs on those pages were FALSE GREENS. When a sweep suddenly reports
+  clean on pages that should have findings, check done>0 before believing it.

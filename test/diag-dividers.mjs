@@ -131,13 +131,19 @@ const CHECK_BANDS = `async (payload) => {
         pts.push([x, Math.round(cssY * fy)]);
       }
     }
+    // Sample a 3-px window PERPENDICULAR to the rule and score its darkest
+    // pixel: rounding may land the point one composite px off a thin rule,
+    // and a rule antialiased across two rows never reaches full black.
     let white = 0, dark = 0, n = 0;
     for (const [x, y] of pts) {
-      if (x < 0 || y < 0 || x >= c.width || y >= c.height) continue;
-      const p = ctx.getImageData(x, y, 1, 1).data;
-      const lum = 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
+      if (x < 1 || y < 1 || x >= c.width - 1 || y >= c.height - 1) continue;
+      let lum = 255;
+      for (let o = -1; o <= 1; o++) {
+        const p = b.dir === "h" ? ctx.getImageData(x, y + o, 1, 1).data : ctx.getImageData(x + o, y, 1, 1).data;
+        lum = Math.min(lum, 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]);
+      }
       n++;
-      if (lum > 215) white++; else if (lum < 140) dark++;
+      if (lum > 215) white++; else if (lum < 165) dark++;
     }
     out.push({ dir: b.dir, pos: b.dir === "h" ? Math.round((b.y + b.yEnd) / 2) : Math.round((b.x + b.xEnd) / 2), len: b.len, n, whiteFrac: n ? +(white / n).toFixed(2) : null, darkFrac: n ? +(dark / n).toFixed(2) : null });
   }
@@ -168,7 +174,11 @@ try {
     const meta = await ev(FIND_RULES(p));
     if (meta.error || !meta.bands?.length) { if (meta.error) console.log(`p${p}: ${meta.error}`); continue; }
     const clip = await ev(`(()=>{const r=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1}).div.getBoundingClientRect();return {x:Math.max(0,r.left),y:Math.max(0,r.top),width:Math.min(r.width,innerWidth),height:Math.min(r.height,innerHeight)};})()`);
-    const shot = await send("Page.captureScreenshot", { format: "png", clip: { ...clip, scale: 1 } });
+    // Capture at the canvas's own backing scale (the F20 override renders at
+    // a minimum of 2×): at scale 1 a 2-backing-px rule downscales to one
+    // antialiased ~lum-150 CSS pixel that neither "dark" nor sampling catches.
+    const shotScale = Math.min(3, Math.max(1, meta.W / meta.cssW));
+    const shot = await send("Page.captureScreenshot", { format: "png", clip: { ...clip, scale: shotScale } });
     const res = await (async () => {
       const r = await send("Runtime.evaluate", {
         expression: `(${CHECK_BANDS})(${JSON.stringify({ dataUrl: "data:image/png;base64," + shot.data, bands: meta.bands, meta: { W: meta.W, H: meta.H, cssW: meta.cssW, cssH: meta.cssH, left: meta.left, top: meta.top }, clip })})`,

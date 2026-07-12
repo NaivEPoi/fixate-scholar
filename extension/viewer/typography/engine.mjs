@@ -58,7 +58,7 @@ export class TypographyEngine {
   #pristine = new WeakMap(); // span -> { html, scaleX, fontFamily }
   #pending = new Map(); // pageNumber -> cancel flag holder
   #refsBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — bibliography region
-  #contentStart = null; // { page, y } — the Abstract heading; front matter above it
+  #contentStart = null; // { page, y, h } — the Abstract heading; front matter above it
   #bodyHeight = null; // document-wide body-text height (from the refs extractor)
   #ascentCache = new Map(); // fontFamily -> browser ascent ratio (baseline align)
   #measureCtx = null; // offscreen 2d context for ascent measurement
@@ -455,7 +455,13 @@ export class TypographyEngine {
         if (bestLast >= 0) {
           if (globalThis.__fxDebug) (globalThis.__fxAligned ??= []).push({ seed: sorted[i].items.map((p) => p.item.str).join(" ").slice(0, 48), band: bestBand.map((v) => Math.round(v)), n: bestLast - i + 1, split: splitX != null, y: Math.round(sorted[i].y), h: Math.round(sorted[i].h * 10) / 10 });
           for (let k = i; k <= bestLast; k++) {
-            for (const p of segItems(sorted[k], bestBand)) { skip.add(p.div); dbg(p.div, "table-aligned"); }
+            const seg = segItems(sorted[k], bestBand);
+            for (const p of seg) { skip.add(p.div); dbg(p.div, "table-aligned"); }
+            // Feed the region pass: a two-column table's single-sided rows (a
+            // tall cell's 3rd+ continuation line — "Modify a random byte")
+            // extend a run at most 2 rows, so only the REGION fill can absorb
+            // the rest; without these extents the table never forms a region.
+            if (seg.length) tableLines.push(bandExtent(seg, sorted[k]));
           }
           i = bestLast; // resume after the table
         }
@@ -666,6 +672,75 @@ export class TypographyEngine {
       }
     }
 
+    // Confirmed table rows (skipped via cells / aligned starts) — collected for
+    // the region pass, which fills each table's bounding box so interior rows
+    // and multi-line-cell tails that defeat every per-row test still stay on
+    // the canvas. Declared here so both aligned passes and the line pass below
+    // can contribute.
+    const tableLines = [];
+    const bandExtent = (band, ln) => ({
+      y: ln.y, h: ln.h,
+      x0: Math.min(...band.map((p) => p.item.transform[4])),
+      x1: Math.max(...band.map((p) => p.item.transform[4] + (p.item.width ?? 0))),
+    });
+
+    // Ruled-GRID tables (Proteus Tables 5/6): columns are separated by RULES,
+    // not wide whitespace — no inter-item gap reaches the 1.4×h the gap passes
+    // need, and wordy description cells veto blk-table (proseDense). Their
+    // unmistakable signature: interior items (cells) START at the same x on
+    // row after row. Justified prose is typically ONE item per line, and when
+    // PDF.js does split a line the split x wanders — 4+ nearby rows sharing an
+    // interior start-x do not happen in prose. Bibliographies and numbered
+    // lists have exactly ONE interior column (marker + text), so a SEED row
+    // must offer ≥2 interior starts; a run dominated by long-prose rows is
+    // rejected outright.
+    const skipAlignedStarts = (rows) => {
+      if (rows.length < 4) return;
+      const sorted = rows.slice().sort((a, b) => b.y - a.y); // top → bottom
+      const startsOf = (r) => {
+        const xs = [];
+        for (let k = 1; k < r.items.length; k++) {
+          const prev = r.items[k - 1].item;
+          const x = r.items[k].item.transform[4];
+          if (x - (prev.transform[4] + (prev.width ?? 0)) >= 1) xs.push(x);
+        }
+        return xs;
+      };
+      const all = sorted.map(startsOf);
+      // A bullet/numbered LIST also aligns its text column: veto runs whose
+      // rows mostly open with a bare marker item ("•", "1.", "[13]", "(a)").
+      const MARKER = /^(?:[•‣▪◦*–—-]|\(?\[?\d{1,3}\]?[.):]?|\(?[a-z]\))$/;
+      for (let i = 0; i < sorted.length; i++) {
+        if (!all[i].length) continue; // seed: at least one interior cell start
+        // 2-column tables offer a single interior start, so the seed accepts
+        // one — but then the run must be LONGER (5 rows) to compensate.
+        const need = all[i].length >= 2 ? 4 : 5;
+        let last = i;
+        const matched = [i];
+        for (let j = i + 1; j < sorted.length; j++) {
+          if (sorted[j - 1].y - sorted[j].y > Math.max(sorted[j].h, sorted[j - 1].h, 8) * 2.5) break; // vertical gap — table ended
+          if (j - last > 2) break; // two non-matching rows in a row — run over
+          if (all[j].some((x) => all[i].some((x0) => Math.abs(x - x0) <= 1.2))) {
+            matched.push(j);
+            last = j;
+          }
+        }
+        if (matched.length < need) continue;
+        // Long-prose rows must not dominate: aligned interior starts across a
+        // paragraph would mean 4+ lines split at one x — not seen in prose,
+        // but this guard keeps a pathological case from erasing a paragraph.
+        const proseRows = matched.filter((k) => lowerWords(sorted[k].items) >= 6).length;
+        if (proseRows > matched.length * 0.34) continue;
+        const markerRows = matched.filter((k) => MARKER.test(sorted[k].items[0].item.str.trim())).length;
+        if (markerRows >= matched.length * 0.5) continue;
+        for (const k of matched) {
+          for (const p of sorted[k].items) { skip.add(p.div); dbg(p.div, "table-starts"); }
+          tableLines.push(bandExtent(sorted[k].items, sorted[k]));
+        }
+        i = last;
+      }
+    };
+
     // Prose-cell tables (see skipAlignedTable): detected per stream, across
     // block boundaries. ALSO run over the unsplit lines — a table row whose
     // cell protrudes past the page centre is assigned to the full stream while
@@ -673,7 +748,10 @@ export class TypographyEngine {
     // whole-line pass sees them adjacent again (the gutter is excluded from
     // band candidates and the skip is segment-bounded, so merged two-column
     // body baselines are never swept).
-    for (const region of regions) skipAlignedTable(region);
+    for (const region of regions) {
+      skipAlignedTable(region);
+      skipAlignedStarts(region);
+    }
     if (twoColumn) skipAlignedTable(lines, centerX);
 
     // Line-level heading pass (independent of block grouping, which can merge a
@@ -727,12 +805,6 @@ export class TypographyEngine {
         for (const p of runDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-ital"); }
       }
     };
-    const bandExtent = (band, ln) => ({
-      y: ln.y, h: ln.h,
-      x0: Math.min(...band.map((p) => p.item.transform[4])),
-      x1: Math.max(...band.map((p) => p.item.transform[4] + (p.item.width ?? 0))),
-    });
-    const tableLines = []; // confirmed table rows (skipped via cells) — for cohesion
     for (const ln of lines) {
       const its = ln.items;
       const starts = [0];
@@ -844,15 +916,69 @@ export class TypographyEngine {
         if (reg) { reg.yBot = Math.min(reg.yBot, t.y); reg.x0 = Math.min(reg.x0, t.x0); reg.x1 = Math.max(reg.x1, t.x1); reg.h = Math.max(reg.h, t.h); reg.n++; }
         else regions.push({ yTop: t.y, yBot: t.y, x0: t.x0, x1: t.x1, h: t.h, n: 1 });
       }
+      // Absorb the table's TAIL: rows of multi-line bottom cells sit below the
+      // last CONFIRMED (gap-qualified) row — their sub-lines carry only one
+      // cell's words, so no row test fires and they'd be processed ("Replay
+      // protected messages" under a "Send plaintext messages" cell). Chain the
+      // region bottom downward through rows whose in-region slice is not
+      // running prose (<4 lowercase words); the first prose row ends the chain.
+      for (const reg of regions) {
+        if (reg.n < 2) continue;
+        let extended = true;
+        while (extended) {
+          extended = false;
+          for (const ln of lines) {
+            const inReg = ln.items.filter((p) => {
+              const x = p.item.transform[4];
+              return x >= reg.x0 - 2 && x + (p.item.width ?? 0) / 2 <= reg.x1 + 2;
+            });
+            if (!inReg.length) continue;
+            const y = inReg[0].item.transform[5];
+            const h = Math.max(reg.h, inReg[0].item.height || 0);
+            if (y >= reg.yBot - 0.5 || reg.yBot - y > h * 2.4) continue;
+            // A wordy row is running prose when it starts at the region's
+            // left edge OR spans most of the region's width (an INDENTED
+            // paragraph-opening line under the table still fills the column).
+            // A tall cell's wordy continuation line ("Generate a string with
+            // the same length") starts at its CELL column and spans only that
+            // column — absorb it.
+            if (lowerWords(inReg) >= 4) {
+              const rx0 = Math.min(...inReg.map((p) => p.item.transform[4]));
+              const rx1 = Math.max(...inReg.map((p) => p.item.transform[4] + (p.item.width ?? 0)));
+              if (rx0 <= reg.x0 + 3 || rx1 - rx0 >= (reg.x1 - reg.x0) * 0.75) continue;
+            }
+            reg.yBot = y;
+            extended = true;
+          }
+        }
+      }
+      if (globalThis.__fxDebug) {
+        (globalThis.__fxRegions ??= []).push({
+          page: globalThis.__fxCurPage,
+          lines: tableLines.map((t) => ({ y: Math.round(t.y), x0: Math.round(t.x0), x1: Math.round(t.x1), h: Math.round(t.h * 10) / 10 })),
+          regions,
+        });
+      }
       for (const reg of regions) {
         if (reg.n < 2) continue; // a single stray multi-gap row isn't a table
         for (const p of items) {
           if (skip.has(p.div)) continue;
           const y = p.item.transform[5];
           const x = p.item.transform[4];
-          if (y <= reg.yTop + reg.h * 0.5 && y >= reg.yBot - reg.h * 1.2 && x >= reg.x0 - 2 && x <= reg.x1 + 2) {
+          // The span's horizontal CENTER must sit inside the region, not just
+          // its start: the neighbouring column's prose can begin at the
+          // region's right edge + the 2-unit slack (Table 1's rotated
+          // Pre-/Post-conn. labels reach x=313; §3.2's wrapped lines start at
+          // x=315 and run 243 units right — clearly not cell content).
+          if (
+            y <= reg.yTop + reg.h * 0.5 &&
+            y >= reg.yBot - reg.h * 1.2 &&
+            x >= reg.x0 - 2 &&
+            x + (p.item.width ?? 0) / 2 <= reg.x1 + 2
+          ) {
             skip.add(p.div);
             dbg(p.div, "table-region");
+            if (globalThis.__fxDebug) (reg.hits ??= []).push(p.item.str.slice(0, 28));
           }
         }
       }
@@ -1254,6 +1380,7 @@ export class TypographyEngine {
         (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2,
       );
     };
+    if (globalThis.__fxDebug) globalThis.__fxCurPage = pageNumber;
     const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0);
     for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
     // Tag bibliography-region spans so the references feature can skip annotating
@@ -1277,7 +1404,11 @@ export class TypographyEngine {
     if (!contentStart && pageNumber === 1) {
       const abstractPair = allPairs.find((p) => p.item && ABSTRACT.test(p.item.str));
       if (abstractPair) {
-        contentStart = { page: 1, y: abstractPair.item.transform[5] };
+        contentStart = {
+          page: 1,
+          y: abstractPair.item.transform[5],
+          h: abstractPair.item.height,
+        };
       }
     }
     // Sub/superscript fragments (kept on canvas, F19). Collected up front so
@@ -1345,8 +1476,18 @@ export class TypographyEngine {
         const sx1 = sx0 + (item.width ?? 0);
         const sy = item.transform[5];
         for (const f of scriptFrags) {
-          const dy = Math.abs(f.y - sy);
-          if (dy < item.height * 0.08 || dy > item.height) continue; // same baseline / other line
+          // Signed, asymmetric window (y grows upward): a superscript sits
+          // ≤0.6h ABOVE its base's baseline, a subscript ≤0.45h BELOW it.
+          // A symmetric 1h window also caught the NEXT line down — a
+          // subscript hanging 0.3h under one line is ~0.9h above the next
+          // line's baseline, which then lost its processing ("Finally, the
+          // user signs…" after a List = {H_UID_1, …} line).
+          const dy = f.y - sy; // + = frag above this item's baseline
+          const inWin =
+            dy > 0
+              ? dy >= item.height * 0.08 && dy <= item.height * 0.6
+              : -dy >= item.height * 0.08 && -dy <= item.height * 0.45;
+          if (!inWin) continue; // same baseline / another line
           if (f.x0 > sx1 + 2 || f.x1 < sx0 - 2) continue; // not adjacent
           return false;
         }
@@ -1358,7 +1499,19 @@ export class TypographyEngine {
         if (x - vx0 < pageW * 0.04) return false;
         if (contentStart) {
           if (pageNumber < contentStart.page) return false;
-          if (pageNumber === contentStart.page && y >= contentStart.y - 1) return false;
+          // Front matter is what sits ABOVE the Abstract line — cut strictly
+          // above it (more than half a line). In two-column layouts the other
+          // column's first body line shares the Abstract lead's baseline
+          // (5GShield/ACL: the right column starts level with "Abstract—…");
+          // a same-baseline cut would skip exactly that first line. The
+          // Abstract lead line itself is covered by the run-in/heading
+          // classifiers, not by this cut.
+          if (
+            pageNumber === contentStart.page &&
+            y >= contentStart.y + (contentStart.h || 9) * 0.6
+          ) {
+            return false;
+          }
         }
         if (inRefsBox(item)) return false;
         // Skip when a URL annotation covers most of the item (a long prose
@@ -1398,6 +1551,7 @@ export class TypographyEngine {
       )
       .map((p) => p.div);
     let obstacleRects = null;
+    let zoneDrops = null; // candidates inside rule-bounded table zones — left on the canvas
     let baselineCal = null; // famKey -> measured marginTop (em) that lands overlay ink on canvas ink
     // Key by the bare leading family name: the same face reaches spans as
     // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12,
@@ -1442,7 +1596,104 @@ export class TypographyEngine {
         // Canvas line-art (table rules, box frames, underlines, separators)
         // becomes obstacles too, so masks clamp around it exactly like skipped
         // text — the text layer alone can't see these.
-        for (const r of this.#detectCanvasRules(pageView)) obstacleRects.push(r);
+        const canvasRules = this.#detectCanvasRules(pageView);
+        for (const r of canvasRules) obstacleRects.push(r);
+        // Rule-bounded table zones (canvas is readable HERE, unlike at
+        // classification time): a ruled table's columns need no whitespace
+        // gaps and its cells can be wordy, so text heuristics keep missing
+        // row shapes — but every such table brackets its rows between ≥3
+        // stacked, x-overlapping horizontal rules. Any remaining candidate
+        // centered between two chained rules is table interior: leave it
+        // pristine on the canvas (mask-clamped like other kept content).
+        // Running prose CAN sit between two chains' rules (a paragraph
+        // between two framed listings) — a full-width line with ≥4 lowercase
+        // words stays processed.
+        zoneDrops = new Set();
+        try {
+          const pageHcss = pageView.div.getBoundingClientRect().height || 0;
+          const hRules = canvasRules
+            .filter((r) => r.right - r.left >= (r.bottom - r.top) * 4 && r.right - r.left > 40)
+            .sort((a, b) => a.top - b.top);
+          const rulePairs = [];
+          for (let a = 0; a < hRules.length; a++) {
+            for (let b = a + 1; b < hRules.length; b++) {
+              const A = hRules[a];
+              const B = hRules[b];
+              if (B.top - A.bottom <= 2) continue; // same visual rule
+              if (B.top - A.bottom > pageHcss * 0.15) break;
+              const lo = Math.max(A.left, B.left);
+              const hi = Math.min(A.right, B.right);
+              if (hi - lo < Math.max(A.right - A.left, B.right - B.left) * 0.7) continue;
+              rulePairs.push({ a, b, x0: lo, x1: hi, yTop: A.bottom, yBot: B.top });
+              break; // nearest qualifying rule below only
+            }
+          }
+          // ≥3 rules must chain — an isolated PAIR is usually two underlined
+          // run-in leads with a paragraph between.
+          const chainOf = new Map();
+          let cid = 0;
+          for (const p of rulePairs) {
+            const c = chainOf.get(p.a) ?? ++cid;
+            chainOf.set(p.a, c);
+            chainOf.set(p.b, c);
+          }
+          const csize = new Map();
+          for (const c of chainOf.values()) csize.set(c, (csize.get(c) || 0) + 1);
+          const zones = rulePairs.filter((p) => (csize.get(chainOf.get(p.a)) || 0) >= 3);
+          if (zones.length) {
+            const byLine = new Map();
+            for (const pr of pairs) {
+              const r = pr.div.getBoundingClientRect();
+              if (!(r.width > 0) || !(r.height > 0)) continue;
+              const cx = (r.left + r.right) / 2;
+              const cy = (r.top + r.bottom) / 2;
+              const zi = zones.findIndex(
+                (z) => cx >= z.x0 && cx <= z.x1 && cy > z.yTop + 1 && cy < z.yBot - 1,
+              );
+              if (zi < 0) continue;
+              const key = zi + ":" + Math.round(r.top / 5);
+              let arr = byLine.get(key);
+              if (!arr) byLine.set(key, (arr = []));
+              arr.push({ pr, r, z: zones[zi] });
+            }
+            // Prose between frames stays processed — including a paragraph's
+            // short LAST line ("as shown in Figure 8b."), which fails the
+            // width test on its own but directly continues an exempt line.
+            // Only spans that are themselves part of the prose flow stay: a
+            // short label sharing the baseline with a wordy description CELL
+            // ("NFRegister" centered beside a 3-line policy text) still drops.
+            const entryKeys = [...byLine.keys()].sort((a, b) => {
+              const [za, ka] = a.split(":").map(Number);
+              const [zb, kb] = b.split(":").map(Number);
+              return za - zb || ka - kb;
+            });
+            const lastExempt = new Map(); // zone index -> last exempt line key
+            for (const key of entryKeys) {
+              const group = byLine.get(key);
+              const [zi, lineKey] = key.split(":").map(Number);
+              const text = group.map((g) => g.pr.div.textContent).join(" ");
+              const lw = (text.match(/[a-zà-ÿ]{2,}/g) || []).length;
+              const gx0 = Math.min(...group.map((g) => g.r.left));
+              const gx1 = Math.max(...group.map((g) => g.r.right));
+              const z = group[0].z;
+              const prev = lastExempt.get(zi);
+              const exemptLine =
+                (lw >= 4 && gx1 - gx0 >= (z.x1 - z.x0) * 0.55) ||
+                (lw >= 2 && prev != null && lineKey - prev <= 5);
+              if (exemptLine) lastExempt.set(zi, lineKey);
+              for (const g of group) {
+                if (exemptLine) {
+                  const t = g.pr.div.textContent.trim();
+                  const slw = (t.match(/[a-zà-ÿ]{2,}/g) || []).length;
+                  if (slw >= 2 || t.length >= 12) continue;
+                }
+                zoneDrops.add(g.pr.div);
+              }
+            }
+          }
+        } catch {
+          /* canvas zone guard unavailable — classification skips still apply */
+        }
         for (const d of obstacleDivs) {
           if (!d.isConnected) continue;
           const r = d.getBoundingClientRect();
@@ -1564,6 +1815,14 @@ export class TypographyEngine {
         for (let j = i; j < end; j++) {
           const pair = pairs[j];
           const rect = pair.div.getBoundingClientRect();
+          // Inside a rule-bounded table zone: table interior stays on the
+          // canvas; its rect becomes an obstacle so neighbours' masks clamp.
+          if (zoneDrops?.has(pair.div)) {
+            if (rect.width > 0 && rect.height > 0) obstacleRects.push(rect);
+            pair.div.dataset.fxTable = "1";
+            if (globalThis.__fxDebug && !pair.div.dataset.fxWhy) pair.div.dataset.fxWhy = "table-rules";
+            continue;
+          }
           // A candidate overlapping skipped content is a duplicate of it —
           // leave it on the canvas (no mask, no emphasis) so the skipped copy
           // survives.

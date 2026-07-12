@@ -86,6 +86,11 @@ const PROBE = `(() => {
       const r = s.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) continue;
       if (!/[A-Za-zÀ-ÿ]/.test(s.textContent)) continue;
+      // Kept sub/superscript fragments ("C" in NF_C): a neighbouring word's
+      // mask may cover most of the tiny RECT while the ink stays untouched
+      // (masks are clamped around kept spans at ink precision). Rect
+      // arithmetic can't see that — skip single/double-glyph fragments.
+      if (s.textContent.trim().length <= 2 && r.width < 14) continue;
       const area = r.width * r.height;
       let cov = 0;
       for (const m of masks) cov += overlapArea(r, m);
