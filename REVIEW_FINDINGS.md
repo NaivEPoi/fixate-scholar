@@ -373,3 +373,16 @@ neighbours, kept glyphs must not be clipped, and math sub/superscripts must not 
   column medians): required margin for Libertine f2 is ~0; residual now ~1px (raster floor).
 - Gates: unit 32/32, papers 7/7 (bolded counts drop slightly = footnotes no longer bolded),
   dividers A/B/UC/ACL 0 masked, diagnose B whiteout 0.
+
+### F19 - math sub/superscripts kept on canvas
+- Candidate filter: a span with height < dominant x 0.8 AND <= 4 trimmed chars ("out"/"in"/
+  "dev"/"u" under gamma/S/M/psi) stays on the canvas with its parent symbol (obstacle).
+  Verified B p10 x-ray: whole math clusters black. Appendix/footnote prose unaffected.
+
+### F20 - minimum 2x canvas output scale
+- overlay.mjs overrides devicePixelRatio (viewer page only) to a minimum of 2: kept-canvas
+  tokens rendered coarsely at ~1x zoom on dpr<2 displays (gap/dot artifacts, stray line-end
+  dots next to the crisp DOM overlay). Verified B p14 mono tokens crisp at zoom 1.25. The
+  sharper canvas also reveals more line-art to #detectCanvasRules (B 153->202 rules,
+  masked=0 preserved). Engine reads derive scale from canvas.width/rect.width - unaffected.
+- Gates: unit 32/32, papers 7/7, dividers A/B masked=0, diagnose B whiteout=0.
