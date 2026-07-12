@@ -1318,6 +1318,15 @@ export class TypographyEngine {
       if (dominant && item?.height && item.height > dominant * 1.2) {
         return false;
       }
+      // Sub/superscripts of math symbols: a SHORT Latin fragment well below
+      // body size ("out"/"in"/"dev" under γ/S/M) belongs to its math cluster.
+      // Processing it re-draws the fragment off its glyph and its mask nicks
+      // the parent symbol — keep the whole cluster on the canvas. Small-set
+      // appendix/footnote prose is unaffected: its spans are full words and
+      // lines (>4 chars), and sizes sit at ≥0.8× body.
+      if (dominant && item?.height && item.height < dominant * 0.8 && trimmed.length <= 4) {
+        return false;
+      }
       if (item?.transform) {
         const x = item.transform[4];
         const y = item.transform[5];

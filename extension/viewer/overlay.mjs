@@ -7,6 +7,25 @@ import { TypographyEngine } from "./typography/engine.mjs";
 import { getSettings, setSettings, onSettingsChange } from "./settings-client.mjs";
 import { ReferencesFeature } from "./references/citations.mjs";
 
+// Crisper page canvases: PDF.js rasterizes each page at devicePixelRatio.
+// On standard-density displays (dpr < 2) the glyph rasterization at ~1×
+// zoom is coarse enough that kept-on-canvas tokens (mono identifiers,
+// inline math) show gap/dot artifacts next to the crisply DOM-rendered
+// overlay. Force a minimum output scale of 2 — a page canvas grows ~4× in
+// memory, well within budget, and PDF.js still caps oversized canvases via
+// maxCanvasPixels at high zoom. Engine measurements are unaffected (all
+// canvas reads derive their scale from canvas.width / boundingRect.width).
+try {
+  if ((window.devicePixelRatio || 1) < 2) {
+    Object.defineProperty(window, "devicePixelRatio", {
+      get: () => 2,
+      configurable: true,
+    });
+  }
+} catch {
+  /* keep the native ratio */
+}
+
 // The DNR redirect appends the raw PDF URL after ?file= without encoding.
 // Re-encode it so PDF.js (and the URL parser) can't be confused by &, #, etc.
 function normalizeFileParam() {
