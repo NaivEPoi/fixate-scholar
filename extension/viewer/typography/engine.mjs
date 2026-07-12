@@ -282,7 +282,7 @@ export class TypographyEngine {
    *   4. classify each block; everything that is not body text is skipped.
    * Captions are skipped whole — treated as part of their figure/table.
    */
-  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic) {
+  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0 = 0) {
     const skip = new Set();
     // Divs whose SURROUNDINGS carry structural canvas art hugging the text (a
     // displayed formula's box frame): masks of neighbouring lines must clamp a
@@ -312,6 +312,9 @@ export class TypographyEngine {
     // label — "Figure 5 (a) …", a caption — is not mistaken for prose
     // ("Listing 3 (representative of …" still is).
     const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|Tab(?:le)?|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*\d+[a-z]?\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})/;
+    // Publisher boilerplate markers (permission/copyright block, ISBN/DOI
+    // lines, ACM self-citation). Matched against a whole block's text.
+    const LEGAL_TEXT = /(Permission to make digital or hard copies|Copyrights? for components of this work|Request permissions from|licensed to ACM|ACM ISBN|ACM Reference Format|©\s*(19|20)\d\d\s|creativecommons\.org|(https?:\/\/)?(dx\.)?doi\.org\/)/i;
     const isCaptionLead = (t) => CAP_LEAD.test(t) && !REF_PROSE.test(t);
     const isAlgoLead = (t) => ALGO_LEAD.test(t) && !REF_PROSE.test(t);
 
@@ -602,6 +605,34 @@ export class TypographyEngine {
         }
         // Pseudocode listing (always skipped, even with prose-looking operands).
         if (isAlgoLead(b.lead)) { skipBlock(b, "blk-algo"); continue; }
+        // Publisher legal/metadata blocks (page-1 template furniture): the
+        // ACM/IEEE permission-and-copyright statement, ISBN/DOI lines, the
+        // "ACM Reference Format" self-citation, and the CCS-concepts line
+        // (bullet + arrow taxonomy). Prose-dense, so no other rule catches
+        // them, but they are boilerplate, not body text.
+        const btext = b.items.map((p) => p.item.str).join(" ");
+        // Legal boilerplate is always set smaller than body — the size guard
+        // keeps a BODY paragraph that merely cites a DOI from being skipped.
+        if (b.h < dominant * 0.95 && LEGAL_TEXT.test(btext)) { skipBlock(b, "blk-legal"); continue; }
+        // CCS-concepts line: "X → Y; Z; W." — an arrow plus a semicolon list
+        // (the leading bullet is often cut into its own block, so it can't be
+        // required). Running prose never combines a literal arrow with a
+        // semicolon-separated Title-Case list.
+        if (btext.includes("→") && (btext.match(/;/g) || []).length >= 2) { skipBlock(b, "blk-ccs"); continue; }
+        // Footnotes: a smaller-than-body block in the page's bottom band that
+        // OPENS with a footnote marker — a symbol (•†‡§¶*) or a superscript
+        // numeral (a tiny leading item). A plain smaller-than-body cut would
+        // wrongly drop small-set appendix/notes prose, so all three signals
+        // are required. (Also covers the ACM "authors contributed equally" /
+        // "Corresponding Author" notes.)
+        const fnLead = b.rows[0]?.items[0];
+        const supMark =
+          fnLead && fnLead.item.str.trim().length <= 2 &&
+          (fnLead.item.height || b.h) < b.h * 0.8;
+        if (b.h < dominant * 0.92 && b.yBot - vy0 < pageH * 0.3 &&
+            (/^[•†‡§¶*]/.test(b.lead) || supMark)) {
+          skipBlock(b, "blk-footnote"); continue;
+        }
         // Table: wide column gaps (cells) or special-font label columns. Spare
         // RUNNING PROSE — a justified body line stretches its inter-word spaces
         // wide enough to read as column gaps, but it averages ≥4 lowercase words
@@ -1223,7 +1254,7 @@ export class TypographyEngine {
         (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2,
       );
     };
-    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic);
+    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0);
     for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
     // Tag bibliography-region spans so the references feature can skip annotating
     // the reference list's own "[N]" entry markers with citation cards (F1).
@@ -1415,6 +1446,7 @@ export class TypographyEngine {
             const cctx = canvas.getContext("2d", { willReadFrequently: true });
             this.#measureCtx ??= document.createElement("canvas").getContext("2d");
             const samples = new Map();
+            const rej = { w: 0, xy: 0, ink: 0, asc: 0, bl: 0 };
             let inspected = 0;
             for (const pair of pairs) {
               if (inspected >= 150) break;
@@ -1428,12 +1460,12 @@ export class TypographyEngine {
               if (!arr) samples.set(key, (arr = []));
               if (arr.length >= 10) continue;
               const r = div.getBoundingClientRect();
-              if (!(r.width > 40) || !(r.height > 6)) continue;
+              if (!(r.width > 40) || !(r.height > 6)) { rej.w++; continue; }
               const x0 = Math.round((r.left - cr.left) * csx) + 2;
               const x1 = Math.round((r.right - cr.left) * csx) - 2;
               const y0 = Math.round((r.top - cr.top) * csy) - 3;
               const y1 = Math.round((r.top - cr.top + r.height * 0.75) * csy);
-              if (x0 < 0 || y0 < 0 || x1 > canvas.width || y1 > canvas.height || x1 - x0 < 20) continue;
+              if (x0 < 0 || y0 < 0 || x1 > canvas.width || y1 > canvas.height || x1 - x0 < 20) { rej.xy++; continue; }
               inspected++;
               const img = cctx.getImageData(x0, y0, x1 - x0, y1 - y0);
               let top = -1;
@@ -1444,12 +1476,15 @@ export class TypographyEngine {
                   if (img.data[k] < 120 && img.data[k + 1] < 120 && img.data[k + 2] < 120 && ++dark >= 2) { top = y; break; }
                 }
               }
-              if (top < 0) continue;
+              if (top < 0) { rej.ink++; continue; }
               const canvasInkTop = (y0 + top) / csy + cr.top;
               const fontPx = parseFloat(getComputedStyle(div).fontSize) || r.height;
               this.#measureCtx.font = `${fontPx}px ${family}`;
               const asc = this.#measureCtx.measureText(text).actualBoundingBoxAscent;
-              if (!(asc > 0) || !(fontPx > 0)) continue;
+              if (!(asc > 0) || !(fontPx > 0)) { rej.asc++; continue; }
+              // Predicted overlay ink top with zero margin: rendered baseline
+              // = blRatio × boxHeight below the box top, ink rises `asc`
+              // above it. Pixel-validated (probe-bl2 red-vs-black offsets).
               const predictedNoMargin = r.top + this.#baselineRatio(family) * r.height - asc;
               arr.push((canvasInkTop - predictedNoMargin) / fontPx);
             }
@@ -1461,7 +1496,7 @@ export class TypographyEngine {
             }
             if (globalThis.__fxDebug) {
               (globalThis.__fxCal ??= []).push({
-                page: pageNumber,
+                page: pageNumber, rej,
                 samples: [...samples.entries()].map(([k, a]) => [k.slice(0, 24), a.length]),
                 cal: [...baselineCal.entries()].map(([k, v]) => [k.slice(0, 24), +v.toFixed(4)]),
               });
@@ -1559,10 +1594,16 @@ export class TypographyEngine {
           // survive zoom/DPI re-layout.
           const fam = family || origFamily;
           const cal = fam ? baselineCal?.get(famKey(fam)) : undefined;
+          // The metric fallback applies ONLY when the rendered FACE actually
+          // changes (bundled reading fonts). When the face is the same and
+          // just the family STRING differs (our quoted swap of the embedded
+          // face), PDF.js's own placement is already correct — the formula's
+          // bbox-vs-baseline difference is measurement noise that pushed
+          // Libertine-faced papers ~0.12em off the canvas row.
           const dEm =
             cal !== undefined
               ? cal
-              : family && family !== origFamily
+              : family && famKey(family) !== famKey(origFamily)
                 ? this.#ascentRatio(origFamily) - this.#baselineRatio(family)
                 : 0;
           if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
@@ -1614,10 +1655,25 @@ export class TypographyEngine {
               // canvas.
               const cutL = o.right - L, cutR = R - o.left, cutT = o.bottom - T, cutB = B - o.top;
               const m = Math.min(cutL, cutR, cutT, cutB);
+              // Vertical cuts are floored at the span's OWN glyph rect: a
+              // protect zone (underline/frame padding) expanded into the line
+              // above must not strip that line's mask off its own descenders —
+              // the canvas lower halves would peek out as doubled/shifted
+              // text. The protected ART itself always sits beyond the
+              // expansion, so covering up to the glyph edge never touches it.
               if (m === cutL && cutL <= (R - L) * 0.4) L = o.right;
               else if (m === cutR && cutR <= (R - L) * 0.4) R = o.left;
-              else if (m === cutT && cutT <= (B - T) * 0.45) T = o.bottom;
-              else if (m === cutB && cutB <= (B - T) * 0.45) B = o.top;
+              // Vertical cuts: a THIN obstacle is canvas line-art (a rule or
+              // underline) — honor it exactly, a mask must never touch it.
+              // A TALL obstacle is a protect zone or text rect whose padding
+              // merely reaches into this line; floor the cut at the span's
+              // own descender band (r2.bottom + 0.15h), else the canvas
+              // lower halves peek out as doubled text (UC-Scheme P2/P3).
+              else if (m === cutT && cutT <= (B - T) * 0.45) {
+                T = o.bottom - o.top <= 5 ? o.bottom : Math.min(o.bottom, Math.max(T, r2.top - h * 0.05));
+              } else if (m === cutB && cutB <= (B - T) * 0.45) {
+                B = o.bottom - o.top <= 5 ? o.top : Math.max(o.top, Math.min(B, r2.bottom + h * 0.15));
+              }
             }
           }
           if (R - L <= 0 || B - T <= 0) continue;

@@ -22,6 +22,8 @@ const PRESET = process.argv.includes("--preset"); // enable fx BEFORE the paper 
 const PAPERS = {
   "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
   "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
+  "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
 };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });
