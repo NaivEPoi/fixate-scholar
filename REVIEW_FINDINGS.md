@@ -386,3 +386,14 @@ neighbours, kept glyphs must not be clipped, and math sub/superscripts must not 
   sharper canvas also reveals more line-art to #detectCanvasRules (B 153->202 rules,
   masked=0 preserved). Engine reads derive scale from canvas.width/rect.width - unaffected.
 - Gates: unit 32/32, papers 7/7, dividers A/B masked=0, diagnose B whiteout=0.
+
+### F21 - the text a sub/superscript attaches to is also kept on canvas
+- Candidate filter collects script fragments up front (height < dominant x 0.8, <= 4 chars);
+  a candidate with such a fragment adjacent (within 2 PDF units) and vertically offset
+  (0.08h..1h) from its own baseline stays on the canvas - the whole expression renders as one.
+  Verified on 5GCVerif p4 (NF_C/NF_P) and D p4 Table 1 - not just 5GBaseChecker.
+- chrome-xray PAPERS map now covers the full 12-paper corpus.
+- HARNESS DEBT: diag-dividers/diagnose false-flag masked/whiteout on D/ACL/5GCVerif since the
+  F20 dpr override (their composite sampling assumes the native ratio; the engine derives
+  scale from canvas.width/rect.width and is correct). Visual captures contradict the flags.
+  TODO: make both samplers scale-derive like the engine, then re-run the 12-paper sweeps.

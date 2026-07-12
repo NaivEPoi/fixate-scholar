@@ -1280,6 +1280,24 @@ export class TypographyEngine {
         contentStart = { page: 1, y: abstractPair.item.transform[5] };
       }
     }
+    // Sub/superscript fragments (kept on canvas, F19). Collected up front so
+    // the candidate filter can ALSO keep the text a script attaches to —
+    // processing the base while its script stays canvas splits one
+    // expression across two layers and the pair drifts apart.
+    const scriptFrags = [];
+    if (dominant) {
+      for (const p of allPairs) {
+        const it = p.item;
+        if (!it?.height || !it.transform || it.height >= dominant * 0.8) continue;
+        const t = (it.str || "").trim();
+        if (!t || t.length > 4) continue;
+        scriptFrags.push({
+          x0: it.transform[4],
+          x1: it.transform[4] + (it.width ?? 0),
+          y: it.transform[5],
+        });
+      }
+    }
     const pairs = allPairs.filter((pair) => {
       const { div, item } = pair;
       if (!div?.isConnected || div.dataset.fxDone) return false;
@@ -1318,14 +1336,20 @@ export class TypographyEngine {
       if (dominant && item?.height && item.height > dominant * 1.2) {
         return false;
       }
-      // Sub/superscripts of math symbols: a SHORT Latin fragment well below
-      // body size ("out"/"in"/"dev" under γ/S/M) belongs to its math cluster.
-      // Processing it re-draws the fragment off its glyph and its mask nicks
-      // the parent symbol — keep the whole cluster on the canvas. Small-set
-      // appendix/footnote prose is unaffected: its spans are full words and
-      // lines (>4 chars), and sizes sit at ≥0.8× body.
-      if (dominant && item?.height && item.height < dominant * 0.8 && trimmed.length <= 4) {
-        return false;
+      // …and the TEXT such a script attaches to: a candidate with a kept
+      // sub/superscript fragment hugging its edge (vertically offset from
+      // its own baseline) is part of that expression — keep it whole on the
+      // canvas rather than splitting it across layers.
+      if (scriptFrags.length && item?.transform && item?.height) {
+        const sx0 = item.transform[4];
+        const sx1 = sx0 + (item.width ?? 0);
+        const sy = item.transform[5];
+        for (const f of scriptFrags) {
+          const dy = Math.abs(f.y - sy);
+          if (dy < item.height * 0.08 || dy > item.height) continue; // same baseline / other line
+          if (f.x0 > sx1 + 2 || f.x1 < sx0 - 2) continue; // not adjacent
+          return false;
+        }
       }
       if (item?.transform) {
         const x = item.transform[4];
