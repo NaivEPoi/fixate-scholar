@@ -343,3 +343,33 @@ neighbours, kept glyphs must not be clipped, and math sub/superscripts must not 
   at the same point as #detectCanvasRules fixes that.)
 - Gates: unit 32/32, papers 7/7, diagnose B whiteout 0 with peek IMPROVED 588 → 467, font
   matrix 12 combos unchanged-perfect, divider sweep.
+
+## Round 7 - footnotes/legal metadata, protect-zone doubling, Libertine baseline (F16-F18)
+
+### F16 - footnotes, copyright/permission blocks, and ACM metadata are now SKIPPED
+- New block rules: blk-legal (LEGAL_TEXT markers + smaller-than-body guard), blk-ccs (arrow +
+  2 semicolons: the CCS-concepts taxonomy line), blk-footnote (smaller-than-body block in the
+  bottom 30% band OPENING with a footnote marker or superscript numeral - all three signals
+  required so small-set appendix prose is untouched). Verified on UC-Scheme p1: permission/
+  ISBN/DOI block, ACM Reference Format, CCS line, and both author-note footnotes skipped;
+  abstract/intro still processed. NOTE: #classifyBlocks now takes vy0 (a missing param threw
+  a ReferenceError and silently aborted ALL processing - done=0 pages is the symptom).
+
+### F17 - line above an underlined run-in lead rendered doubled (UC-Scheme P2/P3)
+- The protect zone (+-0.35h) around an underlined italic lead overlaps the previous line's
+  glyph rect; the mask overlap-clamp cut that line's mask above its own descenders and the
+  canvas lower halves peeked out as doubled text. Fix: vertical overlap cuts distinguish THIN
+  obstacles (<=5px: canvas rules/underlines - honored exactly, never touched) from TALL ones
+  (protect zones/text rects - floored at the span's descender band r2.bottom+0.15h / r2.top-
+  0.05h). Doubling gone AND the P2/P3 underlines survive.
+
+### F18 - Libertine-faced papers rendered the whole overlay ~2-4px high
+- Two compounding causes: (a) the metric dEm fallback (ascentRatio - baselineRatio) applied to
+  SAME-FACE swaps because the family STRINGS differ (quoted vs unquoted) - it is measurement
+  noise there (-0.12em on Libertine); now the fallback is 0 unless famKey actually changes.
+  (b) the baseline calibration briefly used an in-span marker that returns the span TOP in
+  Chrome (all samples rejected); reverted to the pixel-validated prediction
+  (r.top + blRatio*rH - actualBoundingBoxAscent). Pixel truth via probe-bl2 (red-vs-black
+  column medians): required margin for Libertine f2 is ~0; residual now ~1px (raster floor).
+- Gates: unit 32/32, papers 7/7 (bolded counts drop slightly = footnotes no longer bolded),
+  dividers A/B/UC/ACL 0 masked, diagnose B whiteout 0.
