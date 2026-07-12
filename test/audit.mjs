@@ -25,8 +25,13 @@ const PAPERS = {
   "Two-column D": "https://yilud.me/Proteus-ccs24.pdf",
   "Two-column E": "https://yilud.me/SIB-Auth.pdf",
   "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
-  "arXiv": "https://arxiv.org/pdf/1706.03762",
-  "arXiv2": "https://arxiv.org/pdf/2502.04915",
+  "arXiv": "https://arxiv.org/pdf/2502.04915",
+  "arXiv-attention": "https://arxiv.org/pdf/1706.03762",
+  "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
+  "5GShield": "https://yilud.me/5GShield.pdf",
+  "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",
+  "ACL": "https://yilud.me/2026.acl-long.2136.pdf",
+  "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
 };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });
