@@ -73,7 +73,19 @@ npm run package       # build a store-uploadable zip into dist/
 # regular Chrome ≥137 ignores --load-extension, so point it at Edge,
 # Chromium, or Chrome for Testing):
 node test/e2e.mjs "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+
+# full corpus + rendering-fidelity harnesses (12 real papers, both browsers):
+node test/papers.mjs                          # classification/color/link gate (must be 7/7 PASS)
+node test/diag-dividers.mjs "Two-column B"    # masks must never cover table rules/underlines
+node test/chrome-xray.mjs  "Two-column B" 10 --browser=chrome   # real-Chrome overlay-vs-canvas x-ray
+node test/matrix-fonts.mjs "Two-column B" 14 --browser=edge     # every fontMode × boldWeight combo
 ```
+
+**Read [TESTING.md](TESTING.md) before changing the engine** — it is the
+rulebook (what must/must not be processed), the test inventory, and a list of
+hard-won debugging rules (§6): measurement traps (stale text-layer scale,
+font-load races, canvas readability windows), x-ray interpretation, and the
+per-change verification gates.
 
 The PDF.js generic viewer is vendored (not committed) by `scripts/fetch-pdfjs.mjs`, which
 pins the release version and sha256 and applies a few loud-failure string patches (see the

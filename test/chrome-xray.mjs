@@ -1,4 +1,4 @@
-﻿// REAL-CHROME diagnostic: Chrome â‰¥126 removed --load-extension but exposes
+﻿// REAL-CHROME diagnostic: Chrome ≥126 removed --load-extension but exposes
 // CDP `Extensions.loadUnpacked` when started with
 // --enable-unsafe-extension-debugging. This harness launches a side-profile
 // HEADFUL Chrome (real display DPI), loads the unpacked extension via CDP,
@@ -81,7 +81,7 @@ try {
     try {
       const r = await b.send("Extensions.loadUnpacked", { path: EXT });
       extId = r.id;
-      console.log("Extensions.loadUnpacked OK â€” id:", extId);
+      console.log("Extensions.loadUnpacked OK — id:", extId);
     } catch (e) {
       console.error("Extensions.loadUnpacked FAILED:", e.message);
       throw e;
@@ -100,7 +100,7 @@ try {
   await sleep(1200);
   if (PRESET) {
     // Enable fx BEFORE the paper loads (via the service worker context), so
-    // the first render processes during initial font loading â€” the user's
+    // the first render processes during initial font loading — the user's
     // real flow.
     const sw = await connect(swTarget.webSocketDebuggerUrl);
     const r = await sw.send("Runtime.evaluate", { expression: `new Promise((r) => chrome.storage.sync.set({ enabled: true }, () => r("preset-ok")))`, awaitPromise: true, returnByValue: true });
@@ -108,7 +108,7 @@ try {
     try { sw.ws.close(); } catch {}
   }
 
-  // Open the paper â€” the extension's DNR rule redirects the .pdf URL to the viewer.
+  // Open the paper — the extension's DNR rule redirects the .pdf URL to the viewer.
   const tab = await http(`/json/new?about:blank`, "PUT");
   const p = await connect(tab.webSocketDebuggerUrl);
   await p.send("Page.enable");
@@ -121,7 +121,7 @@ try {
   };
   const where = await ev("location.href.slice(0, 90)");
   console.log("tab is at:", where);
-  if (!where.startsWith("chrome-extension://")) throw new Error("DNR redirect did not fire â€” viewer not loaded");
+  if (!where.startsWith("chrome-extension://")) throw new Error("DNR redirect did not fire — viewer not loaded");
   console.log("devicePixelRatio:", await ev("devicePixelRatio"));
 
   // Enable fx (unless preset before load).
