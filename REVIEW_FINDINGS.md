@@ -479,3 +479,24 @@ neighbours, kept glyphs must not be clipped, and math sub/superscripts must not 
   pass found a table - processing aborted (done=0) exactly on table-heavy pages, and the
   0-offender oracle runs on those pages were FALSE GREENS. When a sweep suddenly reports
   clean on pages that should have findings, check done>0 before believing it.
+
+### F26 - body-sized figure labels processed; figure-body sweep + test/figures.mjs
+- Figures carry no reliable rules (plots, FSM/protocol/architecture diagrams), and their
+  labels can be BODY-SIZED, plain-faced, structureless prose fragments ("Context Encoder",
+  "MIB,SIBs", "all traffic" in 5GShield Fig. 2; "Consumer", "producer id" in 5GCVerif
+  Fig. 5) - no size/font/row signal, so every existing rule missed them and they rendered
+  bolded inside diagrams.
+- Engine: FIGURE-BODY SWEEP at classification, line-level (the block-level caption
+  absorption cannot cross streams - a full-width figure's caption lives in the full stream,
+  its labels in the column streams). In every corpus template the figure sits ABOVE its
+  caption: everything between a "Figure N" caption line and the nearest running-prose (or
+  caption) line above it, in the caption's column, is figure content (why=fig-body). The
+  prose bound absorbs its paragraph's short TAIL lines downward (tight leading, >=2
+  lowercase words) so "...within each window." style enders keep their processing; region
+  capped at 65% page height. Caption anchors are tested at COLUMN STARTS of the line group
+  (a line group merges the caption with the other column's same-baseline text - whole-line
+  matching missed 5GShield Fig. 2's caption entirely).
+- test/figures.mjs - the same geometry as an engine-independent oracle (exit 1 on a
+  processed span centered in a figure region). Lines are grouped PER COLUMN keyed by
+  vertical CENTER (kept mono/math spans have different tops and split top-keyed groups,
+  which made fragmented prose fail the bound test and flagged whole paragraphs).

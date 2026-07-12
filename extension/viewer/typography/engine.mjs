@@ -593,8 +593,27 @@ export class TypographyEngine {
         // directly above it in this column (figures are captioned below). An
         // in-text "Figure N shows …" prose ref is NOT a caption (REF_PROSE).
         if (isCaptionLead(b.lead)) {
-          const prev = blocks[bi - 1];
-          if (prev && b.yTop - prev.yBot < pageH * 0.16 && lowerWords(prev.items) < 5) skipBlock(prev, "blk-capprev");
+          // The figure sits ABOVE its caption. One-block absorption misses
+          // diagrams whose labels split into several small blocks ("Context
+          // Encoder", "MIB,SIBs", "all traffic" — body-sized, plain-faced, no
+          // row structure): walk upward absorbing every block until the first
+          // running-prose block, a heading, another caption, a large gap, or
+          // the height budget — by geometry everything between the caption
+          // and the prose above it in this column is figure content.
+          let below = b;
+          let budget = pageH * 0.6;
+          for (let k = bi - 1; k >= 0; k--) {
+            const pb = blocks[k];
+            if (pb.yBot - below.yTop > pageH * 0.16) break; // vertical gap
+            const plc = lowerWords(pb.items);
+            if (plc >= pb.rows.length * 4 && plc >= 4) break; // running prose
+            if (pb.h > dominant * 1.15) break; // heading/title
+            if (isCaptionLead(pb.lead)) break; // the previous figure's caption
+            budget -= Math.max(0, pb.yTop - pb.yBot);
+            if (budget < 0) break;
+            skipBlock(pb, "blk-capprev");
+            below = pb;
+          }
           // A caption is short. A prose-dense caption-led block of ≥3 rows is a
           // caption that block-grouping MERGED with the body paragraph below it
           // (no whitespace gap between them); skipping it whole would drop the
@@ -753,6 +772,93 @@ export class TypographyEngine {
       skipAlignedStarts(region);
     }
     if (twoColumn) skipAlignedTable(lines, centerX);
+
+    // Figure-body sweep (F26). The figure sits ABOVE its caption, and its
+    // interior can hold BODY-SIZED, plain-faced labels with no row structure
+    // ("Context Encoder", "all traffic") that no other rule touches. The
+    // block-level absorption can't cross streams (a full-width figure's
+    // caption lives in the full stream, its labels in the column streams),
+    // so sweep by GEOMETRY: everything between a caption line and the
+    // nearest running-prose (or caption) line above it, in the caption's
+    // column, is figure content. A paragraph's short tail lines directly
+    // under the prose bound are absorbed into the paragraph first, so they
+    // keep their processing.
+    {
+      const lineX = (its) => {
+        let x0 = Infinity;
+        let x1 = -Infinity;
+        for (const p of its) {
+          const x = p.item.transform[4];
+          x0 = Math.min(x0, x);
+          x1 = Math.max(x1, x + (p.item.width ?? 0));
+        }
+        return [x0, x1];
+      };
+      const ordered = lines.slice().sort((a, b) => b.y - a.y); // top → bottom
+      for (let ci = 0; ci < ordered.length; ci++) {
+        const cap = ordered[ci];
+        // A line group can merge the caption with the OTHER column's text on
+        // the same baseline — test each column start's segment, like the
+        // caption pass does.
+        const capIts = cap.items;
+        const starts2 = [0];
+        if (twoColumn) {
+          const r = capIts.findIndex((p) => p.item.transform[4] >= centerX);
+          if (r > 0) starts2.push(r);
+        }
+        let seg = null;
+        for (const a of starts2) {
+          const end = a === 0 && starts2.length > 1 ? starts2[1] : capIts.length;
+          const s2 = capIts.slice(a, end);
+          const t2 = s2.map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim();
+          if (/^(?:Fig(?:ure)?\.?|FIGURE)\s*\d/.test(t2) && isCaptionLead(t2)) { seg = s2; break; }
+        }
+        if (!seg) continue;
+        const [cx0, cx1] = lineX(seg);
+        const crosses = !twoColumn || (cx0 < centerX - 10 && cx1 > centerX + 10);
+        const colX0 = crosses ? vx0 : cx0 < centerX ? vx0 : centerX;
+        const colX1 = crosses ? vx0 + pageW : cx0 < centerX ? centerX : vx0 + pageW;
+        const colW = colX1 - colX0;
+        const inColOf = (ln) =>
+          ln.items.filter((p) => {
+            const x = p.item.transform[4];
+            return x + (p.item.width ?? 0) > colX0 + 2 && x < colX1 - 2;
+          });
+        // Nearest prose/caption line above the caption in this column.
+        let boundIdx = -1;
+        for (let j = ci - 1; j >= 0; j--) {
+          const inCol = inColOf(ordered[j]);
+          if (!inCol.length) continue;
+          const [lx0, lx1] = lineX(inCol);
+          const t = inCol.map((p) => p.item.str).join(" ").trim();
+          const capAbove = /^(?:Fig(?:ure)?\.?|FIGURE|Tab(?:le)?\.?|TABLE)\s*\d/.test(t) && isCaptionLead(t);
+          const prose = lowerWords(inCol) >= 4 && lx1 - lx0 >= colW * 0.72;
+          if (capAbove || prose) { boundIdx = j; break; }
+        }
+        // Absorb the bound paragraph's short continuation lines downward.
+        let topY = boundIdx >= 0 ? ordered[boundIdx].y : Infinity;
+        if (boundIdx >= 0) {
+          for (let j = boundIdx + 1; j < ci; j++) {
+            const inCol = inColOf(ordered[j]);
+            if (!inCol.length) continue;
+            const h = Math.max(ordered[j].h || 0, 8);
+            if (topY - ordered[j].y > h * 1.7) break; // leading gap — figure begins
+            if (lowerWords(inCol) < 2) break; // not prose flow
+            topY = ordered[j].y;
+          }
+        }
+        if (topY !== Infinity && topY - cap.y > pageH * 0.65) continue; // implausible — abort
+        if (topY - cap.y < dominant * 2 && topY !== Infinity) continue; // no room for a figure
+        for (let j = 0; j < ci; j++) {
+          const ln = ordered[j];
+          if (ln.y >= topY) continue; // the paragraph or above
+          for (const p of inColOf(ln)) {
+            skip.add(p.div);
+            dbg(p.div, "fig-body");
+          }
+        }
+      }
+    }
 
     // Line-level heading pass (independent of block grouping, which can merge a
     // heading line into the paragraph below it). At each column's start: a short
