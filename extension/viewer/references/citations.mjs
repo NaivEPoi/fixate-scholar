@@ -122,7 +122,13 @@ export class ReferencesFeature {
 
     for (const cite of findCitations(joined)) {
       const entries = resolveCitation(cite.keys, this.#entries);
-      if (!entries.length) continue;
+      // A NUMERIC citation that resolves to no parsed entry (the extractor
+      // missed part of the bibliography) still IS a citation — readers see
+      // "[52] colored, [53] not" as a bug. Color it; only the hover/click
+      // card requires a resolved entry. Unresolved AUTHOR-YEAR parentheticals
+      // stay untouched (that pattern false-positives on ordinary parens).
+      const numeric = joined[cite.start] === "[";
+      if (!entries.length && !numeric) continue;
       for (const seg of segments) {
         if (seg.end <= cite.start || seg.start >= cite.end) continue;
         // Don't annotate the bibliography's own entry "[N]" markers (the engine
@@ -131,6 +137,12 @@ export class ReferencesFeature {
         if (seg.span.dataset.fxRefs) continue;
         const localStart = Math.max(0, cite.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
+        if (!entries.length) {
+          if (seg.span.dataset.fxDone) {
+            wrapRange(seg.span, localStart, localEnd, "fx-cite-c", null);
+          }
+          continue;
+        }
         for (const rect of rangeRects(seg.span, localStart, localEnd)) {
           const a = document.createElement("a");
           a.className = "fx-cite-hit";

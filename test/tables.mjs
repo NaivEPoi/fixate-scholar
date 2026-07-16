@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const FILTER = POS[0] ?? "5GShield";
+const URL_OVERRIDE = process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6); // any PDF URL, e.g. a local test server
 const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const PAPERS = {
   "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
@@ -170,7 +171,7 @@ try {
   for (let i = 0; i < 50 && !version; i++) { try { version = await http("/json/version"); } catch { await sleep(300); } }
   let extId = null;
   for (let i = 0; i < 60 && !extId; i++) { const t = await http("/json/list"); const sw = t.find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs")); if (sw) extId = new URL(sw.url).hostname; else await sleep(300); }
-  const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(PAPERS[FILTER])}`, "PUT");
+  const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent((URL_OVERRIDE ?? PAPERS[FILTER]))}`, "PUT");
   ws = new WebSocket(tab.webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
   await send("Page.enable"); await sleep(2500);
