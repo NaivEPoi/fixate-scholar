@@ -42,7 +42,7 @@ const PAPERS = [
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
-const PORT = 9337;
+const PORT = 9337 + (process.pid % 150); // per-pid: a fixed port collides with zombie Edge listeners
 const userDataDir = join(tmpdir(), `fx-papers-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -383,7 +383,7 @@ try {
 } finally {
   browser.kill();
   await sleep(500);
-  rmSync(userDataDir, { recursive: true, force: true });
+  try { rmSync(userDataDir, { recursive: true, force: true }); } catch { /* Edge still holds the profile */ }
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL PAPERS PASSED");

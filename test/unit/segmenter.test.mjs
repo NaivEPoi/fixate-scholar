@@ -130,3 +130,21 @@ test("emphasizeParts leaves numbers unbolded", () => {
   const bolded = parts.filter((p) => p.bold).map((p) => p.text);
   assert.deepEqual(bolded, ["i", "w"]);
 });
+
+test("ALL-CAPS words (acronyms) are never emphasized", () => {
+  const { parts } = emphasizeParts("the NAS layer of AMF nodes");
+  const bolded = parts.filter((p) => p.bold).map((p) => p.text);
+  assert.ok(!bolded.some((t) => /^[A-Z]+$/.test(t) && t.length >= 2));
+  assert.ok(bolded.includes("th")); // "the" still emphasized
+  assert.ok(bolded.includes("lay")); // "layer" still emphasized
+  // single-letter words and Capitalized words keep their emphasis
+  const cap = emphasizeParts("Reading Guide");
+  assert.ok(cap.parts.some((p) => p.bold));
+});
+
+test('emphasisMode "none" bolds nothing but keeps the text intact', () => {
+  const text = "reading with a swapped font only";
+  const { parts } = emphasizeParts(text, { emphasisMode: "none" });
+  assert.ok(parts.every((p) => !p.bold));
+  assert.equal(parts.map((p) => p.text).join(""), text);
+});

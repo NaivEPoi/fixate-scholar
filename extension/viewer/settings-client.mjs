@@ -7,10 +7,12 @@ export const DEFAULTS = Object.freeze({
   // "dynamic": whole syllables up to half the word (default)
   // "syllable": exactly the first syllable
   // "fraction": a fixed fraction of the word (the `fraction` slider)
+  // "none": no emphasis at all — spans are still re-rendered (so a bundled
+  //         reading font applies) but nothing is bolded
   emphasisMode: "dynamic",
   fraction: 0.4,
   saccade: 1,
-  boldWeight: 600,
+  boldWeight: 650,
   fontMode: "original", // "original" | "atkinson" | "inter" | "literata"
   bypassOrigins: [],
   // Master switch for PDF interception. When false the extension registers no

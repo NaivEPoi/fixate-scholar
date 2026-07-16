@@ -158,11 +158,30 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
 });
 
+// One-shot bypass URLs for the file:// path. DNR allow rules can't stop the
+// webNavigation rewrite below, so it consults this set. storage.session
+// survives service-worker restarts within the browser session.
+async function addBypassOnceUrl(url) {
+  const { bypassOnceUrls = [] } = await chrome.storage.session.get("bypassOnceUrls");
+  await chrome.storage.session.set({ bypassOnceUrls: [...new Set([...bypassOnceUrls, url])].slice(-20) });
+}
+async function takeBypassOnceUrl(url) {
+  const { bypassOnceUrls = [] } = await chrome.storage.session.get("bypassOnceUrls");
+  if (!bypassOnceUrls.includes(url)) return false;
+  await chrome.storage.session.set({ bypassOnceUrls: bypassOnceUrls.filter((u) => u !== url) });
+  return true;
+}
+
 // file://*.pdf — DNR can't see file: responses; rewrite the navigation.
 chrome.webNavigation.onBeforeNavigate.addListener(
   async (details) => {
     if (details.frameId !== 0) return;
     if (!/^file:.*\.pdf$/i.test(details.url)) return;
+    // "Open in native viewer" re-navigates to the same file: URL — the DNR
+    // allow rule cannot suppress this listener, so it checks the one-shot
+    // set itself. Without this the button bounced local PDFs straight back
+    // into FixateScholar (the "native button doesn't work" report).
+    if (await takeBypassOnceUrl(details.url)) return;
     const { intercept = true } = await chrome.storage.sync.get("intercept");
     if (!intercept) return;
     if (!(await chrome.extension.isAllowedFileSchemeAccess())) return;
@@ -178,22 +197,32 @@ chrome.webNavigation.onBeforeNavigate.addListener(
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== "fx-bypass-once" || !msg.url) return false;
   (async () => {
-    const id = BYPASS_ONCE_BASE + (Date.now() % 90);
-    await chrome.declarativeNetRequest.updateSessionRules({
-      addRules: [
-        {
-          id,
-          priority: 30,
-          condition: { resourceTypes: ["main_frame"], urlFilter: msg.url },
-          action: { type: "allow" },
-        },
-      ],
-    });
+    if (/^file:/i.test(msg.url)) {
+      // file: navigations are intercepted by webNavigation, not DNR.
+      await addBypassOnceUrl(msg.url);
+    } else {
+      // removeRuleIds includes the id being added: a repeated click within
+      // the 30s cleanup window replaces the rule instead of throwing
+      // "does not have a unique ID" (which silently dropped the bypass and
+      // bounced the tab back into the viewer).
+      const id = BYPASS_ONCE_BASE + (Date.now() % 90);
+      await chrome.declarativeNetRequest.updateSessionRules({
+        removeRuleIds: [id],
+        addRules: [
+          {
+            id,
+            priority: 30,
+            condition: { resourceTypes: ["main_frame"], urlFilter: msg.url },
+            action: { type: "allow" },
+          },
+        ],
+      });
+      setTimeout(() => {
+        chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] });
+      }, 30_000);
+    }
     const tabId = sender.tab?.id;
     if (tabId !== undefined) await chrome.tabs.update(tabId, { url: msg.url });
-    setTimeout(() => {
-      chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] });
-    }, 30_000);
     sendResponse({ ok: true });
   })();
   return true;

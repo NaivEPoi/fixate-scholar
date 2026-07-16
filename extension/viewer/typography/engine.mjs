@@ -187,6 +187,8 @@ export class TypographyEngine {
         span.innerHTML = orig.html;
         span.style.setProperty("--scale-x", orig.scaleX || "");
         span.style.fontFamily = orig.fontFamily;
+        span.style.fontStyle = orig.fontStyle || "";
+        span.style.fontWeight = orig.fontWeight || "";
         span.style.wordSpacing = orig.wordSpacing || "";
         span.style.marginTop = orig.marginTop || "";
       }
@@ -1425,6 +1427,14 @@ export class TypographyEngine {
     // stale. Restore to pristine synchronously — the page shows its native
     // rendering rather than a half-stale hybrid — then process fresh below.
     this.#restorePage(pageView);
+    // Font-only mode with the ORIGINAL font changes nothing visually — leave
+    // the page pristine (no masks, no re-render, no drift risk).
+    if (
+      this.#settings.emphasisMode === "none" &&
+      (this.#settings.fontMode ?? "original") === "original"
+    ) {
+      return Promise.resolve();
+    }
     const holder = { cancelled: false };
     holder.promise = new Promise((resolve) => (holder.resolve = resolve));
     this.#pending.set(pageNumber, holder);
@@ -1576,8 +1586,13 @@ export class TypographyEngine {
       // …and the TEXT such a script attaches to: a candidate with a kept
       // sub/superscript fragment hugging its edge (vertically offset from
       // its own baseline) is part of that expression — keep it whole on the
-      // canvas rather than splitting it across layers.
-      if (scriptFrags.length && item?.transform && item?.height) {
+      // canvas rather than splitting it across layers. ONLY expression-sized
+      // spans qualify: a full PROSE span whose last/first token happens to
+      // carry a script ("…with a batch larger than 2" + "10") must still be
+      // processed — the width correction redraws its base token in place and
+      // the kept script stays beside it as an obstacle; keeping the whole
+      // span left entire prose lines unemphasized after inline math.
+      if (scriptFrags.length && item?.transform && item?.height && trimmed.length <= 12) {
         const sx0 = item.transform[4];
         const sx1 = sx0 + (item.width ?? 0);
         const sy = item.transform[5];
@@ -1964,6 +1979,8 @@ export class TypographyEngine {
             html: span.innerHTML,
             scaleX: span.style.getPropertyValue("--scale-x"),
             fontFamily: span.style.fontFamily,
+            fontStyle: span.style.fontStyle,
+            fontWeight: span.style.fontWeight,
             wordSpacing: span.style.wordSpacing,
             marginTop: span.style.marginTop,
           });
@@ -1981,7 +1998,18 @@ export class TypographyEngine {
           span.replaceChildren(frag);
           const origFamily = span.style.fontFamily;
           const family = this.#fontFamilyFor(pair);
-          if (family && family !== origFamily) span.style.fontFamily = family;
+          if (family && family !== origFamily) {
+            span.style.fontFamily = family;
+            // A bundled face REPLACES the embedded one — carry the original
+            // face's style along, or italic emphasis flattens to roman and
+            // inline bold to regular (the browser synthesizes oblique/bold
+            // from the 400/700 faces). Original-font mode never enters here
+            // with a real face change (the swap only re-quotes the family).
+            if (famKey(family) !== famKey(origFamily)) {
+              if (isItalic(pair)) span.style.fontStyle = "italic";
+              if (isBold(pair)) span.style.fontWeight = "700";
+            }
+          }
           // Re-seat the baseline. Preferred: the per-family CANVAS-MEASURED
           // margin (baselineCal) — it lands the rendered ink exactly on the
           // canvas ink, so processed words sit in the same row as kept
@@ -2121,18 +2149,26 @@ export class TypographyEngine {
             continue;
           }
           const spaces = (span.textContent.match(/ /g) || []).length;
-          const perSpace = spaces ? (targetW - natural) / spaces : Infinity;
-          // Positive word-spacing (justification surplus) can stretch far;
-          // NEGATIVE word-spacing eats the inter-word gaps themselves — on a
-          // line LaTeX already squeezed to minimum glue, even −3px/space
-          // fuses the words ("securitypoliciesfromspecifications", B p14).
-          // Cap the negative side tightly and let --scale-x absorb bigger
-          // shrinks: 2-3% narrower glyphs are invisible, missing spaces are
-          // not.
-          if (spaces >= 2 && perSpace < rect.height * 0.45 && perSpace > rect.height * -0.1) {
+          // Glyph size must stay CONSISTENT across the page: white space
+          // absorbs as much of the correction as it safely can, and only the
+          // RESIDUAL goes to --scale-x (fractions of a percent instead of
+          // the whole correction). Positive word-spacing (justification
+          // surplus) can stretch far; NEGATIVE word-spacing eats the
+          // inter-word gaps themselves — on a line LaTeX already squeezed to
+          // minimum glue, even −3px/space fuses the words
+          // ("securitypoliciesfromspecifications", B p14) — so the negative
+          // side is capped tightly and the leftover shrink scales glyphs
+          // (2-3% narrower is invisible, missing spaces are not).
+          if (spaces >= 1) {
+            const raw = (targetW - natural) / spaces;
+            const perSpace = Math.min(rect.height * 0.45, Math.max(rect.height * -0.1, raw));
             const fontPx = parseFloat(getComputedStyle(span).fontSize) || rect.height;
-            span.style.setProperty("--scale-x", 1);
             span.style.wordSpacing = `${perSpace / fontPx}em`;
+            const carried = natural + perSpace * spaces;
+            span.style.setProperty(
+              "--scale-x",
+              Math.abs(carried - targetW) <= 0.5 ? 1 : targetW / carried,
+            );
           } else {
             span.style.setProperty("--scale-x", targetW / natural);
           }

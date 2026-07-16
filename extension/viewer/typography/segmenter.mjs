@@ -107,6 +107,9 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0) {
   // continuation of a wrapped URL or email — leave it whole.
   if (/^\S+$/.test(text.trim()) && /[/@]/.test(text)) return null;
   const { saccade = 1 } = opts;
+  // Font-only mode: the span is still processed (masked + re-rendered, so a
+  // bundled reading face applies), but nothing is emphasized.
+  const noEmphasis = opts.emphasisMode === "none";
   const links = linkRanges(text);
   const parts = [];
   let wordIndex = startWordIndex;
@@ -116,9 +119,17 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0) {
     offset += seg.text.length;
     // Only plain Latin words get emphasis: Greek letters, math symbols,
     // identifiers with digits, URLs/emails, etc. are kept exactly as the
-    // author set them.
+    // author set them. ALL-CAPS words (acronyms — "NAS", "AMF", "USENIX")
+    // are labels, not prose: a bolded prefix reads as noise, so they keep
+    // their uniform weight.
     const inLink = links.some(([a, b]) => start < b && offset > a);
-    if (!seg.isWord || inLink || !/^[A-Za-zÀ-ɏ'’-]+$/.test(seg.text)) {
+    if (
+      noEmphasis ||
+      !seg.isWord ||
+      inLink ||
+      !/^[A-Za-zÀ-ɏ'’-]+$/.test(seg.text) ||
+      /^[A-ZÀ-Þ]{2,}$/.test(seg.text)
+    ) {
       parts.push({ text: seg.text, bold: false });
       continue;
     }

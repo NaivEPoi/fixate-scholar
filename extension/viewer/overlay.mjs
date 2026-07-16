@@ -103,9 +103,16 @@ const references = new ReferencesFeature(app);
 // Leave the bibliography exactly as the author set it (appendices after it
 // are still processed), and everything before the Abstract (cover pages,
 // title, authors, emails).
-references.onRefsRegion = (boxes) => engine.setRefsRegion(boxes);
-references.onContentStart = (pos) => engine.setContentStart(pos);
-references.onBodyHeight = (h) => engine.setBodyHeight(h);
+// Each of these RE-PROCESSES rendered pages (restore wipes the citation
+// coloring wraps along with the rest of the span DOM), so the citation
+// annotations must be rebuilt afterwards — without this, pages annotated
+// before the async extraction finished lost their citation colors for good.
+references.onRefsRegion = (boxes) =>
+  engine.setRefsRegion(boxes).then(() => references.reannotateRendered());
+references.onContentStart = (pos) =>
+  engine.setContentStart(pos).then(() => references.reannotateRendered());
+references.onBodyHeight = (h) =>
+  engine.setBodyHeight(h).then(() => references.reannotateRendered());
 
 // PDF.js runs an idle cleanup 30s after the last render activity
 // (CLEANUP_TIMEOUT in pdf_rendering_queue.js) whose handler calls

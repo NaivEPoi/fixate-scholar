@@ -34,6 +34,7 @@
       <option value="dynamic">Dynamic syllables — whole syllables, up to half the word</option>
       <option value="syllable">First syllable only</option>
       <option value="fraction">Fixed fraction of each word</option>
+      <option value="none">None — change the font only, no bolding</option>
     </select>
     <p class="hint">Dynamic gives longer words several bolded syllables while never
     exceeding half the word.</p>
@@ -56,7 +57,7 @@
   </label>
   <label>
     Bold weight
-    <input type="number" id="boldWeight" min="500" max="900" step="100">
+    <input type="number" id="boldWeight" min="400" max="900" step="50">
   </label>
   <label>
     Emphasize every Nth word

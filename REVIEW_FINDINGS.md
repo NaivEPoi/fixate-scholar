@@ -500,3 +500,72 @@ neighbours, kept glyphs must not be clipped, and math sub/superscripts must not 
   processed span centered in a figure region). Lines are grouped PER COLUMN keyed by
   vertical CENTER (kept mono/math spans have different tops and split top-keyed groups,
   which made fragmented prose fail the bound test and flagged whole paragraphs).
+
+## Round 9 (R9) - user-reported issues, verified against a private local corpus
+Verification corpus: the public 12-paper set plus a PRIVATE local set served as
+file:// URLs with neutral names (rv01..rv28) via the harnesses' generic --url
+flag. Nothing about those documents (names, text, provenance) appears in the
+repo, per policy.
+
+### R9-1/R9-2 - weight slider 50pt steps (default 650); "None (font only)" emphasis mode
+- boldWeight: min 400, max 900, step 50, default 650 (popup + options + DEFAULTS).
+  The 400/700-face + hairline-stroke ramp already interpolates any stop.
+- emphasisMode "none": emphasizeParts marks nothing bold; spans still process
+  (mask + bundled-face swap + width/baseline). With fontMode=original the
+  combination is a visual no-op, so #processPage leaves the page PRISTINE
+  (no masks, no re-render). Weight row hidden in the popup for mode none.
+  Verified: bolds=0 with done>0 in atkinson; done=0 masks=0 in original.
+
+### R9-3 - italic/bold of the ORIGINAL face survives a bundled-font swap
+- The bundled faces replaced the embedded one with plain 400 roman: italic
+  emphasis flattened. The content pass now checks the original face
+  (#isItalicFont/#isBoldFont) when the famKey actually changes and sets
+  font-style italic / font-weight 700 (browser synthesizes oblique/bold from
+  the 400/700 faces); saved in #pristine, reset on restore. Verified: italic
+  processed spans render italic in atkinson mode.
+
+### R9-4 - prose after inline math was left unprocessed
+- F21's script-attachment keep dropped the WHOLE span whenever a kept
+  sub/superscript fragment hugged its edge. For expression fragments that is
+  right ("NF" + "_C"); for a full PROSE span whose first/last token carries
+  the script ("...with a batch larger than 2" + "10") it unemphasized entire
+  lines after inline math. The keep now applies only to expression-sized
+  spans (trimmed length <= 12); prose spans process, their base token is
+  redrawn in place by the width correction, and the kept script stays beside
+  it as a mask obstacle. Verified on a math-heavy private paper: body pages'
+  unprocessed-prose lines went to 0.
+
+### R9-5 - glyph size consistency: white space absorbs the width correction
+- The width pass previously sent the ENTIRE correction to --scale-x whenever
+  word-spacing wasn't applicable (fewer than 2 spaces, or per-space out of
+  caps) - visibly narrower/wider glyphs next to natural ones. Now spaces
+  absorb as much as their caps allow (>=1 space qualifies) and only the
+  RESIDUAL goes to --scale-x. The negative cap (-0.1h/space) still prevents
+  word fusion (B p14 minimum-glue lines).
+
+### R9-6 - "native" button bounced back into the viewer
+- file:// PDFs: the button's DNR allow rule cannot suppress the webNavigation
+  rewrite that intercepts file: navigations, so the tab bounced straight back
+  into FixateScholar. fx-bypass-once now records one-shot bypass URLs in
+  chrome.storage.session (survives SW restarts); the webNavigation handler
+  consumes them before rewriting.
+- http(s): a repeated click within the 30s cleanup window could collide on
+  the rule id and throw "does not have a unique ID", silently dropping the
+  bypass; removeRuleIds now includes the id being added (safe replace).
+- test/native-button.mjs verifies both schemes end-to-end (navigate ->
+  intercepted -> bypass -> stays native for 5s).
+
+### R9-7 - ALL-CAPS words are never emphasized
+- Acronyms ("NAS", "AMF") read as labels; a bolded prefix is noise. Words of
+  >=2 uppercase letters keep uniform weight (unit-tested); Capitalized words
+  and single letters keep their emphasis.
+
+### R9-8 - citations lost their coloring after async re-processing
+- setRefsRegion/setContentStart/setBodyHeight re-process rendered pages;
+  restore wipes the .fx-cite-c coloring wraps with the rest of the span DOM,
+  and nothing re-annotated - pages annotated before the async reference
+  extraction finished lost citation colors for good ("some citations are not
+  colored"). overlay.mjs now chains references.reannotateRendered() after
+  each of those engine re-processing entry points. test/citecolor.mjs walks
+  a document and asserts every [N] citation inside a processed span carries
+  a coloring wrap.

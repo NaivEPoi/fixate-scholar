@@ -13,11 +13,15 @@ $("boldWeight").value = settings.boldWeight;
 $("weightOut").textContent = settings.boldWeight;
 $("emphasisMode").value = settings.emphasisMode;
 $("fontMode").value = settings.fontMode;
-$("fractionRow").style.display = settings.emphasisMode === "fraction" ? "" : "none";
+const reflectMode = (mode) => {
+  $("fractionRow").style.display = mode === "fraction" ? "" : "none";
+  $("weightRow").style.display = mode === "none" ? "none" : "";
+};
+reflectMode(settings.emphasisMode);
 
 $("enabled").addEventListener("change", (e) => setSettings({ enabled: e.target.checked }));
 $("emphasisMode").addEventListener("change", (e) => {
-  $("fractionRow").style.display = e.target.value === "fraction" ? "" : "none";
+  reflectMode(e.target.value);
   setSettings({ emphasisMode: e.target.value });
 });
 $("fontMode").addEventListener("change", (e) => setSettings({ fontMode: e.target.value }));
