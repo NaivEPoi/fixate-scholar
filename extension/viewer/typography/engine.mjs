@@ -62,6 +62,7 @@ export class TypographyEngine {
   #bodyHeight = null; // document-wide body-text height (from the refs extractor)
   #ascentCache = new Map(); // fontFamily -> browser ascent ratio (baseline align)
   #measureCtx = null; // offscreen 2d context for ascent measurement
+  #pageFonts = new Map(); // pageNumber -> Set<famKey> used by processed spans
 
   constructor(app, settings) {
     this.#app = app;
@@ -128,6 +129,30 @@ export class TypographyEngine {
     if (!this.#enabled) return Promise.resolve();
     this.#restoreAll();
     return this.#processAll();
+  }
+
+  /** Re-process only the rendered pages whose processed spans USE any of the
+   *  given (newly loaded) font families. Re-decoded faces change metrics only
+   *  for the pages set in them — a blanket refresh() on every `loadingdone`
+   *  is O(pages²) as each newly scrolled-to page loads its own subsets, and
+   *  it left long documents flashing native text for seconds. Falls back to a
+   *  full refresh when the affected faces are unknown. */
+  refreshFonts(families) {
+    if (!this.#enabled) return Promise.resolve();
+    if (!families?.length) return this.refresh();
+    const keys = new Set(families.map((f) => famKey(f)));
+    const promises = [];
+    this.#eachRenderedPage((pv) => {
+      const used = this.#pageFonts.get(pv.id);
+      if (!used) return; // never processed — textlayerrendered will handle it
+      for (const k of used) {
+        if (keys.has(k)) {
+          promises.push(this.#processPage(pv)); // restores first
+          return;
+        }
+      }
+    });
+    return Promise.all(promises);
   }
 
   /** Resolves when all (re)processing it triggered has finished. */
@@ -808,14 +833,17 @@ export class TypographyEngine {
           const r = capIts.findIndex((p) => p.item.transform[4] >= centerX);
           if (r > 0) starts2.push(r);
         }
-        let seg = null;
+        // BOTH column segments can be captions (a left-column "Figure N:" and
+        // a right-column "Figure M:" on the same merged baseline) — anchor
+        // each, or the second figure never gets a region.
+        const segs = [];
         for (const a of starts2) {
           const end = a === 0 && starts2.length > 1 ? starts2[1] : capIts.length;
           const s2 = capIts.slice(a, end);
           const t2 = s2.map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim();
-          if (/^(?:Fig(?:ure)?\.?|FIGURE)\s*\d/.test(t2) && isCaptionLead(t2)) { seg = s2; break; }
+          if (/^(?:Fig(?:ure)?\.?|FIGURE)\s*\d/.test(t2) && isCaptionLead(t2)) segs.push(s2);
         }
-        if (!seg) continue;
+        for (const seg of segs) {
         const [cx0, cx1] = lineX(seg);
         const crosses = !twoColumn || (cx0 < centerX - 10 && cx1 > centerX + 10);
         const colX0 = crosses ? vx0 : cx0 < centerX ? vx0 : centerX;
@@ -826,13 +854,45 @@ export class TypographyEngine {
             const x = p.item.transform[4];
             return x + (p.item.width ?? 0) > colX0 + 2 && x < colX1 - 2;
           });
-        // Nearest prose/caption line above the caption in this column.
+        // Nearest prose/caption line above the caption in this column. A
+        // SUBFIGURE caption block — "(a) …" leads plus their WRAP rows
+        // (side-by-side subcaptions join into wide, wordy lines) — is figure
+        // content, NOT a prose bound: accepting it cut the region short and
+        // left subcaptions and the axis titles above them processed. A row
+        // belongs to such a block when a tight chain of rows above it leads
+        // to a "(a) "-marker row that is either narrower than the region or
+        // gap-split (side-by-side segments) — an in-prose "(a)" enumeration
+        // line fills the column solid and never qualifies.
+        const SUBCAP = /^\((?:[a-z]{1,2}|[ivx]{1,4})\)\s/;
+        const inSubcapBlock = (j) => {
+          for (let k = j; k >= 0; k--) {
+            const inC = inColOf(ordered[k]);
+            if (!inC.length) return false;
+            const tt = inC.map((p) => p.item.str).join(" ").trim();
+            if (SUBCAP.test(tt)) {
+              const [sx0v, sx1v] = lineX(inC);
+              let gapMax = 0;
+              for (let m = 1; m < inC.length; m++) {
+                const prev = inC[m - 1].item;
+                gapMax = Math.max(gapMax, inC[m].item.transform[4] - (prev.transform[4] + (prev.width ?? 0)));
+              }
+              const h2 = Math.max(ordered[k].h || 0, 8);
+              return sx1v - sx0v < colW * 0.9 || gapMax >= h2 * 3;
+            }
+            if (k > 0) {
+              const h2 = Math.max(ordered[k].h || 0, 8);
+              if (ordered[k - 1].y - ordered[k].y > h2 * 1.7) return false;
+            }
+          }
+          return false;
+        };
         let boundIdx = -1;
         for (let j = ci - 1; j >= 0; j--) {
           const inCol = inColOf(ordered[j]);
           if (!inCol.length) continue;
           const [lx0, lx1] = lineX(inCol);
           const t = inCol.map((p) => p.item.str).join(" ").trim();
+          if (inSubcapBlock(j)) continue; // subcaption lead or its wrap rows
           const capAbove = /^(?:Fig(?:ure)?\.?|FIGURE|Tab(?:le)?\.?|TABLE)\s*\d/.test(t) && isCaptionLead(t);
           const prose = lowerWords(inCol) >= 4 && lx1 - lx0 >= colW * 0.72;
           if (capAbove || prose) { boundIdx = j; break; }
@@ -849,6 +909,15 @@ export class TypographyEngine {
             topY = ordered[j].y;
           }
         }
+        if (globalThis.__fxDebug) {
+          (globalThis.__fxFig ??= []).push({
+            page: globalThis.__fxCurPage,
+            cap: (seg[0]?.item.str || "").slice(0, 28),
+            capY: Math.round(cap.y),
+            topY: topY === Infinity ? "inf" : Math.round(topY),
+            col: [Math.round(colX0), Math.round(colX1)],
+          });
+        }
         if (topY !== Infinity && topY - cap.y > pageH * 0.65) continue; // implausible — abort
         if (topY - cap.y < dominant * 2 && topY !== Infinity) continue; // no room for a figure
         for (let j = 0; j < ci; j++) {
@@ -858,6 +927,7 @@ export class TypographyEngine {
             skip.add(p.div);
             dbg(p.div, "fig-body");
           }
+        }
         }
       }
     }
@@ -1438,6 +1508,10 @@ export class TypographyEngine {
     const holder = { cancelled: false };
     holder.promise = new Promise((resolve) => (holder.resolve = resolve));
     this.#pending.set(pageNumber, holder);
+    // Font families this page's processed spans render with — refreshFonts()
+    // uses it to re-process only the pages a newly (re)loaded face affects.
+    const usedFonts = new Set();
+    this.#pageFonts.set(pageNumber, usedFonts);
 
     const allPairs = await this.#pagePairs(pageView);
     // External-link annotations are the PDF's own metadata for URLs/emails:
@@ -1673,6 +1747,8 @@ export class TypographyEngine {
       .map((p) => p.div);
     let obstacleRects = null;
     let zoneDrops = null; // candidates inside rule-bounded table zones — left on the canvas
+    let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
+    let overlapVeto = null; // candidates whose rects pile on another candidate
     let baselineCal = null; // famKey -> measured marginTop (em) that lands overlay ink on canvas ink
     // Key by the bare leading family name: the same face reaches spans as
     // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12,
@@ -1719,6 +1795,89 @@ export class TypographyEngine {
         // text — the text layer alone can't see these.
         const canvasRules = this.#detectCanvasRules(pageView);
         for (const r of canvasRules) obstacleRects.push(r);
+        // HIDDEN-TEXT guard. A PDF's text layer can carry items the canvas
+        // never painted (invisible render mode / OCR overlays / hidden
+        // duplicate layers); processing such a span re-renders it VISIBLY on
+        // top of the real content. If the canvas has no ink under a
+        // candidate's pristine rect, leave it exactly as it is — invisible.
+        // Disabled when the whole canvas reads blank (unpainted/prefetch).
+        inkCheck = null;
+        try {
+          const canvas = pageView.canvas;
+          const cr = canvas?.getBoundingClientRect();
+          if (canvas && cr && cr.width > 0 && canvas.width > 0) {
+            const ictx = canvas.getContext("2d", { willReadFrequently: true });
+            const img = ictx.getImageData(0, 0, canvas.width, canvas.height);
+            const d = img.data;
+            const W = canvas.width;
+            const H = canvas.height;
+            const csx = W / cr.width;
+            const csy = H / cr.height;
+            const inked = (i) => d[i + 3] > 40 && 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 200;
+            // page-level sanity: an unpainted canvas must not veto everything
+            let pageInk = 0;
+            for (let i = 0; i < d.length; i += 16 * 4) if (inked(i)) pageInk++;
+            if (pageInk > 200) {
+              // Sample only the CORE band (middle 40% of the height): a
+              // hidden line sitting in the leading GAP between two printed
+              // lines would otherwise read its neighbours' ascenders/
+              // descenders as its own ink. Real glyphs put well over 2% dark
+              // coverage in their core band.
+              inkCheck = (rect) => {
+                const bandT = rect.top + rect.height * 0.3;
+                const bandB = rect.bottom - rect.height * 0.3;
+                const x0 = Math.max(0, Math.floor((rect.left - cr.left) * csx));
+                const x1 = Math.min(W, Math.ceil((rect.right - cr.left) * csx));
+                const y0 = Math.max(0, Math.floor((bandT - cr.top) * csy));
+                const y1 = Math.min(H, Math.ceil((bandB - cr.top) * csy));
+                if (x1 - x0 < 2 || y1 - y0 < 1) return true; // degenerate — don't judge
+                let hits = 0;
+                let n = 0;
+                const step = 2;
+                for (let y = y0; y < y1; y += step) {
+                  for (let x = x0; x < x1; x += step) {
+                    n++;
+                    if (inked((y * W + x) * 4)) hits++;
+                  }
+                }
+                return n > 0 && hits >= Math.max(6, n * 0.02);
+              };
+            }
+          }
+        } catch {
+          /* canvas unreadable — no hidden-text veto */
+        }
+        // Mutual-overlap veto: two CANDIDATES covering the same pixels (a
+        // hidden layer printed ON TOP of the visible line, or duplicate text
+        // runs). The ink check can't tell them apart — there IS ink there.
+        overlapVeto = new Set();
+        try {
+          const boxes = [];
+          for (const p of pairs) {
+            const r = p.div.getBoundingClientRect();
+            if (r.width > 1 && r.height > 1) boxes.push({ div: p.div, r });
+          }
+          boxes.sort((a, b) => a.r.top - b.r.top);
+          for (let bi2 = 0; bi2 < boxes.length; bi2++) {
+            const A = boxes[bi2];
+            for (let bj = bi2 + 1; bj < boxes.length; bj++) {
+              const B = boxes[bj];
+              if (B.r.top > A.r.bottom) break; // sorted by top
+              const w = Math.min(A.r.right, B.r.right) - Math.max(A.r.left, B.r.left);
+              const h = Math.min(A.r.bottom, B.r.bottom) - Math.max(A.r.top, B.r.top);
+              if (w <= 0 || h <= 0) continue;
+              // 0.3: a hidden line STRADDLING two printed lines overlaps each
+              // by ~35-45% of itself; genuinely adjacent lines' boxes overlap
+              // ≤~15% even at tight leading.
+              if (w * h > Math.min(A.r.width * A.r.height, B.r.width * B.r.height) * 0.3) {
+                overlapVeto.add(A.div);
+                overlapVeto.add(B.div);
+              }
+            }
+          }
+        } catch {
+          overlapVeto = null;
+        }
         // Rule-bounded table zones (canvas is readable HERE, unlike at
         // classification time): a ruled table's columns need no whitespace
         // gaps and its cells can be wordy, so text heuristics keep missing
@@ -1944,6 +2103,23 @@ export class TypographyEngine {
             if (globalThis.__fxDebug && !pair.div.dataset.fxWhy) pair.div.dataset.fxWhy = "table-rules";
             continue;
           }
+          // Hidden text (invisible render mode / OCR overlay / hidden layer):
+          // the canvas has NO ink here, so re-rendering the span would EXPOSE
+          // text the document never displays. Leave it pristine — and no
+          // obstacle either, there is nothing on the canvas to protect.
+          if (inkCheck && rect.width > 1 && rect.height > 1 && !inkCheck(rect)) {
+            if (globalThis.__fxDebug && !pair.div.dataset.fxWhy) pair.div.dataset.fxWhy = "no-ink";
+            continue;
+          }
+          // Two CANDIDATES sharing the same pixels (a hidden layer lying ON
+          // TOP of the printed line, or a duplicate text run): processing
+          // either doubles/garbles the spot — leave both on the canvas, which
+          // shows exactly what the document renders.
+          if (overlapVeto?.has(pair.div)) {
+            if (rect.width > 0 && rect.height > 0) obstacleRects.push(rect);
+            if (globalThis.__fxDebug && !pair.div.dataset.fxWhy) pair.div.dataset.fxWhy = "dup-overlap";
+            continue;
+          }
           // A candidate overlapping skipped content is a duplicate of it —
           // leave it on the canvas (no mask, no emphasis) so the skipped copy
           // survives.
@@ -2019,6 +2195,8 @@ export class TypographyEngine {
           // actually draws its baseline. Both are em-relative, so they
           // survive zoom/DPI re-layout.
           const fam = family || origFamily;
+          usedFonts.add(famKey(fam));
+          if (origFamily) usedFonts.add(famKey(origFamily));
           const cal = fam ? baselineCal?.get(famKey(fam)) : undefined;
           // The metric fallback applies ONLY when the rendered FACE actually
           // changes (bundled reading fonts). When the face is the same and

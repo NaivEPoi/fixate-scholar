@@ -569,3 +569,54 @@ repo, per policy.
   each of those engine re-processing entry points. test/citecolor.mjs walks
   a document and asserts every [N] citation inside a processed span carries
   a coloring wrap.
+
+## Round 10 (R10) - full private-corpus sweep (28 papers, 4 oracles + screenshots)
+A combined per-page sweep (unprocessed prose, table zones, figure interiors,
+citation coloring; screenshot of every flagged page) over the entire private
+local corpus. Most flags were intentional keeps (bibliography pages, URL/DOI
+lines, title front matter, bold run-in/bullet leads, displayed equations,
+form-grid PDFs). Three real defects found and fixed:
+
+### R10-1 - subfigure captions processed (figure-body sweep bound)
+- Side-by-side "(a)/(b)/(c)" subcaption rows join into one wide wordy line
+  that qualified as the sweep's PROSE BOUND, cutting the figure region short:
+  the subcaptions themselves and axis titles above them rendered bolded.
+  Their WRAP rows (which don't start with the marker) did the same. Fix: a
+  row belonging to a subcaption BLOCK - a tight chain of rows leading up to a
+  "(a) "-marker row that is narrower than the region or gap-split - never
+  bounds the region. An in-prose "(a)" enumeration line fills the column
+  solid and still bounds.
+
+### R10-2 - only the FIRST caption on a merged baseline anchored
+- A left-column "Figure N:" and a right-column "Figure M:" caption often
+  share one merged line group; the anchor loop broke after the first matching
+  column segment, so the second figure never got a region (its axis title
+  rendered bolded). Every matching segment now anchors its own region.
+
+### R10-3 - loadingdone refresh was O(pages²): long papers flashed native
+- Every newly scrolled-to page loads its own font subsets and fires
+  `loadingdone`; the handler restored + reprocessed ALL rendered pages each
+  time. Walking a 15-page paper, later pages sat restored (native text, no
+  emphasis) for many seconds at a time - the sweep read entire pages as
+  unprocessed, and a sequential READER sees the same flicker/jank. Fix:
+  engine.refreshFonts(families) re-processes only pages whose processed spans
+  USE a newly loaded face (per-page famKey sets recorded at process time);
+  the eviction/re-decode repair behavior is preserved (affected pages still
+  refresh; unknown face lists fall back to a full refresh).
+
+### R10-4 - fx-on EXPOSED a hidden text layer (invisible render mode / duplicate layer)
+- One corpus paper carries a full invisible text layer (spec excerpts) interleaved with and
+  overlapping the printed prose. The canvas never paints it, but the TEXT LAYER carries it;
+  processing those spans re-rendered them VISIBLY on top of the real content (fx-off page
+  clean, fx-on page garbled). Two vetoes at mask-build time (canvas readable):
+  (a) INK CHECK - if the canvas has no ink under a candidate's pristine rect (sampled in the
+      rect's CORE band, middle 40% of the height, so neighbours' ascenders/descenders don't
+      count; threshold 2% dark), the span is invisible in the original: leave it pristine, no
+      mask, no obstacle. Disabled when the whole canvas reads blank (unpainted prefetch).
+  (b) MUTUAL-OVERLAP VETO - two CANDIDATES covering the same pixels (a hidden line printed ON
+      TOP of or STRADDLING visible lines - there IS ink there, so (a) passes) are both left
+      on the canvas; threshold 0.3 of the smaller box (a straddler overlaps each neighbour
+      ~35-45% of itself; genuinely adjacent lines' boxes overlap <=15% at tight leading).
+      Overlapped REAL lines lose emphasis but render exactly as the document does.
+- Verified: the affected page now renders identical to fx-off (hidden layer suppressed);
+  papers.mjs 7/7, skipline/figures/tables regressions clean.

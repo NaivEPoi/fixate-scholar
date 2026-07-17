@@ -85,7 +85,8 @@ const CHECK = (p) => `(() => {
     const text = spans.map((g) => g.s.textContent).join(" ").trim();
     const lw = (text.match(/[a-zà-ÿ]{2,}/g) || []).length;
     const [c0, c1] = colBounds(col);
-    const isProse = lw >= 4 && x1 - x0 >= (c1 - c0) * 0.72;
+    // a subfigure-caption row ("(a) …") is figure content, never a prose bound
+    const isProse = lw >= 4 && x1 - x0 >= (c1 - c0) * 0.72 && !/^\\((?:[a-z]{1,2}|[ivx]{1,4})\\)\\s/.test(text);
     return { col, x0, x1, top, bottom, text, lw, isProse };
   }).sort((a, b) => a.top - b.top);
   // caption anchors: "Figure N:" / "Fig. N." lines (not in-text references)
