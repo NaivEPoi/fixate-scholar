@@ -107,7 +107,7 @@ node test/skipline.mjs "<paper>"        # unprocessed PROSE lines — only front
 | `node test/tables.mjs <paper> [--pages=A-B]` | no processed text inside tables: horizontal canvas rules chained (≥3 rules, ≥70% overlap, gap ≤15% page height) bound table interiors; flags `span[data-fx-done]` centered inside | `TOTAL offenders: 0` (exit 1 otherwise). Isolated rule PAIRS (underlined run-in leads) form no zone; full-width prose lines + their paragraph continuations are exempt. KNOWN NOISE: UC-Scheme p17 flags 3 prose lines around side-by-side screenshot frames (full-width zones make column-width prose fail the width test) — verified correct rendering; confirm any NEW flag with a capture before touching the engine |
 | `node test/skipline.mjs <paper> [--pages=A-B]` | per column, prose lines (≥4 lowercase words) with no processed/kept span — catches single skipped lines that diagnose's ≥3-line runs miss (contentStart cut, script-window bleed) | only intentional skips: title-page front matter, bibliography pages, heading wrap lines |
 | `node test/figures.mjs <paper> [--pages=A-B]` | no processed text inside figures: the region between a "Figure N:" caption and the nearest running-prose line above it (per column, paragraph tails absorbed) is figure interior; flags `span[data-fx-done]` centered inside | `TOTAL offenders: 0` (exit 1 otherwise). Caption-below-figure layouts only; a figure text box spanning ≥72% of the column truncates the region (sensitivity loss, not a false flag) |
-| `node test/citecolor.mjs <url> [--pages=A-B]` | every [N] citation inside a processed span carries an .fx-cite-c coloring wrap (numeric citations color even when the bibliography entry did not resolve) | `TOTAL cites=N colored=N` |
+| `node test/citecolor.mjs <url> [--pages=A-B]` | every [N] citation inside a processed span carries an .fx-cite-c coloring wrap (numeric citations color even when the bibliography entry did not resolve). The `<url>` arg is REQUIRED — without it the viewer opens `?file=undefined` and the run false-greens as `cites=0 colored=0` | `TOTAL cites=N colored=N` with N > 0 |
 | `node test/native-button.mjs <pdf-url>` | the viewer's “native” button end-to-end: navigate → intercepted → fx-bypass-once → the tab lands on the original URL and STAYS (file:// uses a storage.session one-shot the webNavigation handler consumes; http(s) a DNR allow rule) | `PASS — stayed in the native viewer` |
 | `node test/stylemodes.mjs <url> <page>` | settings surface: dynamic+bundled font bolds AND preserves italic originals; emphasisMode “none” renders zero .fx-b with spans in the bundled face; none+original leaves the page pristine | `dynOk=true italicPreserved=true fontOnlyOk=true inertOk=true` |
 | `node test/dump-stream.mjs <paper> <page> <left\|right\|full> [filter]` | the engine's-eye line/stream geometry (debug `#classifyBlocks`) | inspection |
@@ -126,8 +126,12 @@ probe; all but arXiv are on yilud.me — enumerate new ones via
 Classification debug: set `globalThis.__fxDebug = true` in the page BEFORE
 processing → every skipped span gets `data-fx-why`, and the engine records
 `globalThis.__fxBlkStats` (block-table triggers), `__fxAligned` (aligned-table
-runs: seed/band/rows), and `__fxCal` (per-page baseline-calibration samples
-and applied margins).
+runs: seed/band/rows), `__fxCal` (per-page baseline-calibration samples
+and applied margins), and `__fxOverlap` (every overlap pair the hidden-text
+resolver judged: `{page, a, b, fa, fb, ra, rb}` where `fa`/`fb` are the
+ink-fit internals `{score, core, edges, edgeMin, pen, fc, lc, n, lr}` —
+`lr: true` means the pair was judged from a capped-resolution canvas and the
+page is marked for a re-process when its detail render lands).
 
 ---
 
@@ -346,6 +350,27 @@ Lessons from the F1–F16 investigations. Each of these cost hours; don't re-pay
   `#detectCanvasRules` and the baseline calibration run. It is NOT reliably
   painted at `processPage`-end for off-screen pages, and it may be CSS-stretched
   right after a zoom (guard: `canvas.height/rect.height > dpr×0.85`).
+- **`pageView.canvas` is NOT always full resolution — or the only canvas.**
+  PDF.js caps large canvases (maxCanvasPixels / area limits): past a
+  zoom/page-size threshold the BASE canvas renders at outputScale < 1× CSS
+  (0.92× observed at zoom 1.4 in a 1400×2000 window, despite the DPR-2
+  override) and a separate full-res DETAIL canvas covers only the visible
+  area (`pageView.detailView`, `div.querySelectorAll('canvas').length === 2`).
+  Band/ink metrics that are rock-solid at 2× backing turn to noise at 0.9×
+  (neighbour bleed into edge rows). Read the sharpest canvas covering the
+  rect, and treat `canvas.width / boundingRect.width` ≈ 1 as a red flag in
+  any pixel-reading diagnostic. A finished `renderingState` does NOT imply
+  the pixels match the current layout mid-zoom — the engine now waits for
+  base+detail FINISHED (capped) before its obstacle-init reads.
+- **A page can be processed while it isn't visible** (font-settle refresh,
+  refs/bodyHeight re-processing) — its detail canvas doesn't exist then, so
+  ink decisions fall back to the capped base render. The engine marks such
+  pages (`lr` in `__fxOverlap`) and re-processes ONCE on the next
+  `pagerendered {isDetailView: true}`. Consequence for harnesses: a static
+  probe/screenshot taken before any detail render can catch the conservative
+  interim state (a few unemphasized short lines) — settle the page (scroll,
+  brief wait) before judging, and don't chase per-zoom differences that a
+  detail render resolves.
 - **Font eviction fires NO event.** PDF.js's 30s idle cleanup deletes
   FontFaces silently; `loadingdone` only fires on RE-load. Anything that
   depends on "fonts are loaded" must either keep them loaded or gate on

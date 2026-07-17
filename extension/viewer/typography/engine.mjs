@@ -63,6 +63,7 @@ export class TypographyEngine {
   #ascentCache = new Map(); // fontFamily -> browser ascent ratio (baseline align)
   #measureCtx = null; // offscreen 2d context for ascent measurement
   #pageFonts = new Map(); // pageNumber -> Set<famKey> used by processed spans
+  #inkRetryPages = new Set(); // pages whose ink decisions used a capped-resolution canvas
 
   constructor(app, settings) {
     this.#app = app;
@@ -153,6 +154,19 @@ export class TypographyEngine {
       }
     });
     return Promise.all(promises);
+  }
+
+  /** Hook for `pagerendered` events with isDetailView set: a full-resolution
+   *  DETAIL canvas just finished for this page. PDF.js caps large base
+   *  canvases (outputScale can drop below 1), and at capped resolution the
+   *  hidden-text / duplicate-overlap ink metrics are unreliable — such
+   *  decisions mark the page for one re-process here, now that sharp pixels
+   *  cover the visible area. Resolves true when a re-process ran. */
+  onDetailRendered(pageView) {
+    if (!this.#enabled || !pageView || !this.#inkRetryPages.delete(pageView.id)) {
+      return Promise.resolve(false);
+    }
+    return this.#processPage(pageView).then(() => true);
   }
 
   /** Resolves when all (re)processing it triggered has finished. */
@@ -1748,7 +1762,11 @@ export class TypographyEngine {
     let obstacleRects = null;
     let zoneDrops = null; // candidates inside rule-bounded table zones — left on the canvas
     let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
+    let inkFit = null; // (rect) => how line-like the ink under it is — overlap resolver
+    const lowResSrc = (s) => s.csy < 1.5; // too coarse for reliable band metrics
     let overlapVeto = null; // candidates whose rects pile on another candidate
+    let hiddenDrops = null; // overlap losers judged hidden — pristine, NOT obstacles
+    let obstacleSuppress = null; // kept spans judged hidden — no obstacle push
     let baselineCal = null; // famKey -> measured marginTop (em) that lands overlay ink on canvas ink
     // Key by the bare leading family name: the same face reaches spans as
     // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12,
@@ -1787,6 +1805,28 @@ export class TypographyEngine {
         document.addEventListener("visibilitychange", onVisible);
         return;
       }
+      // Canvas reads (rule detection, ink/hidden-text checks, baseline
+      // calibration) are only meaningful once the page's canvas render has
+      // FINISHED. A re-process can start while PDF.js is still painting
+      // (zoom re-render, font-settle refresh): getImageData then sees a
+      // partially painted page — real lines read as inkless and get vetoed
+      // as hidden text, unpredictably by zoom/timing. Wait for the paint.
+      // (renderingState: 0 initial, 1 running, 2 paused, 3 finished; a
+      // paused page resumes when it becomes visible, and holder.cancelled
+      // breaks the wait if the page is reset/evicted meanwhile. Capped so a
+      // page whose render never finishes — evicted, or paused offscreen
+      // indefinitely — degrades to the best-effort read instead of hanging
+      // the refresh chain.)
+      const paintPending =
+        (pageView.renderingState !== undefined && pageView.renderingState !== 3) ||
+        (pageView.detailView && pageView.detailView.renderingState !== undefined && pageView.detailView.renderingState !== 3);
+      if (!obstacleRects && paintPending && (holder.paintWaits = (holder.paintWaits || 0) + 1) <= 40) {
+        setTimeout(() => {
+          if (holder.cancelled) holder.resolve();
+          else requestIdleCallback(work, { timeout: 200 });
+        }, 150);
+        return;
+      }
       const layerRect = textLayerDiv.getBoundingClientRect();
       if (!obstacleRects) {
         obstacleRects = [];
@@ -1803,20 +1843,35 @@ export class TypographyEngine {
         // Disabled when the whole canvas reads blank (unpainted/prefetch).
         inkCheck = null;
         try {
-          const canvas = pageView.canvas;
-          const cr = canvas?.getBoundingClientRect();
-          if (canvas && cr && cr.width > 0 && canvas.width > 0) {
+          // The page can carry TWO canvases: the base render — whose
+          // resolution PDF.js CAPS on large pages/zooms (maxCanvasPixels /
+          // canvas-area limits, outputScale dropping even below 1) — and a
+          // full-resolution DETAIL canvas over the visible area. The band
+          // metrics below need the sharpest pixels covering each rect: at a
+          // capped base resolution, tight leading bleeds the neighbours'
+          // ink into a line's edge rows and the fit scores turn to noise.
+          const readCanvas = (canvas) => {
+            const cr = canvas?.getBoundingClientRect();
+            if (!canvas || !cr || !(cr.width > 0) || !(canvas.width > 0)) return null;
             const ictx = canvas.getContext("2d", { willReadFrequently: true });
             const img = ictx.getImageData(0, 0, canvas.width, canvas.height);
-            const d = img.data;
-            const W = canvas.width;
-            const H = canvas.height;
-            const csx = W / cr.width;
-            const csy = H / cr.height;
-            const inked = (i) => d[i + 3] > 40 && 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 200;
+            return { d: img.data, W: canvas.width, H: canvas.height, cr, csx: canvas.width / cr.width, csy: canvas.height / cr.height };
+          };
+          const base = readCanvas(pageView.canvas);
+          const inkedIn = (s, i) => s.d[i + 3] > 40 && 0.299 * s.d[i] + 0.587 * s.d[i + 1] + 0.114 * s.d[i + 2] < 200;
+          if (base) {
+            const detail = pageView.detailView?.renderingState === 3 ? readCanvas(pageView.detailView.canvas) : null;
+            const useDetail = detail && detail.csx > base.csx * 1.2;
+            const srcFor = (rect) => {
+              if (useDetail) {
+                const c = detail.cr;
+                if (rect.left >= c.left - 1 && rect.right <= c.right + 1 && rect.top >= c.top - 1 && rect.bottom <= c.bottom + 1) return detail;
+              }
+              return base;
+            };
             // page-level sanity: an unpainted canvas must not veto everything
             let pageInk = 0;
-            for (let i = 0; i < d.length; i += 16 * 4) if (inked(i)) pageInk++;
+            for (let i = 0; i < base.d.length; i += 16 * 4) if (inkedIn(base, i)) pageInk++;
             if (pageInk > 200) {
               // Sample only the CORE band (middle 40% of the height): a
               // hidden line sitting in the leading GAP between two printed
@@ -1824,12 +1879,13 @@ export class TypographyEngine {
               // descenders as its own ink. Real glyphs put well over 2% dark
               // coverage in their core band.
               inkCheck = (rect) => {
+                const s = srcFor(rect);
                 const bandT = rect.top + rect.height * 0.3;
                 const bandB = rect.bottom - rect.height * 0.3;
-                const x0 = Math.max(0, Math.floor((rect.left - cr.left) * csx));
-                const x1 = Math.min(W, Math.ceil((rect.right - cr.left) * csx));
-                const y0 = Math.max(0, Math.floor((bandT - cr.top) * csy));
-                const y1 = Math.min(H, Math.ceil((bandB - cr.top) * csy));
+                const x0 = Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx));
+                const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
+                const y0 = Math.max(0, Math.floor((bandT - s.cr.top) * s.csy));
+                const y1 = Math.min(s.H, Math.ceil((bandB - s.cr.top) * s.csy));
                 if (x1 - x0 < 2 || y1 - y0 < 1) return true; // degenerate — don't judge
                 let hits = 0;
                 let n = 0;
@@ -1837,46 +1893,184 @@ export class TypographyEngine {
                 for (let y = y0; y < y1; y += step) {
                   for (let x = x0; x < x1; x += step) {
                     n++;
-                    if (inked((y * W + x) * 4)) hits++;
+                    if (inkedIn(s, (y * s.W + x) * 4)) hits++;
                   }
                 }
-                return n > 0 && hits >= Math.max(6, n * 0.02);
+                const hasInk = n > 0 && hits >= Math.max(6, n * 0.02);
+                // A no-ink VETO from a capped-resolution read may be dropping
+                // a real line — redo the page once sharp pixels arrive.
+                if (!hasInk && lowResSrc(s)) this.#inkRetryPages.add(pageView.id);
+                return hasInk;
+              };
+              // Ink-fit score for the overlap resolver below: how well the
+              // ink under a rect matches a text line PAINTED IN THAT RECT —
+              // a solid x-height core with quiet extreme edges, spanning the
+              // rect's full width. A printed line scores near 1. A hidden
+              // straddler (hollow core, the neighbours' ink at its edges), a
+              // hidden span lying on larger print (ink bleeding through both
+              // edges), or a full-width hidden line whose only ink is a SHORT
+              // printed neighbour (ink extent ≪ rect extent) scores ≤0.
+              inkFit = (rect) => {
+                const s = srcFor(rect);
+                const x0 = Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx));
+                const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
+                const y0 = Math.max(0, Math.floor((rect.top - s.cr.top) * s.csy));
+                const y1 = Math.min(s.H, Math.ceil((rect.bottom - s.cr.top) * s.csy));
+                if (x1 - x0 < 6 || y1 - y0 < 6) return null;
+                const rows = [];
+                const nCols = Math.ceil((x1 - x0) / 2);
+                const colHits = new Array(nCols).fill(0);
+                for (let y = y0; y < y1; y++) {
+                  let hits = 0;
+                  let n = 0;
+                  for (let x = x0; x < x1; x += 2) {
+                    n++;
+                    if (inkedIn(s, (y * s.W + x) * 4)) {
+                      hits++;
+                      colHits[(x - x0) >> 1]++;
+                    }
+                  }
+                  // Rule-like rows (underlines, box edges: near-solid dark
+                  // runs) are line ART, not glyph ink — an underlined kept
+                  // span must not read as "ink through the bottom edge".
+                  rows.push(hits >= Math.max(2, n * 0.04) && hits < n * 0.6 ? 1 : 0);
+                }
+                const band = (f0, f1) => {
+                  const a = Math.floor(rows.length * f0);
+                  const b = Math.max(a + 1, Math.ceil(rows.length * f1));
+                  let s = 0;
+                  for (let k = a; k < b; k++) s += rows[k];
+                  return s / (b - a);
+                };
+                const core = band(0.35, 0.65);
+                const edgeTop = band(0, 0.1);
+                const edgeBot = band(0.9, 1);
+                const edges = Math.max(edgeTop, edgeBot);
+                let firstCol = -1;
+                let lastCol = -1;
+                for (let c = 0; c < nCols; c++) {
+                  if (colHits[c] >= 2) {
+                    if (firstCol < 0) firstCol = c;
+                    lastCol = c;
+                  }
+                }
+                const lr = lowResSrc(s);
+                if (firstCol < 0) return { score: -1, lr, core, edges, edgeMin: 1, pen: 1, n: nCols };
+                const extentPen = (firstCol + (nCols - 1 - lastCol)) / nCols;
+                return {
+                  score: core - edges - extentPen,
+                  // Obstacle gating uses the LESSER edge: an underline inks
+                  // only the bottom band, a straddler/duplicate inks both.
+                  edgeMin: Math.min(edgeTop, edgeBot),
+                  lr,
+                  core,
+                  edges,
+                  pen: extentPen,
+                  fc: firstCol,
+                  lc: lastCol,
+                  n: nCols,
+                };
               };
             }
           }
         } catch {
           /* canvas unreadable — no hidden-text veto */
         }
-        // Mutual-overlap veto: two CANDIDATES covering the same pixels (a
-        // hidden layer printed ON TOP of the visible line, or duplicate text
-        // runs). The ink check can't tell them apart — there IS ink there.
+        // Mutual-overlap resolution: two CANDIDATES covering the same pixels
+        // (a hidden layer printed ON TOP of or STRADDLING the visible lines,
+        // or duplicate text runs). The core-band ink check can't tell them
+        // apart — there IS ink there — but the ink-fit score can: the ink
+        // belongs to the PRINTED span, so the span the ink fits decisively
+        // stays processed under the normal rules and only the other one is
+        // judged hidden (left pristine — and NOT an obstacle, because the
+        // pixels under it are the winner's, which the winner's mask must
+        // still cover). Unresolvable pairs — exact duplicates, unreadable
+        // canvas — keep the conservative both-stay-on-canvas veto.
         overlapVeto = new Set();
+        hiddenDrops = new Set();
+        obstacleSuppress = new Set();
         try {
           const boxes = [];
           for (const p of pairs) {
             const r = p.div.getBoundingClientRect();
-            if (r.width > 1 && r.height > 1) boxes.push({ div: p.div, r });
+            if (r.width > 1 && r.height > 1) boxes.push({ div: p.div, r, cand: true });
+          }
+          // Kept (non-candidate) spans join the resolution too: a hidden
+          // layer's math/heading lines land in the KEEP set via the
+          // candidate filters, and their invisible obstacle rects would
+          // silently shadow the real lines they overlap out of processing.
+          for (const d of obstacleDivs) {
+            if (!d.isConnected) continue;
+            const r = d.getBoundingClientRect();
+            if (r.width > 1 && r.height > 1) boxes.push({ div: d, r, cand: false });
           }
           boxes.sort((a, b) => a.r.top - b.r.top);
+          const fits = new Map();
+          const fitOf = (b) => {
+            if (!inkFit) return null;
+            if (!fits.has(b.div)) fits.set(b.div, inkFit(b.r));
+            return fits.get(b.div);
+          };
           for (let bi2 = 0; bi2 < boxes.length; bi2++) {
             const A = boxes[bi2];
             for (let bj = bi2 + 1; bj < boxes.length; bj++) {
               const B = boxes[bj];
               if (B.r.top > A.r.bottom) break; // sorted by top
+              if (!A.cand && !B.cand) continue; // two kept spans — nothing to decide
               const w = Math.min(A.r.right, B.r.right) - Math.max(A.r.left, B.r.left);
               const h = Math.min(A.r.bottom, B.r.bottom) - Math.max(A.r.top, B.r.top);
               if (w <= 0 || h <= 0) continue;
               // 0.3: a hidden line STRADDLING two printed lines overlaps each
               // by ~35-45% of itself; genuinely adjacent lines' boxes overlap
               // ≤~15% even at tight leading.
-              if (w * h > Math.min(A.r.width * A.r.height, B.r.width * B.r.height) * 0.3) {
+              if (w * h <= Math.min(A.r.width * A.r.height, B.r.width * B.r.height) * 0.3) continue;
+              const mixed = A.cand !== B.cand;
+              if (mixed) {
+                // Candidate vs kept span: a tiny kept fragment (inline math,
+                // sub/superscripts) legitimately overlaps its host line — only
+                // judge pairs where the overlap covers a real share of the
+                // CANDIDATE too, and only act on decisive outcomes (ties fall
+                // through to the plain obstacle-overlap rule).
+                const candBox = A.cand ? A : B;
+                if (w * h < candBox.r.width * candBox.r.height * 0.25) continue;
+              }
+              const fa = fitOf(A);
+              const fb = fitOf(B);
+              // Pair judged from coarse (or no) pixels: the tie/loss may be
+              // wrong — redo the page once a sharp detail canvas covers it.
+              if (fa?.lr || fb?.lr || !fa || !fb) this.#inkRetryPages.add(pageView.id);
+              if (globalThis.__fxDebug) {
+                const rr = (r) => [r.left, r.top, r.width, r.height].map((v) => Math.round(v * 10) / 10);
+                (globalThis.__fxOverlap ||= []).push({
+                  page: pageView.id,
+                  a: (A.div.textContent || "").slice(0, 28) + (A.cand ? "" : " [kept]"),
+                  b: (B.div.textContent || "").slice(0, 28) + (B.cand ? "" : " [kept]"),
+                  fa,
+                  fb,
+                  ra: rr(A.r),
+                  rb: rr(B.r),
+                });
+              }
+              const aWins = fa && fb && fa.score >= 0.5 && fa.score >= fb.score + 0.35;
+              const bWins = fa && fb && fb.score >= 0.5 && fb.score >= fa.score + 0.35;
+              if (aWins) {
+                (B.cand ? hiddenDrops : obstacleSuppress).add(B.div);
+              } else if (bWins) {
+                (A.cand ? hiddenDrops : obstacleSuppress).add(A.div);
+              } else if (!mixed) {
                 overlapVeto.add(A.div);
                 overlapVeto.add(B.div);
               }
             }
           }
+          // A span that decisively LOST any pair is hidden, even if another
+          // pairing ended in a tie — hidden wins so it never becomes an
+          // obstacle that would clamp the printed winner's mask.
+          for (const d of hiddenDrops) overlapVeto.delete(d);
         } catch {
           overlapVeto = null;
+          hiddenDrops = null;
+          obstacleSuppress = null;
         }
         // Rule-bounded table zones (canvas is readable HERE, unlike at
         // classification time): a ruled table's columns need no whitespace
@@ -1976,8 +2170,30 @@ export class TypographyEngine {
         }
         for (const d of obstacleDivs) {
           if (!d.isConnected) continue;
+          // Lost the ink-fit resolution against a real overlapping span:
+          // this kept span is a hidden copy — its pixels are the winner's.
+          if (obstacleSuppress?.has(d)) continue;
           const r = d.getBoundingClientRect();
           if (!(r.width > 0) || !(r.height > 0)) continue;
+          // A skipped span whose rect's ink is NOT its own glyphs is hidden
+          // text (an invisible layer's math/heading lines land here via the
+          // candidate filters, never reaching the overlap resolver): either
+          // no ink at all, or only STRADDLED neighbours' ink — hollow-ish
+          // core, ink through both extreme edge bands, or ink extent far
+          // short of the rect. There is nothing of its own on the canvas to
+          // protect, and an invisible obstacle silently shadows the REAL
+          // lines it overlaps out of processing. Judged with the LESSER edge
+          // band so a legitimate kept span's underline (bottom edge only)
+          // never disqualifies it. Line-sized spans only: a script fragment
+          // or marker legitimately FILLS its tiny rect edge-to-edge, and
+          // losing its obstacle lets the neighbours' masks white it out —
+          // small spans get just the plain no-ink gate.
+          if (inkFit && r.width > 40 && r.height > 8) {
+            const f = inkFit(r);
+            if (f && f.core - f.edgeMin - f.pen < 0.4) continue;
+          } else if (inkCheck && r.width > 1 && r.height > 1 && !inkCheck(r)) {
+            continue;
+          }
           if (protectSet.has(d)) {
             // A protected span (displayed formula) has structural canvas art —
             // its box frame — hugging the glyphs. Expand its obstacle rect
@@ -2098,7 +2314,8 @@ export class TypographyEngine {
           // Inside a rule-bounded table zone: table interior stays on the
           // canvas; its rect becomes an obstacle so neighbours' masks clamp.
           if (zoneDrops?.has(pair.div)) {
-            if (rect.width > 0 && rect.height > 0) obstacleRects.push(rect);
+            const zoneInk = !inkCheck || !(rect.width > 1 && rect.height > 1) || inkCheck(rect);
+            if (zoneInk && rect.width > 0 && rect.height > 0) obstacleRects.push(rect);
             pair.div.dataset.fxTable = "1";
             if (globalThis.__fxDebug && !pair.div.dataset.fxWhy) pair.div.dataset.fxWhy = "table-rules";
             continue;
@@ -2111,9 +2328,17 @@ export class TypographyEngine {
             if (globalThis.__fxDebug && !pair.div.dataset.fxWhy) pair.div.dataset.fxWhy = "no-ink";
             continue;
           }
-          // Two CANDIDATES sharing the same pixels (a hidden layer lying ON
-          // TOP of the printed line, or a duplicate text run): processing
-          // either doubles/garbles the spot — leave both on the canvas, which
+          // Lost an overlap pair to the span the canvas ink actually fits:
+          // this is the HIDDEN copy — leave it pristine (invisible). No
+          // obstacle: the ink under it belongs to the winning span, whose
+          // mask must still cover it.
+          if (hiddenDrops?.has(pair.div)) {
+            if (globalThis.__fxDebug && !pair.div.dataset.fxWhy) pair.div.dataset.fxWhy = "dup-hidden";
+            continue;
+          }
+          // Two CANDIDATES sharing the same pixels where the ink fits neither
+          // decisively (an exact duplicate text run): processing either
+          // doubles/garbles the spot — leave both on the canvas, which
           // shows exactly what the document renders.
           if (overlapVeto?.has(pair.div)) {
             if (rect.width > 0 && rect.height > 0) obstacleRects.push(rect);

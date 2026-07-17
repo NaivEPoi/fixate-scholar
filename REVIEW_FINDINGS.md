@@ -620,3 +620,80 @@ form-grid PDFs). Three real defects found and fixed:
       Overlapped REAL lines lose emphasis but render exactly as the document does.
 - Verified: the affected page now renders identical to fx-off (hidden layer suppressed);
   papers.mjs 7/7, skipline/figures/tables regressions clean.
+
+## Round 11 (R11) - hidden layer must not steal the VISIBLE text's processing (user report)
+R10-4's mutual-overlap veto left BOTH spans of an overlapping pair on the
+canvas, so on the hidden-layer paper every printed line the invisible layer
+overlapped lost its typography ("renders identical to fx-off" was the wrong
+goal - the main text layer must still be processed per the rules). The veto
+is now a RESOLUTION, plus three defects found while verifying it:
+
+### R11-1 - overlap pairs are resolved by INK FIT, not vetoed wholesale
+- The canvas ink belongs to exactly one of the two overlapping spans, and a
+  per-rect ink-fit score tells them apart: solid x-height CORE band + quiet
+  extreme edge bands (top/bottom 10%) + ink columns spanning the rect
+  (extent penalty). A printed line scores ~1; a hidden straddler (hollow or
+  half-filled core, neighbours' ink through its edge bands, ink extent short
+  of its full-column rect) scores <=0. Decisive winner (>=0.5 and >=loser+0.35)
+  is processed normally; the loser is judged hidden: pristine, invisible, and
+  NOT an obstacle (its pixels are the winner's, which the winner's mask must
+  cover). Ties (exact duplicate runs) keep the conservative both-stay-canvas
+  veto. Rule-like rows (near-solid dark runs: underlines, box edges) are
+  excluded from the band metrics so an underlined span isn't misread as
+  "ink through the bottom edge".
+
+### R11-2 - KEPT spans of the hidden layer shadowed real lines via obstacles
+- Hidden math/heading lines never reach the resolver - the candidate filters
+  (math faces, no-Latin, size cuts) route them into the KEEP set, whose rects
+  become mask obstacles unconditionally. An INVISIBLE obstacle overlapping a
+  printed line >=35% silently skipped it (three body lines on the affected
+  page, incl. an underlined run-in's line). Kept spans now join the ink-fit
+  resolution (pairs vs candidates only; overlap must also cover >=25% of the
+  candidate so a tiny inline-math fragment can't judge its own host line):
+  a kept span that decisively LOSES has its obstacle suppressed; a candidate
+  that loses to a kept span is a hidden duplicate and drops. Line-sized kept
+  spans additionally pass a standalone ink-fit gate (lesser-edge-band rule)
+  before becoming obstacles at all. SMALL kept spans (script fragments,
+  markers - a superscript legitimately fills its tiny rect edge-to-edge) are
+  exempt from the fit judgment: without their obstacles the neighbours'
+  masks white them out (a footnote marker vanished until exempted).
+
+### R11-3 - ink decisions read a resolution-capped canvas (zoom-dependent misjudgments)
+- PDF.js caps large page canvases (maxCanvasPixels / canvas-area limits): at
+  higher zooms the BASE canvas's outputScale drops below 1x CSS and a
+  full-resolution DETAIL canvas is painted over the visible area only. All
+  ink metrics read pageView.canvas - at 0.92x backing, tight leading bleeds
+  neighbours' ink into a line's edge rows and the fit scores turn to noise:
+  the same page resolved cleanly at one zoom and mass-vetoed lines at
+  another. Three-part fix: (a) reads pick the SHARPEST canvas covering each
+  rect (detail canvas preferred when finished and >=1.2x sharper); (b) work()
+  waits (capped, cancellable) for the page's canvas render - and any detail
+  render - to reach FINISHED before reading pixels (a font-settle refresh
+  could read a mid-paint canvas); (c) any veto/tie/loss decided from a
+  capped-resolution read (csy < 1.5) marks the page, and a `pagerendered`
+  event with isDetailView re-processes it ONCE with sharp pixels
+  (engine.onDetailRendered, wired in overlay.mjs). Decisions stay
+  conservative in the interim (content always correct - at worst a few
+  lines transiently unemphasized until the detail render lands).
+
+### R11-4 - slashed word-pair prose swallowed by the URL-continuation rule
+- A space-free span containing "/" was always treated as a wrapped URL
+  continuation and left whole. A short wrapped line consisting of exactly
+  two plain words around one slash ("and/or", "read/write", an
+  "input/output."-style line ender) is prose and is now emphasized;
+  fragments with digits, multiple slashes, or URL characters keep the null.
+
+- Verified: on the hidden-layer paper's worst page, processed spans went
+  117 -> 159 with the hidden layer still fully suppressed (every hidden line
+  classified `dup-hidden`/`no-ink`; screenshots show bold leads on all
+  printed prose, subcaptions/figures untouched, footnote superscripts
+  intact). Full re-sweep of that paper: every remaining flag is the hidden
+  layer itself, front matter, refs pages, a URL line, or a display formula;
+  citations n/n on all pages. Regression: units 34/34 + naming guard,
+  papers.mjs 7/7 PASS, tables (D) and figures (5GShield) oracles 0
+  offenders, skipline (B) 0, citecolor 15/15, stylemodes all-green; private
+  long-paper walk clean (page-range re-checks show walk-only flags were
+  timing artifacts), both R10 figure-fix pages still 0 offenders.
+- Debug: `__fxOverlap` (gated on `__fxDebug`) records every judged pair
+  {a, b, fa, fb, ra, rb} with per-span fit internals {score, core, edges,
+  edgeMin, pen, fc, lc, n, lr}; `data-fx-why` gains `dup-hidden`.

@@ -104,8 +104,18 @@ function linkRanges(text) {
 export function emphasizeParts(text, opts = {}, startWordIndex = 0) {
   if (!text || MATHY(text)) return null;
   // A space-free fragment containing a path/address separator is the
-  // continuation of a wrapped URL or email — leave it whole.
-  if (/^\S+$/.test(text.trim()) && /[/@]/.test(text)) return null;
+  // continuation of a wrapped URL or email — leave it whole. EXCEPT the
+  // slashed-word-pair prose pattern ("and/or", "read/write",
+  // "input/output."): exactly two plain words around ONE slash, with
+  // optional sentence punctuation, is text, not a path.
+  const frag = text.trim();
+  if (
+    /^\S+$/.test(frag) &&
+    /[/@]/.test(frag) &&
+    !/^[A-Za-zÀ-ɏ'’-]+\/[A-Za-zÀ-ɏ'’-]+[.,;:]?$/.test(frag)
+  ) {
+    return null;
+  }
   const { saccade = 1 } = opts;
   // Font-only mode: the span is still processed (masked + re-rendered, so a
   // bundled reading face applies), but nothing is emphasized.
