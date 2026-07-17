@@ -186,6 +186,20 @@ app.eventBus.on("textlayerrendered", async (evt) => {
   references.onTextLayerRendered(evt.source);
 });
 
+// PDF.js caps large page canvases (the base render can drop below 1× CSS
+// resolution) and paints a full-resolution DETAIL canvas over the visible
+// area afterwards. Ink-based decisions (hidden-text veto, duplicate-overlap
+// resolution) made from a capped base read are unreliable — the engine marks
+// those pages and re-processes them once, here, when their sharp pixels
+// arrive. No-op for pages processed at full resolution.
+app.eventBus.on("pagerendered", (evt) => {
+  if (!evt.isDetailView || evt.error) return;
+  const pageView = app.pdfViewer.getPageView(evt.pageNumber - 1);
+  engine.onDetailRendered(pageView).then((reprocessed) => {
+    if (reprocessed) references.reannotateRendered();
+  });
+});
+
 // Reconcile the PDF's own in-document jump links once the annotation layer
 // renders. A citation "[35]" link (whose annotation scrolls to the
 // bibliography) should instead open our reference card, so we neutralise links

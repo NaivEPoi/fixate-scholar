@@ -80,6 +80,13 @@ test("URLs, DOIs, and emails are never emphasized", () => {
   // wrapped-URL continuation lines (no scheme, no spaces) are left whole
   assert.equal(emphasizeParts("com/SyNSec-den/5GBaseChecker."), null);
   assert.equal(emphasizeParts("ishtiaq@psu.edu"), null);
+  assert.equal(emphasizeParts("path/v2"), null); // digit segment — URL-ish
+  // ...but a slashed WORD PAIR is prose ("and/or", a wrapped
+  // "input/output." continuation line), not a path fragment.
+  const pair = emphasizeParts("input/output.");
+  assert.ok(pair && pair.parts.some((p) => p.bold && p.text === "in"));
+  const andor = emphasizeParts("and/or");
+  assert.ok(andor && andor.parts.some((p) => p.bold));
 });
 
 test("non-Latin and mixed words are never emphasized", () => {
