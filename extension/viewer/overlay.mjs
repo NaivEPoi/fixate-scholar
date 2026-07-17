@@ -208,13 +208,21 @@ app.eventBus.on("annotationlayerrendered", (evt) => {
 // stale (collapsed spacing, "wrong font"). PDF.js doesn't re-render for this,
 // so re-process from a clean state once fonts settle. Debounced — loadingdone
 // also fires during the initial page load.
+// Refresh ONLY the pages that USE the newly loaded faces. loadingdone also
+// fires for every page's own font subsets as the user scrolls — a blanket
+// restore+reprocess of ALL rendered pages on each one is O(pages²) churn
+// that leaves long papers flashing native text for seconds at a time.
 if (typeof document !== "undefined" && document.fonts?.addEventListener) {
   let fontsTimer = null;
-  document.fonts.addEventListener("loadingdone", () => {
+  const pendingFaces = new Set();
+  document.fonts.addEventListener("loadingdone", (e) => {
     if (!engine.enabled) return;
+    for (const f of e.fontfaces ?? []) pendingFaces.add(f.family);
     clearTimeout(fontsTimer);
     fontsTimer = setTimeout(async () => {
-      await engine.refresh();
+      const faces = [...pendingFaces];
+      pendingFaces.clear();
+      await engine.refreshFonts(faces);
       references.reannotateRendered();
     }, 250);
   });
