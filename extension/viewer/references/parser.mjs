@@ -74,7 +74,18 @@ export function findReferencesBody(lines) {
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i];
     if (SECTION_AFTER.test(line.text) || HEADING.test(line.text)) break;
-    if (line.h >= heading.h * 0.9 && line.h >= entryH * 1.15) break;
+    // Heading-SIZED alone is not enough: a stray oversized glyph (a lone
+    // quotation mark split onto its own line by the font-size line rule)
+    // must not end the bibliography — a real section heading carries at
+    // least two characters including a letter or digit.
+    if (
+      line.h >= heading.h * 0.9 &&
+      line.h >= entryH * 1.15 &&
+      line.text.trim().length >= 2 &&
+      /[\p{L}\p{N}]/u.test(line.text)
+    ) {
+      break;
+    }
     body.push(line);
   }
   return { heading, body };
@@ -227,6 +238,9 @@ export function findCitations(text) {
   const out = [];
   for (const m of text.matchAll(NUMERIC_CITE)) {
     const keys = expandNumericList(m[1]);
+    // Bibliographies number from [1]: a bracketed list containing 0 is math
+    // (a vector/matrix row like "[2, 1, 0]"), not a citation.
+    if (keys.includes("0")) continue;
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
   }
   for (const m of text.matchAll(AUTHOR_YEAR_CITE)) {

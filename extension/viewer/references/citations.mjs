@@ -56,6 +56,7 @@ export class ReferencesFeature {
         let bodyH = null;
         let bestW = 0;
         for (const [b, w] of hHist) if (w > bestW) { bestW = w; bodyH = b; }
+        globalThis.__fxBodyH = bodyH; // test introspection
         if (bodyH) await this.onBodyHeight?.(bodyH);
         const contentStart = findContentStart(lines);
         if (contentStart) await this.onContentStart?.(contentStart);
