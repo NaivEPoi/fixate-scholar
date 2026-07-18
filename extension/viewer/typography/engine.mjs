@@ -329,7 +329,56 @@ export class TypographyEngine {
     // displayed formula's box frame): masks of neighbouring lines must clamp a
     // margin away from these, not just off their glyphs.
     const protect = new Set();
-    const items = allPairs.filter((p) => p.item?.transform && p.item.str.trim());
+    let items = allPairs.filter((p) => p.item?.transform && p.item.str.trim());
+    // Review-template LINE-NUMBER GUTTERS: submission drafts number every
+    // line down the outer margins (a column of tiny pure-digit items on
+    // dozens of distinct baselines, often BOTH sides). To every table
+    // heuristic those numbers are a phantom first column that glues the
+    // whole page into one giant ruled grid — every row gets an extra
+    // "cell", and the body text's constant start-x becomes an
+    // aligned-interior-starts band spanning the page — so nothing gets
+    // processed. They are margin furniture: excluded from classification
+    // geometry entirely (they are already non-candidates via the no-Latin
+    // filter, so they stay on the canvas as obstacles like page numbers).
+    {
+      const gutterDivs = new Set();
+      for (const sideTest of [
+        (cx) => cx < pageW * 0.12,
+        (cx) => cx > pageW * 0.88,
+      ]) {
+        const digits = items.filter((p) => {
+          if (!/^\d{1,4}$/.test(p.item.str.trim())) return false;
+          const cx = p.item.transform[4] + (p.item.width ?? 0) / 2 - vx0;
+          return sideTest(cx);
+        });
+        if (digits.length < 10) continue;
+        // one narrow x-band + many distinct baselines = a numbered gutter
+        digits.sort(
+          (a, b) =>
+            a.item.transform[4] + (a.item.width ?? 0) / 2 - (b.item.transform[4] + (b.item.width ?? 0) / 2),
+        );
+        let run = [];
+        let best = [];
+        for (const p of digits) {
+          const cx = p.item.transform[4] + (p.item.width ?? 0) / 2;
+          const c0 = run.length ? run[0].item.transform[4] + (run[0].item.width ?? 0) / 2 : cx;
+          if (run.length && cx - c0 > pageW * 0.025) {
+            if (run.length > best.length) best = run;
+            run = [];
+          }
+          run.push(p);
+        }
+        if (run.length > best.length) best = run;
+        const baselines = new Set(best.map((p) => Math.round(p.item.transform[5])));
+        if (best.length >= 10 && baselines.size >= 10) {
+          for (const p of best) {
+            gutterDivs.add(p.div);
+            if (globalThis.__fxDebug) p.div.dataset.fxWhy = "margin-num";
+          }
+        }
+      }
+      if (gutterDivs.size) items = items.filter((p) => !gutterDivs.has(p.div));
+    }
     const lines = this.#lineGroups(items);
     if (!lines.length) return { skip, protect };
 

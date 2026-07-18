@@ -697,3 +697,45 @@ is now a RESOLUTION, plus three defects found while verifying it:
 - Debug: `__fxOverlap` (gated on `__fxDebug`) records every judged pair
   {a, b, fa, fb, ra, rb} with per-span fit internals {score, core, edges,
   edgeMin, pen, fc, lc, n, lr}; `data-fx-why` gains `dup-hidden`.
+
+## Round 12 (R12) - review-draft template rendered a whole paper unprocessable (user report)
+A private-corpus SUBMISSION DRAFT (margin line numbers on every line, both
+sides; diagonal background watermark; anonymized ACM template) processed
+NOTHING - done=0 on every page, no errors thrown.
+
+### R12-1 - margin line numbers glued every page into one giant "table"
+- The numbering gutters put a tiny pure-digit item on EVERY baseline at a
+  constant x in both outer margins. To every table heuristic that is a
+  phantom first column: each row gains an extra "cell" (blk-table cells>=3
+  fired on 40-row blocks whose lowercase count the figure rows diluted
+  below the prose exception), and the body text's constant start-x became
+  an aligned-interior-starts band spanning the ENTIRE page (n=33..69 row
+  runs in the gutter x-bands), so the table-region pass built one region
+  from y=75 to y=700 covering 170 lines - the whole page, every page.
+  Diagnostic signature in the debug globals: ALIGNED bands whose x-range
+  sits at a page edge with run counts near the page's line count, and a
+  REGION whose n ~ all lines on the page, with done=0 and NO exceptions.
+- Fix in #classifyBlocks, before line grouping: a column of >=10 pure-digit
+  (1-4 chars) items on >=10 distinct baselines, clustered in a narrow
+  x-band (2.5% of page width) whose centers sit in the outer 12% of the
+  page, is a LINE-NUMBER GUTTER - margin furniture. Those items are
+  excluded from classification geometry entirely (lines/blocks/aligned/
+  region passes never see them) and stay on the canvas untouched: they are
+  already non-candidates via the no-Latin filter, exactly like page
+  numbers. Normal papers are unaffected (a page number is one digit item
+  on ONE baseline; in-table row-number columns sit in the interior 76%).
+- Also observed, working as intended: the draft's diagonal background
+  watermark (two large rotated kept spans) loses every ink-fit pair
+  against the printed lines it crosses (R11 resolver: ~0.03 vs ~0.99), so
+  its obstacles are suppressed and the body processes; the masks of
+  processed lines erase the watermark strokes that cross them (the ink
+  between lines survives, and fx-off is untouched). The bold horizontal
+  draft notice near the page bottom is the DOCUMENT's own rendering,
+  identical fx-on/fx-off.
+- Verified: worst page 0 -> 127 processed spans; full-paper sweep clean on
+  all pages (the only flags are bibliography entries and one kept math
+  row), citations n/n on every page incl. 28/28 on the densest refs page;
+  front matter, line numbers, and figures untouched in screenshots.
+  Regression: units 34/34 + naming guard, papers.mjs 7/7 PASS, tables (D)
+  and figures (5GShield) oracles 0 offenders, skipline (B) 0, and the
+  R11 hidden-layer page still resolves identically (159 done, no ties).
