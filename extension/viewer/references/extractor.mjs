@@ -12,8 +12,19 @@ export async function extractLines(pdfDocument) {
     const page = await pdfDocument.getPage(p);
     const pageWidth = page.view[2] - page.view[0];
     const content = await page.getTextContent();
-    const items = content.items
-      .filter((it) => it.str && it.str.trim())
+    let items = content.items
+      .filter((it) => {
+        if (!it.str || !it.str.trim()) return false;
+        // Drop ROTATED text (diagonal/vertical watermarks like "Unpublished
+        // working draft. Not for distribution.", sideways figure labels). Its
+        // huge line height trips the reference-body's heading-size cutoff and
+        // truncates the bibliography; it is never reading content anyway. A
+        // horizontal item has transform b≈c≈0.
+        const [a, b, c, d] = it.transform;
+        const skew = Math.abs(b) + Math.abs(c);
+        const scale = Math.abs(a) + Math.abs(d);
+        return !(scale > 0 && skew > scale * 0.087); // > ~5° off-axis
+      })
       .map((it) => ({
         str: it.str,
         x: it.transform[4],
@@ -21,6 +32,12 @@ export async function extractLines(pdfDocument) {
         w: it.width || 0,
         h: it.height || Math.abs(it.transform[3]) || 10,
       }));
+    // Drop REVIEW-DRAFT LINE-NUMBER GUTTERS: a column of ≥10 pure-digit items
+    // on ≥10 distinct baselines within a narrow band in an outer margin
+    // (mirrors the typography engine's gutter filter). Left in, the numbers
+    // become phantom entry/citation content and their baselines pollute
+    // reference grouping.
+    items = dropLineNumberGutters(items, page.view[0], pageWidth);
     items.sort((a, b) => b.y - a.y || a.x - b.x);
 
     // Two passes: first collect baseline "rows" (everything within a y
@@ -89,4 +106,33 @@ export async function extractLines(pdfDocument) {
     column,
     endX,
   }));
+}
+
+/** Remove submission-draft line-number gutters (both outer margins): a column
+ *  of ≥10 pure-digit items on ≥10 distinct baselines clustered in a narrow
+ *  x-band whose centers sit in the outer 12% of the page. */
+function dropLineNumberGutters(items, x0, pageWidth) {
+  const drop = new Set();
+  for (const sideTest of [(cx) => cx < pageWidth * 0.12, (cx) => cx > pageWidth * 0.88]) {
+    const digits = items.filter(
+      (it) => /^\d{1,4}$/.test(it.str.trim()) && sideTest(it.x + it.w / 2 - x0),
+    );
+    if (digits.length < 10) continue;
+    digits.sort((a, b) => a.x + a.w / 2 - (b.x + b.w / 2));
+    let run = [];
+    let best = [];
+    for (const it of digits) {
+      const cx = it.x + it.w / 2;
+      const c0 = run.length ? run[0].x + run[0].w / 2 : cx;
+      if (run.length && cx - c0 > pageWidth * 0.025) {
+        if (run.length > best.length) best = run;
+        run = [];
+      }
+      run.push(it);
+    }
+    if (run.length > best.length) best = run;
+    const baselines = new Set(best.map((it) => Math.round(it.y)));
+    if (best.length >= 10 && baselines.size >= 10) for (const it of best) drop.add(it);
+  }
+  return drop.size ? items.filter((it) => !drop.has(it)) : items;
 }

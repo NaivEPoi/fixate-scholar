@@ -20,13 +20,21 @@ export function parseReferences(lines) {
   const dottedStarts = body.filter((l) => DOTTED_MARKER.test(l.text)).length;
 
   let groups;
-  if (numericStarts >= 3) groups = splitByMarker(body, NUMERIC_MARKER);
-  else if (dottedStarts >= 3) groups = splitByMarker(body, DOTTED_MARKER);
-  else groups = splitByIndent(body);
+  let mode;
+  if (numericStarts >= 3) { groups = splitByMarker(body, NUMERIC_MARKER); mode = "numeric"; }
+  else if (dottedStarts >= 3) { groups = splitByMarker(body, DOTTED_MARKER); mode = "dotted"; }
+  else { groups = splitByIndent(body); mode = "indent"; }
 
-  return groups
+  const entries = groups
     .map((g) => buildEntry(g))
-    .filter((e) => e && e.raw.length > 20);
+    // A NUMBERED entry ("[7] RFC 9110, page 106.") is a real reference
+    // however short — the length gate only guards the marker-less indent/
+    // year-grouping mode, where stray fragments can form spurious groups.
+    .filter((e) => e && (e.number !== null || e.raw.length > 20));
+  if (globalThis.__fxDebug) {
+    globalThis.__fxRefDebug = { bodyLen: body.length, numericStarts, dottedStarts, mode, groups: groups.length, entries: entries.length }; // test introspection
+  }
+  return entries;
 }
 
 function findHeadingIndex(lines) {
@@ -201,7 +209,14 @@ export function findInternalRefs(text) {
   return out;
 }
 
-const NUMERIC_CITE = /\[(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)\]/g;
+// A numeric citation bracket: a number list, optionally followed by a single
+// locator into the cited work — "[9, §5.2.2.1]", "[24, Section 5.2]",
+// "[26, Lemma 1]", "[58, §4.2, NOTE 2]". Only the leading number LIST is
+// captured (group 1) for resolution; the locator is consumed so the whole
+// bracket becomes one clickable/colored citation. The locator must begin with
+// §/¶/p./pp. or a capital word so ordinary prose "[9, and ...]" is not swept up.
+const NUMERIC_CITE =
+  /\[(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)(?:\s*,\s*(?:§|¶|pp?\.|[A-Z])[^\]]{0,55})?\]/g;
 const AUTHOR_YEAR_CITE = /\(([^()]{2,120}?(?:19|20)\d{2}[a-z]?(?:\s*[;,]\s*(?:p+\.\s*[\d–-]+|[^();]*?(?:19|20)\d{2}[a-z]?))*)\)/g;
 
 /**

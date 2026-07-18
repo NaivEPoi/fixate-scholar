@@ -60,6 +60,21 @@ test("numeric entry title extraction", () => {
   assert.equal(entries[0].title, "Attention is all you need");
 });
 
+test("keeps short numbered entries (>20-char length gate is marker-only)", () => {
+  // A real but terse numbered reference ("[7] RFC 9110, page 106." — exactly
+  // 20 chars after the marker) must survive; the length gate only guards the
+  // marker-less indent/year grouping mode.
+  const doc = lines([
+    "References",
+    "[1] A long enough first reference entry to pass any length gate, 2020.",
+    "[2] RFC 9110, page 106.",
+    "[3] RFC 9110, page 13.",
+    "[4] Another sufficiently long reference entry for good measure, 2021.",
+  ]);
+  const entries = parseReferences(doc);
+  assert.deepEqual(entries.map((e) => e.number), [1, 2, 3, 4]);
+});
+
 test("de-hyphenates wrapped lines", () => {
   const doc = lines([
     "References",
@@ -119,6 +134,22 @@ test("findCitations: numeric single and list", () => {
 test("findCitations: numeric range expansion", () => {
   const found = findCitations("Several works [1-3] explore this.");
   assert.deepEqual(found[0].keys, ["1", "2", "3"]);
+});
+
+test("findCitations: numeric with a locator into the cited work", () => {
+  // "[9, §5.2.2.1]", "[24, Section 5.2]", "[26, Lemma 1]" — only the number is
+  // the key; the whole bracket (incl. locator) is the matched span.
+  const a = findCitations("per the RRC spec [9, §5.2.2.1] this holds.");
+  assert.equal(a.length, 1);
+  assert.deepEqual(a[0].keys, ["9"]);
+  assert.equal("per the RRC spec [9, §5.2.2.1] this holds.".slice(a[0].start, a[0].end), "[9, §5.2.2.1]");
+  assert.deepEqual(findCitations("shown in [24, Section 5.2].")[0].keys, ["24"]);
+  assert.deepEqual(findCitations("by [26, Lemma 1], we get")[0].keys, ["26"]);
+  assert.deepEqual(findCitations("response length [58, §4.2].")[0].keys, ["58"]);
+  // a number list plus a trailing locator keeps every number
+  assert.deepEqual(findCitations("see [24, 58, §2.2.3] here")[0].keys, ["24", "58"]);
+  // ordinary prose after a number is NOT swallowed as a locator
+  assert.equal(findCitations("the interval [9, and beyond]").length, 0);
 });
 
 test("findCitations: author-year, multiple in one paren", () => {

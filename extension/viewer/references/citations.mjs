@@ -38,8 +38,12 @@ export class ReferencesFeature {
     this.#ready = (async () => {
       try {
         const lines = await extractLines(pdfDocument);
+        if (globalThis.__fxDebug) {
+          globalThis.__fxAllLines = lines.map((l) => ({ page: l.page, col: l.column, x: Math.round(l.x), h: Math.round(l.h * 10) / 10, text: l.text })); // test introspection
+        }
         this.#entries = parseReferences(lines);
         globalThis.__fxRefCount = this.#entries.length; // test introspection
+        globalThis.__fxRefNums = this.#entries.map((e) => e.number); // test introspection
         // Document-wide body height (char-weighted height mode over every
         // page) — body text dominates the whole document, so a single
         // small-text-heavy page can't skew it.
@@ -56,6 +60,9 @@ export class ReferencesFeature {
         const contentStart = findContentStart(lines);
         if (contentStart) await this.onContentStart?.(contentStart);
         const { heading, body } = findReferencesBody(lines);
+        if (globalThis.__fxDebug) {
+          globalThis.__fxRefBody = body.map((l) => l.text); // test introspection
+        }
         if (heading && body.length) {
           const boxes = new Map();
           for (const line of [heading, ...body]) {
@@ -93,6 +100,34 @@ export class ReferencesFeature {
     }
   }
 
+  /** Ordered, de-duplicated card list for a citation's keys: each resolved
+   *  entry, plus a stub for any NUMERIC key the extractor didn't parse (so the
+   *  pager reflects every cited reference and the native link is neutralised).
+   *  Returns [] for an unresolved author-year citation. */
+  #buildCards(keys, numeric) {
+    const cards = [];
+    const seen = new Set();
+    for (const key of keys) {
+      const matches = resolveCitation([key], this.#entries);
+      if (matches.length) {
+        for (const e of matches) {
+          const id = "e:" + (e.number ?? e.label);
+          if (!seen.has(id)) {
+            seen.add(id);
+            cards.push(e);
+          }
+        }
+      } else if (numeric && /^\d+$/.test(key)) {
+        const id = "s:" + key;
+        if (!seen.has(id)) {
+          seen.add(id);
+          cards.push({ number: parseInt(key, 10), label: key, unresolved: true, raw: "", title: "" });
+        }
+      }
+    }
+    return cards;
+  }
+
   annotatePage(pageView) {
     pageView.div.querySelector(".fx-cite-layer")?.remove();
     const textLayerDiv = pageView.textLayer?.div;
@@ -121,14 +156,16 @@ export class ReferencesFeature {
     }
 
     for (const cite of findCitations(joined)) {
-      const entries = resolveCitation(cite.keys, this.#entries);
-      // A NUMERIC citation that resolves to no parsed entry (the extractor
-      // missed part of the bibliography) still IS a citation — readers see
-      // "[52] colored, [53] not" as a bug. Color it; only the hover/click
-      // card requires a resolved entry. Unresolved AUTHOR-YEAR parentheticals
-      // stay untouched (that pattern false-positives on ordinary parens).
       const numeric = joined[cite.start] === "[";
-      if (!entries.length && !numeric) continue;
+      // One card per CITED key, in reading order: the resolved entry, or — for
+      // a numeric key the extractor missed — a stub. So (1) a multi-citation's
+      // pager shows EVERY cited reference, not only the ones that resolved, and
+      // (2) every numeric citation gets a hit-target, which lets reconcileLinks
+      // neutralise the PDF's own link so a click opens our card instead of
+      // scrolling to the bibliography. Unresolved AUTHOR-YEAR parentheticals
+      // get no card (that pattern false-positives on ordinary parens).
+      const cards = this.#buildCards(cite.keys, numeric);
+      if (!cards.length) continue;
       for (const seg of segments) {
         if (seg.end <= cite.start || seg.start >= cite.end) continue;
         // Don't annotate the bibliography's own entry "[N]" markers (the engine
@@ -137,12 +174,6 @@ export class ReferencesFeature {
         if (seg.span.dataset.fxRefs) continue;
         const localStart = Math.max(0, cite.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
-        if (!entries.length) {
-          if (seg.span.dataset.fxDone) {
-            wrapRange(seg.span, localStart, localEnd, "fx-cite-c", null);
-          }
-          continue;
-        }
         for (const rect of rangeRects(seg.span, localStart, localEnd)) {
           const a = document.createElement("a");
           a.className = "fx-cite-hit";
@@ -151,12 +182,12 @@ export class ReferencesFeature {
             `left:${rect.left - layerRect.left}px;top:${rect.top - layerRect.top}px;` +
             `width:${rect.width}px;height:${rect.height}px;`;
           a.addEventListener("mouseenter", () =>
-            this.#popup.scheduleShow(entries, a),
+            this.#popup.scheduleShow(cards, a),
           );
           a.addEventListener("mouseleave", () => this.#popup.scheduleHide());
           a.addEventListener("click", (e) => {
             e.preventDefault();
-            this.#popup.showNow(entries, a, { pinned: true });
+            this.#popup.showNow(cards, a, { pinned: true });
           });
           layer.append(a);
         }

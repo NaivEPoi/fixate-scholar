@@ -269,6 +269,11 @@
   font-style: italic;
 }
 
+.fx-cite-unresolved {
+  color: light-dark(#5f6368, #9aa0a6);
+  font-style: italic;
+}
+
 .fx-scholar-title {
   display: block;
   font-size: 14px;
