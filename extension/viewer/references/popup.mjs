@@ -101,7 +101,13 @@ export class CitationPopup {
     body.className = "fx-cite-body";
     el.append(body, this.#actions(entry));
 
-    if (this.#pinned) {
+    if (entry.unresolved) {
+      // The extractor couldn't parse this entry from the bibliography, so there
+      // is nothing to look up — show an honest note. The card still exists (and
+      // its hit-target neutralises the PDF link) so a click never scrolls to
+      // the reference list.
+      body.append(this.#unresolvedNode(entry));
+    } else if (this.#pinned) {
       body.append(this.#loadingNode());
       const shownIndex = this.#index;
       fetchScholarPreview(entry.title).then((preview) => {
@@ -170,7 +176,15 @@ export class CitationPopup {
 
   #rawEntry(entry) {
     const d = document.createElement("div");
-    d.textContent = entry.raw.length > 360 ? entry.raw.slice(0, 360) + "…" : entry.raw;
+    const raw = entry.raw || "";
+    d.textContent = raw.length > 360 ? raw.slice(0, 360) + "…" : raw;
+    return d;
+  }
+
+  #unresolvedNode(entry) {
+    const d = document.createElement("div");
+    d.className = "fx-cite-unresolved";
+    d.textContent = `Reference [${entry.number}] could not be read from this document's bibliography.`;
     return d;
   }
 
@@ -225,6 +239,9 @@ export class CitationPopup {
   #actions(entry) {
     const actions = document.createElement("div");
     actions.className = "fx-cite-actions";
+
+    // A stub (unparsed) entry has no title/DOI/page — nothing to act on.
+    if (entry.unresolved) return actions;
 
     if (this.#pinned) {
       // Cite → BibTeX panel (Scholar's own BibTeX, else a local fallback).

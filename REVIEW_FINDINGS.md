@@ -739,3 +739,64 @@ NOTHING - done=0 on every page, no errors thrown.
   Regression: units 34/34 + naming guard, papers.mjs 7/7 PASS, tables (D)
   and figures (5GShield) oracles 0 offenders, skipline (B) 0, and the
   R11 hidden-layer page still resolves identically (159 done, no ties).
+
+## Round 13 (R13) - citations jumping to the bibliography / cards missing cited entries (user report)
+Two user-visible symptoms, one shared root plus three distinct defects,
+found via a new citation-behavior audit (test/citeaudit.mjs) that checks
+every numeric citation for (a) an ACTIVE native link overlapping it (a
+click would scroll to the bibliography), (b) a missing hit-target, and
+(c) cited numbers absent from the parsed bibliography.
+
+### R13-1 - the diagonal watermark TRUNCATED reference extraction
+- findReferencesBody stops at any heading-sized line (>= 0.9x the
+  References heading, >= 1.15x the entries). A review draft's ROTATED
+  watermark line lands mid-bibliography in extraction reading order with
+  a giant line height, so the body cut off at the first entry the
+  watermark interleaved with: one corpus paper parsed 18 of 62 entries.
+  Every citation to [19..62] was unresolved -> colored but NO hit-target
+  -> the PDF's own link stayed active and clicking scrolled to the
+  bibliography (symptom a); multi-citations showed only their resolved
+  subset (symptom b). Fix in extractor.mjs: drop rotated text items
+  (|transform skew| > ~5 degrees of the scale) - diagonal/vertical
+  watermarks and sideways labels are never reading content. Also drop
+  review-draft line-number gutters there (same detection as the
+  typography engine's R12 filter): the numbers otherwise prefix entry
+  lines ("1394 [1] ...") and pollute grouping. 62/62 entries parse now.
+
+### R13-2 - citations with a LOCATOR never matched: "[9, §5.2.2.1]"
+- NUMERIC_CITE only accepted pure number lists, so spec-style citations
+  with a pinpoint locator - "[9, §5.2.2.1]", "[24, Section 5.2]",
+  "[26, Lemma 1]", "[58, §4.2]" - were not citations at all: no color,
+  no card, native link live (jump to bibliography). The regex now
+  consumes one trailing locator (starting with §/¶/p./pp. or a capital
+  word, so prose brackets like "[9, and beyond]" stay untouched); only
+  the leading number list resolves, the whole bracket is the hit-target.
+
+### R13-3 - real but SHORT numbered entries were dropped
+- buildEntry's raw.length > 20 gate (meant to kill stray fragments in
+  the marker-less indent/year grouping mode) also dropped genuine terse
+  numbered entries ("[7] RFC 9110, page 106." is exactly 20 chars after
+  the marker) - three entries on one corpus paper, whose citations then
+  had no cards. A NUMBERED entry now passes regardless of length; the
+  gate still applies to marker-less grouping.
+
+### R13-4 - unresolved keys silently vanished from cards and kept native links live
+- resolveCitation dropped unresolved keys, so a multi-citation's card
+  paged through fewer entries than the text cites, and a fully
+  unresolved citation got no hit-target at all (the native link then
+  scrolls to the bibliography - the exact behavior the card exists to
+  replace). annotatePage now builds ONE CARD PER CITED KEY in reading
+  order: the resolved entry, or a stub for a numeric key the extractor
+  missed ("Reference [N] could not be read from this document's
+  bibliography", no Scholar fetch, no actions). Every numeric citation
+  therefore always has a hit-target and reconcileLinks always
+  neutralises the PDF's own link. Genuine papers citing beyond their own
+  bibliography (one corpus paper cites [25..30] with only 24 entries -
+  confirmed absent from the document text) degrade to honest stubs.
+- Verified: on the watermarked review draft, jumpCites 93 -> 0 and
+  unresolved 109 -> 0 across all pages; the other two investigated
+  papers audit clean (one with 6 stubs for its genuinely-missing
+  entries). Public regression: units 36/36 (+2 new parser tests),
+  papers.mjs 7/7 PASS (refs/cites counts unchanged), citecolor 82/82,
+  109/109, 74/74 on three templates. Corpus-wide citeaudit sweep run
+  across all private papers.
