@@ -115,6 +115,27 @@ test("findReferencesBody returns heading and body lines, stopping at appendix", 
   assert.ok(body.every((l) => !/Appendix/.test(l.text)));
 });
 
+test("a stray oversized punctuation glyph does not end the bibliography", () => {
+  // A lone quotation mark can render heading-sized and split onto its own
+  // extraction line mid-bibliography; the size cutoff must skip it.
+  const doc = [
+    ...lines([
+      "References",
+      "[1] A. Author. First reference entry with enough length. In CHI, 2021.",
+    ]),
+    { text: "“", x: 50, y: 640, page: 9, h: 14, column: 0 },
+    ...lines(
+      [
+        "[2] B. Author. Second reference entry with enough length. In CHI, 2022.",
+        "[3] C. Author. Third reference entry with enough length. In CHI, 2023.",
+      ],
+      { startY: 620 },
+    ),
+  ];
+  const entries = parseReferences(doc);
+  assert.deepEqual(entries.map((e) => e.number), [1, 2, 3]);
+});
+
 test("stops at appendix", () => {
   const doc = [
     ...NUMERIC_DOC,
@@ -161,6 +182,12 @@ test("findCitations: author-year, multiple in one paren", () => {
 test("findCitations ignores figure/table parens and bare years", () => {
   assert.equal(findCitations("(Figure 2020 shows this)").length, 0);
   assert.equal(findCitations("in the year (2020)").length, 0);
+});
+
+test("findCitations: a bracketed list containing 0 is math, not a citation", () => {
+  assert.equal(findCitations("the vector [2, 1, 0] spans it").length, 0);
+  assert.equal(findCitations("index [0] of the array").length, 0);
+  assert.deepEqual(findCitations("cited in [2, 1]")[0].keys, ["2", "1"]);
 });
 
 test("resolveCitation maps numeric keys to entries", () => {

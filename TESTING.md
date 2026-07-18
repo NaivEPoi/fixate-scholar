@@ -320,6 +320,16 @@ Lessons from the F1–F16 investigations. Each of these cost hours; don't re-pay
   predictor disagree by ~1px on decorative faces. Below ~1px, arbitrate with a
   high-zoom capture, not with either number.
 
+### Harness metric traps
+- **papers.mjs `bolded`/`masks` totals are SNAPSHOT numbers, not document
+  totals.** They count `.fx-b`/mask nodes over whichever pages happen to be
+  rendered when the summary is taken — a run that leaves 3 pages rendered
+  reports ~40% more than one that leaves 2, with identical classification.
+  A shifted total is NOT evidence of a regression: compare PER-PAGE counts
+  (walk each page and count `span[data-fx-done]`/`.fx-b`) between code
+  states before concluding anything. The rule CHECKS columns are the
+  assertions; the counts are telemetry.
+
 ### DOM measurement traps
 - **`data-fx-why` tags are STICKY across re-processing passes.** bodyHeight /
   refs arriving re-runs classification; `dbg` never clears old tags, so a

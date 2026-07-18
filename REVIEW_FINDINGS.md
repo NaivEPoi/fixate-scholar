@@ -800,3 +800,27 @@ click would scroll to the bibliography), (b) a missing hit-target, and
   papers.mjs 7/7 PASS (refs/cites counts unchanged), citecolor 82/82,
   109/109, 74/74 on three templates. Corpus-wide citeaudit sweep run
   across all private papers.
+
+### R13 addendum - three more extraction truncations found by the corpus-wide audit
+- The corpus-wide citeaudit run exposed the same truncation CLASS beyond
+  the watermark: (a) RUNNING FOOTERS and bare PAGE NUMBERS ("Page N of
+  M", "13") interleave the bibliography in extraction reading order and
+  are heading-sized, tripping the next-section cutoff (worst papers
+  parsed 4/58 and 1/35 entries; one recovered from 43 to 125); the
+  extractor now drops SHORT (<45 char) lines in the outer 6% vertical
+  bands - the engine's margins rule, mirrored - while a real entry line
+  landing in the band on a dense page is column-width and survives
+  (verified: a public paper's mid-band entry stays, its parse intact);
+  (b) a LONE OVERSIZED GLYPH (a quotation mark split onto its own
+  extraction line by the font-size line rule) ended one bibliography -
+  the size cutoff now also requires >=2 chars including a letter/digit;
+  (c) bracketed MATH ("[2, 1, 0]", "[0]") matched the citation pattern -
+  bibliographies number from [1], so lists containing 0 are rejected.
+- Final corpus state: every paper audits jumpCites=0 and 0 missing
+  hit-targets; unresolved remains only where a paper genuinely cites
+  beyond its own bibliography (stub cards). Six papers' reference lists
+  recovered in full. Public regression re-verified: units 38/38,
+  papers.mjs 7/7 (a shifted `bolded` total on one template was chased
+  down to the harness's rendered-page snapshot, per-page counts
+  identical under both code states - see TESTING "Harness metric
+  traps"), citecolor 82/82.

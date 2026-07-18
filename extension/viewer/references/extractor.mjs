@@ -87,6 +87,22 @@ export async function extractLines(pdfDocument) {
       }
     }
 
+    // Running headers/footers and page numbers live in the outer 6% vertical
+    // bands (the same margins rule the typography engine applies). In reading
+    // order they interleave the bibliography — a heading-sized "Page 18 of
+    // 31" or bare page number then trips findReferencesBody's next-section
+    // cutoff and truncates the reference list mid-bibliography. Only SHORT
+    // outer-band lines are dropped: page furniture is a few words, while a
+    // real bibliography entry whose first line lands in the band on a dense
+    // page is a full column line and must survive.
+    const pageH = page.view[3] - page.view[1];
+    const filtered = lines.filter((l) => {
+      const rel = (l.y - page.view[1]) / pageH;
+      return (rel > 0.06 && rel < 0.94) || l.text.trim().length >= 45;
+    });
+    lines.length = 0;
+    lines.push(...filtered);
+
     // Two-column layouts: assign columns so reading order is left column
     // top-to-bottom, then right column. A line is "right column" when it
     // starts past ~45% of the page and a meaningful share of lines do so.

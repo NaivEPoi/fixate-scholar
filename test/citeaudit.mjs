@@ -119,6 +119,8 @@ try {
       const NUM = /\\[(\\d{1,3}(?:\\s*[,;\\u2013\\u2014-]\\s*\\d{1,3})*)(?:\\s*,\\s*(?:§|¶|pp?\\.|[A-Z])[^\\]]{0,55})?\\]/g;
       for (const m of joined.matchAll(NUM)) {
         const a = m.index, b = m.index + m[0].length;
+        // lists containing 0 are math vectors, not citations (parser rule)
+        if (m[1].split(/[^0-9]+/).includes('0')) continue;
         if (spans.some((sg) => sg.end > a && sg.start < b && sg.s.dataset.fxRefs)) continue;
         const rs = rectsFor(a, b);
         // Bug 1: an ACTIVE native link overlaps this citation -> click jumps to
