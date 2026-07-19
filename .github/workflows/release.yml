@@ -1,0 +1,64 @@
+# Pack the extension and publish it as a GitHub Release.
+#
+# Trigger by pushing a version tag that matches extension/manifest.json:
+#   git tag v1.0.0 && git push origin v1.0.0
+# The vendored PDF.js viewer is not committed — the workflow fetches the
+# pinned, checksum-verified build and applies the repo's patches
+# (scripts/fetch-pdfjs.mjs) before zipping, exactly like a local setup.
+# A workflow_dispatch run builds the same zip as a downloadable artifact
+# without creating a release (useful for pre-release smoke checks).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Vendor PDF.js (pinned version, checksum-verified, patched)
+        run: npm run fetch-pdfjs
+
+      - name: Naming guard + unit tests
+        run: npm test
+
+      - name: Verify the tag matches the manifest version
+        if: github.ref_type == 'tag'
+        run: |
+          MANIFEST=$(node -p "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8')).version")
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$MANIFEST" != "$TAG" ]; then
+            echo "extension/manifest.json version ($MANIFEST) does not match tag ($TAG) — bump the manifest before tagging." >&2
+            exit 1
+          fi
+
+      - name: Pack extension zip
+        run: npm run package
+
+      - name: Create GitHub Release with the zip
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --title "FixateScholar $GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: Upload zip as workflow artifact (manual runs)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixate-scholar-extension
+          path: dist/*.zip

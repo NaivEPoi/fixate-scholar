@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FixateScholar — Guided-Reading PDF Viewer",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Read PDFs with fixation-guided typography: leading word emphasis that guides the eye, plus reference lookup for academic papers.",
   "minimum_chrome_version": "128",
   "permissions": [
