@@ -824,3 +824,45 @@ click would scroll to the bibliography), (b) a missing hit-target, and
   down to the harness's rendered-page snapshot, per-page counts
   identical under both code states - see TESTING "Harness metric
   traps"), citecolor 82/82.
+
+## Round 14 (R14) - highlight annotations: visibility on processed text, save-to-PDF, cross-mode mirroring (user request)
+Requested: verify PDF.js text highlights (a) work and save with the file,
+(b) show on PROCESSED text the same as on the original, and (c) a
+highlight made on processed text also appears on the original. Two real
+defects:
+
+### R14-1 - the white mask hid highlights on processed text
+- The fx mask layer was a sibling ABOVE the whole .canvasWrapper, so a
+  highlight (drawn by PDF.js into an SVG inside .canvasWrapper) rendered
+  UNDER the opaque white mask and was invisible in reading mode. Fix:
+  insert the mask INSIDE .canvasWrapper, after the page/detail canvases
+  and before the highlight draw SVGs (which PDF.js appends at the end).
+  Now the highlight's mix-blend-mode:multiply paints over the white mask
+  exactly as over paper (overlay text still on top via the text layer),
+  while every canvas stays hidden under the mask. canvasWrapper and the
+  text layer share the page box, so mask-rect coordinates are unchanged;
+  papers.mjs 7/7 and diag-dividers masked=0 confirm masking intact.
+- Save + mirroring were already correct once visible: highlights are
+  document-level annotations in annotationStorage, untouched by fx
+  toggling (which only restores/reprocesses text-layer spans and masks),
+  so a highlight made in either mode persists across toggles and mirrors
+  onto the original text on fx-off. saveDocument emits /Highlight +
+  /QuadPoints and the annotation survives save+reload.
+
+### R14-2 - citation hit-targets blocked starting a highlight over a citation
+- The citation hit-target overlay (.fx-cite-hit, inline
+  pointer-events:auto) intercepts the pointerdown, so the highlight
+  editor - which builds a highlight from a text-layer selection - never
+  saw drags that started over a citation (highlighting a line with a
+  citation silently did nothing). Fix: overlay.mjs listens for
+  annotationeditormodechanged and toggles .fx-editing on #viewerContainer;
+  CSS sets .fx-editing .fx-cite-hit { pointer-events: none !important }
+  (the !important is required to beat the element's inline style). Plain
+  text selection/copy was never blocked (Chromium still selects the text
+  beneath the empty overlay); only the editor's own pointerdown listener
+  needed the events to pass through.
+- Verified by test/highlights.mjs: creates a highlight (retried — synthetic
+  drags are ~2/3 reliable, real pointer input is not), asserts the mask
+  precedes the highlight SVG in .canvasWrapper, asserts /Highlight +
+  /QuadPoints in the saved bytes and one Highlight after reload, and
+  asserts .fx-cite-hit computes pointer-events:none while editing.

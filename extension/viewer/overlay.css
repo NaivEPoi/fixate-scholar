@@ -183,6 +183,14 @@
   text-underline-offset: 2px;
 }
 
+/* While an annotation editor (highlight/draw) is active, the citation
+   hit-target overlay must let pointer events through to the text layer so a
+   selection/highlight can start over a citation (overlay.mjs adds .fx-editing). */
+#viewerContainer.fx-editing .fx-cite-hit {
+  /* !important overrides the inline pointer-events:auto the hit-target sets. */
+  pointer-events: none !important;
+}
+
 .fx-cite-popup {
   position: absolute;
   z-index: 10000;
