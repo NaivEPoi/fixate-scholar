@@ -38,13 +38,20 @@ code, fonts, or assets.
   away: the toolbar's **Open this PDF in FixateScholar** button on an open PDF, or
   right-click a link → **Open in FixateScholar**.
 - **References & citations** (academic papers): detects the bibliography, links in-text
-  citations like `[12]` or `(Smith et al., 2020)` to their entries, and shows a hover
-  preview of the entry. Citations and in-paper references (Figure/Table/Section/…) are
-  marked in distinct, high-contrast colors. Clicking a citation opens a pinned,
-  Google-Scholar-reader-style card — title linking to the paper, authors, abstract
-  snippet, cited-by, and actions for **[PDF]**, **Cite** (copyable BibTeX), **Related
-  articles**, **Google Scholar**, and **DOI** — with a pager for multi-citations like
-  `[38, 24, 15]`. It never scrolls the PDF to the bibliography.
+  citations like `[12]`, `[1–3]`, locator forms like `[9, §5.2.2.1]` or `[26, Lemma 1]`,
+  and `(Smith et al., 2020)` to their entries, and shows a hover preview of the entry.
+  Citations and in-paper references (Figure/Table/Section/…) are marked in distinct,
+  high-contrast colors. Clicking a citation opens a pinned, Google-Scholar-reader-style
+  card — title linking to the paper, authors, abstract snippet, cited-by, and actions for
+  **[PDF]**, **Cite** (copyable BibTeX), **Related articles**, **Google Scholar**, and
+  **DOI** — with a pager for multi-citations like `[38, 24, 15]` that shows one card per
+  cited reference. It **never scrolls the PDF to the bibliography**, even for a citation
+  whose entry couldn't be parsed (that shows an honest placeholder card instead).
+- **Highlighting & annotations**: PDF.js's built-in highlighter (and the other annotation
+  tools) work in reading mode — highlights show over the fixation-styled text just as over
+  the original, appear on both the original and the processed text as you toggle the mode,
+  and **save into the PDF** with the toolbar's download/save button (standard `/Highlight`
+  annotations that open in any PDF reader).
 - Rendering is 100% local. The only network requests are fetching the PDF itself and,
   when you *click* a citation, one Google Scholar search for that reference (same as
   typing the query into Scholar yourself; cached per session, never automatic).
@@ -79,7 +86,24 @@ node test/papers.mjs                          # classification/color/link gate (
 node test/diag-dividers.mjs "Two-column B"    # masks must never cover table rules/underlines
 node test/chrome-xray.mjs  "Two-column B" 10 --browser=chrome   # real-Chrome overlay-vs-canvas x-ray
 node test/matrix-fonts.mjs "Two-column B" 14 --browser=edge     # every fontMode × boldWeight combo
+node test/citeaudit.mjs  "<pdf-url>"          # citations: never jump to bib, always carded (jumpCites 0)
+node test/highlights.mjs "<pdf-url>"          # highlight over processed text + save-to-PDF round-trip
 ```
+
+## Releases
+
+Tag a version to publish a packaged extension zip as a GitHub Release. Bump
+`extension/manifest.json` (and `package.json`) first, then:
+
+```sh
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+The [release workflow](.github/workflows/release.yml) vendors PDF.js, runs the
+naming guard + unit tests, verifies the tag matches the manifest version, packs
+`extension/` into `dist/fixate-scholar-<version>.zip`, and attaches it to the
+release. A manual **Run workflow** (workflow_dispatch) builds the same zip as a
+downloadable artifact without cutting a release.
 
 **Read [TESTING.md](TESTING.md) before changing the engine** — it is the
 rulebook (what must/must not be processed), the test inventory, and a list of
