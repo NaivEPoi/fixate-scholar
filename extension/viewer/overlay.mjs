@@ -186,6 +186,20 @@ app.eventBus.on("textlayerrendered", async (evt) => {
   references.onTextLayerRendered(evt.source);
 });
 
+// While an annotation editor is active (highlight/draw/…), the citation
+// hit-target overlay must not intercept pointer events: PDF.js builds a
+// highlight from a TEXT-LAYER selection, and our absolutely-positioned
+// <a> hit-targets (pointer-events:auto) would otherwise swallow a mousedown
+// that starts over a citation, so the drag never becomes a selection and no
+// highlight is created. Drop the overlay's pointer-events whenever the
+// editor is on (the user is annotating, not clicking citation cards); restore
+// it when the editor turns off. AnnotationEditorType.NONE === 0.
+const container =
+  app.appConfig.mainContainer ?? document.getElementById("viewerContainer");
+app.eventBus.on("annotationeditormodechanged", ({ mode }) => {
+  container.classList.toggle("fx-editing", mode !== 0);
+});
+
 // PDF.js caps large page canvases (the base render can drop below 1× CSS
 // resolution) and paints a full-resolution DETAIL canvas over the visible
 // area afterwards. Ink-based decisions (hidden-text veto, duplicate-overlap

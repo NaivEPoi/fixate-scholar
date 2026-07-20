@@ -1600,7 +1600,27 @@ export class TypographyEngine {
     const mask = document.createElement("div");
     mask.className = "fx-mask";
     mask.setAttribute("aria-hidden", "true");
-    textLayerDiv.before(mask);
+    // The mask layer lives INSIDE .canvasWrapper, after the canvases and
+    // before the annotation-editor draw SVGs. PDF.js keeps canvases grouped
+    // at the FRONT of the wrapper (a detail canvas is inserted right after
+    // the first canvas) and appends highlight SVGs at the END, so this slot
+    // keeps every canvas under the masks while the user's highlights —
+    // mix-blend-mode: multiply — paint over the white masks exactly as they
+    // would over paper, with the overlay text (textLayer) on top: highlights
+    // stay visible on PROCESSED text. (The old placement, a sibling above
+    // the whole wrapper, whited them out.) canvasWrapper and textLayer
+    // cover the same page box, so mask-rect coordinates are unchanged.
+    const wrapper = pageView.div.querySelector(".canvasWrapper");
+    if (wrapper) {
+      let lastCanvas = null;
+      for (const child of wrapper.children) {
+        if (child.tagName === "CANVAS") lastCanvas = child;
+      }
+      if (lastCanvas) lastCanvas.after(mask);
+      else wrapper.prepend(mask);
+    } else {
+      textLayerDiv.before(mask);
+    }
 
     // Main-text filter. Left to the canvas untouched:
     //  - tabular rows (3+ gap-separated cells on one baseline),
