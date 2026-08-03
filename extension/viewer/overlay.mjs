@@ -186,6 +186,18 @@ app.eventBus.on("textlayerrendered", async (evt) => {
   references.onTextLayerRendered(evt.source);
 });
 
+// Searching rewrites the matched text divs' contents (TextHighlighter wraps
+// each match in its own span and, on clear, resets the div to the raw item
+// string), which throws away the engine's <b class="fx-b"> emphasis: matched
+// lines dropped back to unbolded text and stayed that way. Re-wrap the
+// prefixes around the match spans once the highlighter is done. The event is
+// dispatched synchronously to every listener and the highlighter's own
+// listener may be registered after ours (it subscribes when its page's text
+// layer renders), so defer to a microtask — by then the DOM is final.
+app.eventBus.on("updatetextlayermatches", ({ pageIndex }) => {
+  queueMicrotask(() => engine.reapplyEmphasis(pageIndex ?? -1));
+});
+
 // While an annotation editor is active (highlight/draw/…), the citation
 // hit-target overlay must not intercept pointer events: PDF.js builds a
 // highlight from a TEXT-LAYER selection, and our absolutely-positioned

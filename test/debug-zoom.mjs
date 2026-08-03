@@ -10,6 +10,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const PDF_URL = process.argv[2] ?? "https://arxiv.org/pdf/1706.03762";
 const PAGE = parseInt(process.argv[3] ?? "1", 10);
 const SCALE = process.argv[4] ?? "1.75";
@@ -21,7 +23,7 @@ const userDataDir = join(tmpdir(), `fx-zoomdbg-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = spawn(
-  process.argv[5] || "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  browserPath("edge", process.argv[5]),
   [
     `--remote-debugging-port=${PORT}`,
     "--headless=new",

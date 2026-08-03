@@ -7,6 +7,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const [PDF_URL, PAGE, X, Y, W, H, OUT] = [
   process.argv[2] ?? "https://arxiv.org/pdf/1706.03762",
   parseInt(process.argv[3] ?? "1", 10),
@@ -24,7 +26,7 @@ const userDataDir = join(tmpdir(), `fx-shot-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = spawn(
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  browserPath("edge"),
   [
     `--remote-debugging-port=${PORT}`,
     "--headless=new",

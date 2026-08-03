@@ -11,8 +11,10 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const BROWSER = process.argv.slice(2).find((a) => a.toLowerCase().endsWith(".exe")) ??
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
+  browserPath("edge");
 const PAPERS = [
   ["Two-column A", "https://yilud.me/usenixsecurity25-dong-yilu.pdf", [3, 5]],
   ["Two-column B", "https://yilud.me/usenixsecurity24-tu.pdf", [4, 10]],

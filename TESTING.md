@@ -23,8 +23,15 @@ this be processed?" — review everything against them.
 - **Both browsers are automatable — and rendering bugs CAN be browser-specific,
   so verify fixes in BOTH.**
   - **Edge** still honours `--load-extension` + `--disable-extensions-except`
-    and allows direct `/json/new?<viewerUrl>` navigation. Path:
-    `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`.
+    and allows direct `/json/new?<viewerUrl>` navigation.
+  - **Browser and repo paths are never hardcoded in a script.** `test/lib/env.mjs`
+    resolves everything: repo locations derive from its own file position (so a
+    clone works from any directory), and browser binaries are auto-detected from
+    a per-platform candidate list. Override with `FX_EDGE`, `FX_CHROME`, or
+    `FX_BROWSER` (or the path argument a script already accepts) — an explicit
+    value always wins, even if wrong, so a typo fails loudly instead of quietly
+    launching a different browser. Import `browserPath`, `extensionDir`,
+    `outDir`, `profileDir` from it rather than writing a literal path.
   - **Chrome ≥149** removed the `--load-extension` CLI path, but Chrome ≥126
     exposes the CDP command `Extensions.loadUnpacked` when started with
     `--enable-unsafe-extension-debugging` (+ a throwaway `--user-data-dir`).

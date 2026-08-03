@@ -7,11 +7,19 @@ export const meta = {
   ],
 };
 
-// args: { base: <abs dir>, papers: [{ paper, dir, pages }] } — expanded to one
-// item per page here (png/json paths built from base/dir/pNN).
+// This file is a Workflow SCRIPT, not a Node module: it runs in the Workflow
+// sandbox (meta first, `args`/`log()`/`agent()` globals, top-level return) with
+// no imports and no filesystem access — so it cannot use test/lib/env.mjs, and
+// `node --check` rejects it by design.
+//
+// args: { base: <dir>, papers: [{ paper, dir, pages }] } — expanded to one item
+// per page here (png/json paths built from base/dir/pNN). The default is
+// RELATIVE to the repo root, which is the reviewing agents' working directory,
+// so nothing here hardcodes a checkout location; pass args.base to point
+// elsewhere. It must match review-capture.mjs's output dir (test/out/review).
 let A = args;
 if (typeof A === "string") { try { A = JSON.parse(A); } catch { A = null; } }
-const BASE = (A && A.base) || "C:/misc/Claude_Workspace/fixate-scholar/test/out/review";
+const BASE = (A && A.base) || "test/out/review";
 const papers = (A && A.papers) || [
   { paper: "Two-column A", dir: "Two_column_A", pages: 21 },
   { paper: "Two-column B", dir: "Two_column_B", pages: 19 },

@@ -15,6 +15,8 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { browserPath, extensionDir } from "./lib/env.mjs";
+
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const FILTER = POS[0] ?? "5GShield";
 const URL_OVERRIDE = process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6); // any PDF URL, e.g. a local test server
@@ -33,13 +35,13 @@ const PAPERS = {
   "ACL": "https://yilud.me/2026.acl-long.2136.pdf",
   "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
 };
-const EXT = "C:\\misc\\Claude_Workspace\\fixate-scholar\\extension";
+const EXT = extensionDir;
 const PORT = 9161 + (process.pid % 130);
 const userDataDir = join(tmpdir(), `fx-fig-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
-const browser = spawn("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", [
+const browser = spawn(browserPath("edge"), [
   `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1300,1900",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,

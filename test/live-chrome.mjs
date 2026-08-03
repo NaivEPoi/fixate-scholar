@@ -11,9 +11,11 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const ZOOM = parseFloat(process.argv[2] ?? "1.25");
 const PDF = "https://yilud.me/usenixsecurity24-tu.pdf"; // .pdf → request-stage DNR rule (most reliable redirect)
-const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const CHROME = browserPath("chrome");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
 const PORT = 9222;

@@ -15,6 +15,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe"));
 const FILTER = POS.find((a) => !/^\d+$/.test(a)) ?? "arXiv";
 const PAGE = parseInt(POS.find((a) => /^\d+$/.test(a)) ?? "10", 10);
@@ -30,8 +32,8 @@ const PAPERS = {
 };
 const USE_EDGE = process.argv.slice(2).includes("--edge");
 const CHROME = USE_EDGE
-  ? "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
-  : "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+  ? browserPath("edge")
+  : browserPath("chrome");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });
 const EXT = join(root, "extension");

@@ -38,8 +38,8 @@ Status: ☐ open · ◐ in progress · ☑ fixed+verified
   `test/out/diag-<paper>.json` and PNGs under `test/out/`.
 - `node test/papers.mjs <browser> "<filter>"` — existing structural corpus.
 - `npm test` — naming guard + unit tests (must stay green).
-- Browser: Edge only (`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`);
-  Chrome ≥137 ignores `--load-extension`. Tests leave zombie Edge/node procs —
+- Browser: Edge only (auto-detected by `test/lib/env.mjs`; override with
+  `FX_BROWSER`); Chrome ≥137 ignores `--load-extension`. Tests leave zombie procs —
   kill between runs if ports collide.
 
 ## Diagnostic findings (run1, Two-column B, 2026-06-17)

@@ -7,14 +7,16 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { browserPath, extensionDir } from "./lib/env.mjs";
+
 const URL0 = process.argv[2];
-const EXT = "C:\\misc\\Claude_Workspace\\fixate-scholar\\extension";
+const EXT = extensionDir;
 const PORT = 9111 + (process.pid % 130);
 const userDataDir = join(tmpdir(), `fx-nb-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
-const browser = spawn("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", [
+const browser = spawn(browserPath("edge"), [
   `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1200,1500",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,

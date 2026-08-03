@@ -7,6 +7,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const PDF_URL = process.argv[2] ?? "https://yilud.me/usenixsecurity24-tu.pdf";
 const PAGE = parseInt(process.argv[3] ?? "2", 10);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,7 +16,7 @@ const EXT = join(root, "extension");
 const PORT = 9361 + (process.pid % 500);
 const ud = join(tmpdir(), `fx-cov-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const b = spawn("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+const b = spawn(browserPath("edge"),
   [`--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run", "--disable-sync",
    "--window-size=1400,1800", `--user-data-dir=${ud}`, `--load-extension=${EXT}`,
    `--disable-extensions-except=${EXT}`, "about:blank"], { stdio: "ignore" });

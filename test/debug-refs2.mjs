@@ -7,6 +7,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const PDF_URL = process.argv[2] ?? "https://yilud.me/5GShield.pdf";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
@@ -14,7 +16,7 @@ const PORT = 9711 + (process.pid % 100);
 const userDataDir = join(tmpdir(), `fx-refdbg2-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const browser = spawn("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", [
+const browser = spawn(browserPath("edge"), [
   `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run", "--disable-sync",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,
   `--disable-extensions-except=${EXT}`, "about:blank",

@@ -12,17 +12,17 @@
 // Usage: node test/highlights.mjs [url] [page]
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+
+import { browserPath, extensionDir, profileDir } from "./lib/env.mjs";
 
 const URL0 = process.argv[2] ?? "https://yilud.me/Proteus-ccs24.pdf";
 const PAGE = parseInt(process.argv[3] ?? "2", 10);
-const EXT = "C:\\misc\\Claude_Workspace\\fixate-scholar\\extension";
+const EXT = extensionDir;
 const PORT = 9911 + (process.pid % 120);
-const userDataDir = join(tmpdir(), `fx-hlt-${process.pid}`);
+const userDataDir = profileDir("hlt");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
-const browser = spawn("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", [
+const browser = spawn(browserPath("edge"), [
   `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,2000",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,

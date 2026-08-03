@@ -52,6 +52,11 @@ code, fonts, or assets.
   the original, appear on both the original and the processed text as you toggle the mode,
   and **save into the PDF** with the toolbar's download/save button (standard `/Highlight`
   annotations that open in any PDF reader).
+- **Find (Ctrl+F)**: a match landing on fixation-styled text stays fully readable and keeps
+  its bolded prefixes. PDF.js rewrites the matched line's markup to insert its own highlight
+  span, so the overlay re-colors that span and re-applies the emphasis around it — without
+  the fix a match rendered as an empty colored box, and searching stripped the bolding from
+  every matched line for good.
 - Rendering is 100% local. The only network requests are fetching the PDF itself and,
   when you *click* a citation, one Google Scholar search for that reference (same as
   typing the query into Scholar yourself; cached per session, never automatic).
@@ -78,8 +83,9 @@ npm run package       # build a store-uploadable zip into dist/
 
 # end-to-end smoke test (headless browser; see test/fixtures/urls.md —
 # regular Chrome ≥137 ignores --load-extension, so point it at Edge,
-# Chromium, or Chrome for Testing):
-node test/e2e.mjs "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+# Chromium, or Chrome for Testing). The scripts auto-detect an installed
+# browser; override with FX_BROWSER (or FX_EDGE / FX_CHROME), or pass a path:
+node test/e2e.mjs
 
 # full corpus + rendering-fidelity harnesses (12 real papers, both browsers):
 node test/papers.mjs                          # classification/color/link gate (must be 7/7 PASS)
@@ -88,6 +94,7 @@ node test/chrome-xray.mjs  "Two-column B" 10 --browser=chrome   # real-Chrome ov
 node test/matrix-fonts.mjs "Two-column B" 14 --browser=edge     # every fontMode × boldWeight combo
 node test/citeaudit.mjs  "<pdf-url>"          # citations: never jump to bib, always carded (jumpCites 0)
 node test/highlights.mjs "<pdf-url>"          # highlight over processed text + save-to-PDF round-trip
+node test/search.mjs "<pdf-url>" protocol     # find matches stay visible AND stay bolded
 ```
 
 ## Releases
@@ -96,7 +103,7 @@ Tag a version to publish a packaged extension zip as a GitHub Release. Bump
 `extension/manifest.json` (and `package.json`) first, then:
 
 ```sh
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.0.2 && git push origin v1.0.2
 ```
 
 The [release workflow](.github/workflows/release.yml) vendors PDF.js, runs the

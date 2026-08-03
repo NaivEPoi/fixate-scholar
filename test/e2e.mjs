@@ -11,12 +11,13 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = join(root, "test", "out");
 mkdirSync(outDir, { recursive: true });
 
-const CHROME =
-  process.argv[2] || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const CHROME = browserPath("chrome", process.argv[2]);
 const EXT = join(root, "extension");
 const PORT = 9333;
 const PDF_URL = "https://arxiv.org/pdf/1706.03762";

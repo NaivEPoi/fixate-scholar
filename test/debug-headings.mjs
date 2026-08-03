@@ -7,6 +7,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const PDF_URL = process.argv[2];
 const P0 = parseInt(process.argv[3] ?? "4", 10);
 const P1 = parseInt(process.argv[4] ?? "12", 10);
@@ -17,7 +19,7 @@ const userDataDir = join(tmpdir(), `fx-hdg-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = spawn(
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  browserPath("edge"),
   [`--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run", "--disable-sync",
    "--window-size=1400,1800", `--user-data-dir=${userDataDir}`,
    `--load-extension=${EXT}`, `--disable-extensions-except=${EXT}`, "about:blank"],

@@ -10,6 +10,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe"));
 const FILTER = POS.find((a) => !/^\d+$/.test(a)) ?? "Two-column B";
 const PAGE = parseInt(POS.find((a) => /^\d+$/.test(a)) ?? "3", 10);
@@ -22,7 +24,7 @@ const userDataDir = join(tmpdir(), `fx-idle-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
-const browser = spawn("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", [
+const browser = spawn(browserPath("edge"), [
   `--remote-debugging-port=${PORT}`, ...(HEADFUL ? [] : ["--headless=new"]), "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,1800",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,
