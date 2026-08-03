@@ -43,7 +43,7 @@ test defaults to Chrome but should be pointed at Edge (or Chrome for Testing /
 Chromium):
 
 ```
-node test/e2e.mjs "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+node test/e2e.mjs                 # or: FX_BROWSER=/path/to/msedge node test/e2e.mjs
 ```
 
 Manual loading via chrome://extensions → "Load unpacked" works fine in regular

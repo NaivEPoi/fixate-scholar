@@ -9,6 +9,8 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { browserPath, profileDir } from "./lib/env.mjs";
+
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const FILTER = POS[0] ?? "Two-column B";
 const PAGE = parseInt(POS[1] ?? "14", 10);
@@ -30,13 +32,11 @@ const PORT = 9226;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
-const EXE = BROWSER === "edge"
-  ? "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
-  : "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const EXE = browserPath(BROWSER === "edge" ? "edge" : "chrome");
 const browser = spawn(EXE, [
   `--remote-debugging-port=${PORT}`,
   ...(BROWSER === "edge" ? [`--load-extension=${EXT}`, `--disable-extensions-except=${EXT}`] : ["--enable-unsafe-extension-debugging"]),
-  `--user-data-dir=C:\\misc\\Claude_Workspace\\.chrome-fx-matrix-${BROWSER}`,
+  `--user-data-dir=${profileDir(`matrix-${BROWSER}`, { persistent: true })}`,
   "--no-first-run", "--no-default-browser-check", "--disable-sync",
   "--window-size=1500,1100", "--window-position=40,40", "about:blank",
 ], { stdio: "ignore" });

@@ -10,6 +10,8 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { browserPath, profileDir } from "./lib/env.mjs";
+
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const FILTER = POS[0] ?? "Two-column B";
 const PAGE = parseInt(POS[1] ?? "10", 10);
@@ -37,13 +39,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });
 const EXT = join(root, "extension");
 const PORT = 9223;
-const userDataDir = "C:\\misc\\Claude_Workspace\\.chrome-fx-debug";
+// Stable across runs (never cleaned up), as this diagnostic always was.
+const userDataDir = profileDir("xray", { persistent: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
-const EXE = BROWSER === "edge"
-  ? "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
-  : "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const EXE = browserPath(BROWSER === "edge" ? "edge" : "chrome");
 const browser = spawn(EXE, [
   `--remote-debugging-port=${PORT}`,
   ...(BROWSER === "edge"

@@ -54,6 +54,23 @@
   color: var(--fx-text-color) !important;
 }
 
+/* SEARCH MATCHES. PDF.js's find controller rewrites each matched text div and
+   wraps the match in its own <span class="highlight"> (TextHighlighter
+   ._renderMatches). Stock CSS paints every .textLayer span transparent — fine
+   there, because the visible glyphs are the canvas ones showing through the
+   translucent match band. In reading mode the canvas glyphs under a processed
+   span are whited out by the mask, and the rule above only colors the
+   processed span ITSELF, not the descendants PDF.js injects: the matched word
+   rendered as an EMPTY colored box. Color the injected spans too (the engine's
+   own emphasis wrapper is a <b>, which inherits and was never affected).
+   Only inside [data-fx-done] — a match in an unprocessed span (table, caption)
+   has its canvas glyphs intact and must stay transparent, or the text would
+   render twice. */
+#viewerContainer.fx-on .textLayer span[data-fx-done] span.highlight,
+#viewerContainer.fx-on .textLayer span[data-fx-keep] span.highlight {
+  color: var(--fx-text-color) !important;
+}
+
 /* Bundled reading faces ship only 400 and 700, and CSS maps a 500/600
    request straight onto the 400 face (emphasis vanishes) while 800/900
    collapse onto 700. Ramp with the nearest real face + a hairline stroke:

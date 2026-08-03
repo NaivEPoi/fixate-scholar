@@ -16,6 +16,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const PAPERS = {
   "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
   "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
@@ -42,7 +44,7 @@ const userDataDir = join(tmpdir(), `fx-review-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
-const browser = spawn("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", [
+const browser = spawn(browserPath("edge"), [
   `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1300,2000",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,

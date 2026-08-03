@@ -9,6 +9,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const PDF_URL = process.argv[2] ?? "https://arxiv.org/pdf/1706.03762";
 const PAGE = parseInt(process.argv[3] ?? "4", 10);
 const Y_MIN = process.argv[4] ? parseFloat(process.argv[4]) : null; // % of page from top
@@ -20,7 +22,7 @@ const userDataDir = join(tmpdir(), `fx-linedbg-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = spawn(
-  process.argv[6] || "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  browserPath("edge", process.argv[6]),
   [
     `--remote-debugging-port=${PORT}`,
     "--headless=new",

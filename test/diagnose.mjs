@@ -20,11 +20,13 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const ARGS = process.argv.slice(2); // skip node binary + script path
 const FILTER = ARGS.find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe")) ?? "Two-column B";
 const SHOTS = ARGS.includes("--shots");
 const BROWSER = ARGS.find((a) => a.toLowerCase().endsWith(".exe")) ??
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
+  browserPath("edge");
 
 const PAPERS = {
   "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",

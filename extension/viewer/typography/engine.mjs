@@ -51,17 +51,29 @@ const FONT_STACKS = {
   literata: '"FX Literata", serif',
 };
 
+// Key a font by its bare leading family name: the same face reaches spans as
+// both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12, sans-serif'
+// (PDF.js's own), and both must hit the same entry. Module scope because
+// refreshFonts() needs it too — it used to exist only as a local inside
+// #processPage, so every refreshFonts() call with a non-empty family list threw
+// ReferenceError and the affected pages were never re-processed. That silently
+// disabled the font-reload recovery this function exists for: pages measured
+// against a fallback face stayed mis-spaced.
+const famKey = (f) => f.split(",")[0].replace(/["']/g, "").trim();
+
 export class TypographyEngine {
   #app;
   #settings;
   #enabled = false;
   #pristine = new WeakMap(); // span -> { html, scaleX, fontFamily }
+  #wordStart = new WeakMap(); // span -> running word index it was emphasized from
   #pending = new Map(); // pageNumber -> cancel flag holder
   #refsBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — bibliography region
   #contentStart = null; // { page, y, h } — the Abstract heading; front matter above it
   #bodyHeight = null; // document-wide body-text height (from the refs extractor)
   #ascentCache = new Map(); // fontFamily -> browser ascent ratio (baseline align)
   #measureCtx = null; // offscreen 2d context for ascent measurement
+  #snapCtx = null; // offscreen willReadFrequently context for canvas pixel reads
   #pageFonts = new Map(); // pageNumber -> Set<famKey> used by processed spans
   #inkRetryPages = new Set(); // pages whose ink decisions used a capped-resolution canvas
 
@@ -189,6 +201,95 @@ export class TypographyEngine {
   onTextLayerRendered(pageView) {
     if (!this.#enabled) return Promise.resolve();
     return this.#processPage(pageView);
+  }
+
+  /**
+   * Re-apply the emphasis markup on pages whose processed spans were rewritten
+   * by PDF.js itself. Searching does exactly that: for every matched text div
+   * TextHighlighter sets `div.textContent` — first to "" while rendering a
+   * match, then back to the raw item string when the match is cleared — which
+   * drops our <b class="fx-b"> wrappers, so matched lines lost their fixation
+   * prefixes (and rendered at a --scale-x calibrated for the bolded text) until
+   * something forced a re-process. Re-processing the page is not an option
+   * here: it restores from the pristine markup and would delete the match
+   * spans PDF.js just built. So re-wrap the prefixes IN PLACE instead, leaving
+   * every element PDF.js inserted where it is.
+   *
+   * pageIndex -1 (the find controller's "all pages" signal) does every
+   * rendered page. Returns the number of spans repaired.
+   */
+  reapplyEmphasis(pageIndex = -1) {
+    if (!this.#enabled) return 0;
+    let n = 0;
+    const one = (pv) => {
+      const spans = pv.textLayer?.div?.querySelectorAll("span[data-fx-done]");
+      for (const span of spans ?? []) {
+        if (this.#reapplyEmphasisSpan(span)) n++;
+      }
+    };
+    if (pageIndex >= 0) {
+      const pv = this.#app.pdfViewer.getPageView(pageIndex);
+      if (pv?.textLayer?.div?.childElementCount) one(pv);
+    } else {
+      this.#eachRenderedPage(one);
+    }
+    return n;
+  }
+
+  /** Re-wrap one processed span's emphasis prefixes around whatever is
+   *  currently inside it. No-op when the markup is still intact (a <b.fx-b> is
+   *  present) or when the span was never emphasized. Returns true if repaired. */
+  #reapplyEmphasisSpan(span) {
+    const wordStart = this.#wordStart.get(span);
+    if (wordStart === undefined || span.querySelector("b.fx-b")) return false;
+    // Re-derive from the CURRENT text: PDF.js rebuilds the div from its own
+    // (normalized) item string, which can differ from the string we measured,
+    // and re-deriving stays correct either way. Same call as the first pass, so
+    // identical text yields identical parts — including the saccade phase.
+    const result = emphasizeParts(span.textContent, this.#settings, wordStart);
+    if (!result) return false;
+    // One bold flag per character, then split the span's text nodes on the
+    // flag boundaries. Walking TEXT NODES (not innerHTML) is what preserves
+    // the match <span class="highlight"> elements: they keep their identity and
+    // only the text inside them gets wrapped, so a matched word stays bolded
+    // and the find controller's own bookkeeping still points at live nodes.
+    const flags = [];
+    for (const part of result.parts) {
+      for (let i = 0; i < part.text.length; i++) flags.push(part.bold);
+    }
+    const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
+    let total = 0;
+    for (const node of nodes) total += node.data.length;
+    if (total !== flags.length) return false; // text moved under us — leave it
+    let at = 0;
+    for (const node of nodes) {
+      const text = node.data;
+      const runs = [];
+      for (let i = 0; i < text.length; ) {
+        const bold = flags[at + i];
+        let j = i + 1;
+        while (j < text.length && flags[at + j] === bold) j++;
+        runs.push({ text: text.slice(i, j), bold });
+        i = j;
+      }
+      at += text.length;
+      if (!runs.some((r) => r.bold)) continue;
+      const frag = document.createDocumentFragment();
+      for (const run of runs) {
+        if (run.bold) {
+          const b = document.createElement("b");
+          b.className = "fx-b";
+          b.textContent = run.text;
+          frag.append(b);
+        } else {
+          frag.append(run.text);
+        }
+      }
+      node.replaceWith(frag);
+    }
+    return true;
   }
 
   #eachRenderedPage(fn) {
@@ -1394,6 +1495,54 @@ export class TypographyEngine {
   }
 
   /**
+   * Pixels of a page canvas, read through a scratch canvas WE own.
+   *
+   * PDF.js creates each page canvas's 2d context itself, and
+   * `willReadFrequently` is IGNORED by every later getContext() on a canvas
+   * that already has a context — so we cannot opt a page canvas into the
+   * CPU-backed path however we ask for it. Reading a GPU-backed canvas is a
+   * per-call readback, and the browser logs "Multiple readback operations using
+   * getImageData are faster with the willReadFrequently attribute set to true"
+   * once we do it more than once. So blit the page canvas into our own
+   * willReadFrequently scratch canvas and read THAT: identical pixels, one
+   * transfer per page pass, no warning. The scratch canvas is reused (resized
+   * when the page geometry changes), so this costs one page-sized buffer for
+   * the engine — not one per read.
+   */
+  #readCanvasPixels(canvas) {
+    const cr = canvas?.getBoundingClientRect();
+    if (!canvas || !cr || !(cr.width > 0) || !(canvas.width > 0) || !(canvas.height > 0)) {
+      return null;
+    }
+    try {
+      this.#snapCtx ??= document
+        .createElement("canvas")
+        .getContext("2d", { willReadFrequently: true });
+      const ctx = this.#snapCtx;
+      if (ctx.canvas.width !== canvas.width || ctx.canvas.height !== canvas.height) {
+        ctx.canvas.width = canvas.width;
+        ctx.canvas.height = canvas.height;
+      } else {
+        // A detail canvas can carry transparent regions; without this the
+        // previous page's pixels would show through them.
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.drawImage(canvas, 0, 0);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      return {
+        d: img.data,
+        W: canvas.width,
+        H: canvas.height,
+        cr,
+        csx: canvas.width / cr.width,
+        csy: canvas.height / cr.height,
+      };
+    } catch {
+      return null; // tainted or zero-sized — callers fall back
+    }
+  }
+
+  /**
    * Long, thin dark runs on the PAINTED page canvas — table rules, box frames,
    * underlines, footnote separators — returned as viewport-CSS rects. This is
    * canvas ART the text layer knows nothing about, so masks must clamp around
@@ -1414,10 +1563,10 @@ export class TypographyEngine {
       if (!canvas || !canvas.width) return out;
       const cr = canvas.getBoundingClientRect();
       if (!(cr.width > 0) || !(cr.height > 0)) return out;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      let data;
-      try { data = ctx.getImageData(0, 0, canvas.width, canvas.height).data; } catch { return out; }
-      const W = canvas.width, H = canvas.height;
+      const snap = this.#readCanvasPixels(canvas);
+      if (!snap) return out;
+      const data = snap.d;
+      const W = snap.W, H = snap.H;
       const sx = cr.width / W, sy = cr.height / H;
       const isDark = (x, y) => { const i = (y * W + x) * 4; return data[i + 3] > 40 && 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] < 140; };
       const darkFrac = (x0, x1, y) => {
@@ -1837,10 +1986,6 @@ export class TypographyEngine {
     let hiddenDrops = null; // overlap losers judged hidden — pristine, NOT obstacles
     let obstacleSuppress = null; // kept spans judged hidden — no obstacle push
     let baselineCal = null; // famKey -> measured marginTop (em) that lands overlay ink on canvas ink
-    // Key by the bare leading family name: the same face reaches spans as
-    // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12,
-    // sans-serif' (PDF.js's own), and both must hit the same entry.
-    const famKey = (f) => f.split(",")[0].replace(/["']/g, "").trim();
     let wordIndex = 0;
     let i = 0;
     // True canvas width of an item, straight from the PDF geometry. The
@@ -1919,13 +2064,7 @@ export class TypographyEngine {
           // metrics below need the sharpest pixels covering each rect: at a
           // capped base resolution, tight leading bleeds the neighbours'
           // ink into a line's edge rows and the fit scores turn to noise.
-          const readCanvas = (canvas) => {
-            const cr = canvas?.getBoundingClientRect();
-            if (!canvas || !cr || !(cr.width > 0) || !(canvas.width > 0)) return null;
-            const ictx = canvas.getContext("2d", { willReadFrequently: true });
-            const img = ictx.getImageData(0, 0, canvas.width, canvas.height);
-            return { d: img.data, W: canvas.width, H: canvas.height, cr, csx: canvas.width / cr.width, csy: canvas.height / cr.height };
-          };
+          const readCanvas = (canvas) => this.#readCanvasPixels(canvas);
           const base = readCanvas(pageView.canvas);
           const inkedIn = (s, i) => s.d[i + 3] > 40 && 0.299 * s.d[i] + 0.587 * s.d[i + 1] + 0.114 * s.d[i + 2] < 200;
           if (base) {
@@ -2291,8 +2430,11 @@ export class TypographyEngine {
           const csx = cr && cr.width > 0 ? canvas.width / cr.width : 0;
           const csy = cr && cr.height > 0 ? canvas.height / cr.height : 0;
           const dpr = window.devicePixelRatio || 1;
-          if (canvas && csx > 0 && csy > dpr * 0.85) {
-            const cctx = canvas.getContext("2d", { willReadFrequently: true });
+          // ONE snapshot for up to 150 sampled lines: a getImageData per line
+          // was 150 separate GPU readbacks off PDF.js's canvas (see
+          // #readCanvasPixels) — slow, and what made the browser warn.
+          const snap = csx > 0 && csy > dpr * 0.85 ? this.#readCanvasPixels(canvas) : null;
+          if (snap) {
             this.#measureCtx ??= document.createElement("canvas").getContext("2d");
             const samples = new Map();
             const rej = { w: 0, xy: 0, ink: 0, asc: 0, bl: 0 };
@@ -2316,13 +2458,15 @@ export class TypographyEngine {
               const y1 = Math.round((r.top - cr.top + r.height * 0.75) * csy);
               if (x0 < 0 || y0 < 0 || x1 > canvas.width || y1 > canvas.height || x1 - x0 < 20) { rej.xy++; continue; }
               inspected++;
-              const img = cctx.getImageData(x0, y0, x1 - x0, y1 - y0);
+              // Index the page snapshot in place of a per-line getImageData;
+              // the x0/y0/x1/y1 guard above keeps every offset inside it.
+              const bw = x1 - x0, bh = y1 - y0;
               let top = -1;
-              for (let y = 0; y < img.height && top < 0; y++) {
+              for (let y = 0; y < bh && top < 0; y++) {
                 let dark = 0;
-                for (let x = 0; x < img.width; x++) {
-                  const k = (y * img.width + x) * 4;
-                  if (img.data[k] < 120 && img.data[k + 1] < 120 && img.data[k + 2] < 120 && ++dark >= 2) { top = y; break; }
+                for (let x = 0; x < bw; x++) {
+                  const k = ((y0 + y) * snap.W + (x0 + x)) * 4;
+                  if (snap.d[k] < 120 && snap.d[k + 1] < 120 && snap.d[k + 2] < 120 && ++dark >= 2) { top = y; break; }
                 }
               }
               if (top < 0) { rej.ink++; continue; }
@@ -2418,6 +2562,11 @@ export class TypographyEngine {
           // leave it on the canvas (no mask, no emphasis) so the skipped copy
           // survives.
           if (overlapsObstacle(rect)) continue;
+          // The saccade setting emphasizes every Nth word, so a span's parts
+          // depend on the running word count it STARTS at — keep it, so the
+          // emphasis can be re-derived later for this span alone (see
+          // reapplyEmphasis, used after the find controller rewrites a div).
+          const wordStart = wordIndex;
           const result = emphasizeParts(pair.div.textContent, settings, wordIndex);
           if (!result) {
             // Math-heavy text or a wrapped URL/email continuation: leave it on
@@ -2431,7 +2580,7 @@ export class TypographyEngine {
             vpScale && pair.item?.width > 0
               ? pair.item.width * vpScale
               : rect.width;
-          batch.push({ pair, parts: result.parts, rect, targetW });
+          batch.push({ pair, parts: result.parts, rect, targetW, wordStart });
         }
         // Content + font pass: rewrite each span as bold-prefix + rest, swap in
         // the chosen face, and RE-SEAT THE BASELINE. PDF.js set each span's top
@@ -2454,6 +2603,7 @@ export class TypographyEngine {
             wordSpacing: span.style.wordSpacing,
             marginTop: span.style.marginTop,
           });
+          this.#wordStart.set(span, entry.wordStart);
           const frag = document.createDocumentFragment();
           for (const part of parts) {
             if (part.bold) {

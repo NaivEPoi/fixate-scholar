@@ -12,6 +12,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const FILTER = process.argv[3] ?? "";
 // untouched: ground-truth texts known to live in data tables / algorithm
 // listings of that paper — they must never be emphasized. processed:
@@ -92,7 +94,7 @@ class CDP {
 }
 
 const browser = spawn(
-  process.argv[2] || "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  browserPath("edge", process.argv[2]),
   [
     `--remote-debugging-port=${PORT}`,
     "--headless=new",

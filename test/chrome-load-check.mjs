@@ -7,7 +7,9 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+import { browserPath } from "./lib/env.mjs";
+
+const CHROME = browserPath("chrome");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

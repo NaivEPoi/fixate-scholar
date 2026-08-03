@@ -7,6 +7,8 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { browserPath } from "./lib/env.mjs";
+
 const PDF_URL = process.argv[2] ?? "https://arxiv.org/pdf/1706.03762";
 const PAGE = parseInt(process.argv[3] ?? "4", 10);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,7 +18,7 @@ const userDataDir = join(tmpdir(), `fx-pagedbg-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = spawn(
-  process.argv[4] || "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  browserPath("edge", process.argv[4]),
   [
     `--remote-debugging-port=${PORT}`,
     "--headless=new",
