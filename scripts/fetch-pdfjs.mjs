@@ -1,9 +1,12 @@
 // Downloads the pinned PDF.js prebuilt generic viewer, verifies its hash,
-// extracts it to extension/vendor/pdfjs/, and applies two small patches:
+// extracts it to extension/vendor/pdfjs/, and applies a few small patches:
 //   1. viewer.mjs  — allow ?file=<cross-origin url> when running from a
 //      chrome-extension:// origin (the generic build only whitelists the
 //      hosted-viewer origins; host_permissions <all_urls> makes this safe).
 //   2. viewer.html — load our overlay module/styles after the stock viewer.
+//   3/4. viewer.html — widen the CSP for file:// PDFs and inline style attrs.
+//   5. viewer.mjs  — keep the drag-selection helper's `.endOfContent` out of
+//      the text spans, which reading mode's markup nests inside.
 //
 // Patches use exact string anchors and fail loudly if PDF.js changes them,
 // so a version bump can never silently produce a broken viewer.
@@ -154,6 +157,36 @@ patch(
   `style-src-elem 'self' 'unsafe-inline';`,
   `style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline';`,
   `style-src-attr 'unsafe-inline'`,
+);
+
+// Patch 5: don't let the drag-selection helper move `.endOfContent` INSIDE a
+// text span. On every selectionchange TextLayerBuilder walks the selection edge
+// up from its text node and relocates the full-size, user-select:text
+// `.endOfContent` div next to it — assuming the result is a direct child of the
+// .textLayer. It normalizes exactly one level, plus one more for its OWN
+// <span class="highlight"> wrapper: proof the assumption breaks on nesting.
+// Reading mode nests too (<b class="fx-b"> emphasis, .fx-cite-c/.fx-ref-c
+// citation wrappers), so a drag whose edge lands inside a bold prefix splices
+// that layer-sized div into the middle of a word. It then wins every hit-test
+// over the span, the drag can't reach the rest of the line, and the copy loses
+// the non-bold tails ("can only select the bolded part of a word"). Climb out
+// of ANY wrapper instead — a superset of the stock .highlight hop, so PDF.js's
+// own find-match case keeps working. Upstream bug; report it.
+patch(
+  "web/viewer.mjs",
+  `      if (anchor.classList?.contains("highlight")) {
+        anchor = anchor.parentNode;
+      }`,
+  `      /* fixate-scholar-patch-5: climb out of every nested wrapper (PDF.js's
+         own .highlight, our <b class="fx-b"> emphasis and .fx-cite-c/.fx-ref-c
+         citation spans) so endDiv is never inserted inside a text span. */
+      while (
+        anchor.parentElement &&
+        !anchor.parentElement.classList.contains("textLayer")
+      ) {
+        anchor = anchor.parentElement;
+      }`,
+  "fixate-scholar-patch-5",
 );
 
 console.log("Done. Load the ./extension directory as an unpacked extension.");

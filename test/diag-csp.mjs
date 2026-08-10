@@ -99,7 +99,7 @@ try {
   // is directly visible. The overlay should sit exactly on the canvas glyphs.
   if (IDLE) { console.log(`...sitting idle ${IDLE}s (triggers PDF.js 30s cleanup)...`); await sleep(IDLE * 1000); }
   const XRAY = process.argv.includes("--xray");
-  if (XRAY) await ev(`(() => { const s = document.createElement('style'); s.textContent = '.fx-mask{display:none!important} #viewerContainer.fx-on .textLayer span[data-fx-done], #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b{color:rgba(220,0,0,.7)!important;-webkit-text-stroke:0!important}'; document.head.append(s); })()`).catch(() => {});
+  if (XRAY) await ev(`(() => { const s = document.createElement('style'); s.textContent = '.fx-mask{display:none!important} #viewerContainer.fx-on .textLayer span[data-fx-done], #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b{color:rgba(220,0,0,.7)!important;-webkit-text-stroke:0!important;text-shadow:none!important}'; document.head.append(s); })()`).catch(() => {});
   // Screenshot a tight body region for visual baseline inspection.
   const clip = await ev(`(() => {
     const v = window.PDFViewerApplication.pdfViewer;

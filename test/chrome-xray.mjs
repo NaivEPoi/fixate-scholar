@@ -319,7 +319,7 @@ try {
 
   const OUTLINE = process.argv.includes("--outline");
   const shoot = async (tag, xray) => {
-    if (xray) await ev(`(() => { if (document.getElementById('fx-xray')) return; const s = document.createElement('style'); s.id='fx-xray'; s.textContent = '.fx-mask{display:none!important} #viewerContainer.fx-on .textLayer span[data-fx-done], #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b{color:rgba(220,0,0,.7)!important;-webkit-text-stroke:0!important}${OUTLINE ? " .textLayer span{outline:1px solid rgba(0,140,255,.9)}" : ""}'; document.head.append(s); })()`);
+    if (xray) await ev(`(() => { if (document.getElementById('fx-xray')) return; const s = document.createElement('style'); s.id='fx-xray'; s.textContent = '.fx-mask{display:none!important} #viewerContainer.fx-on .textLayer span[data-fx-done], #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b{color:rgba(220,0,0,.7)!important;-webkit-text-stroke:0!important;text-shadow:none!important}${OUTLINE ? " .textLayer span{outline:1px solid rgba(0,140,255,.9)}" : ""}'; document.head.append(s); })()`);
     else await ev(`document.getElementById('fx-xray')?.remove()`);
     await sleep(400);
     const clip = await ev(`(async () => {

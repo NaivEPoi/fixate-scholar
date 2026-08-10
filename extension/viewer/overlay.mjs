@@ -141,17 +141,42 @@ if (renderingQueue && typeof renderingQueue.onIdle === "function") {
   };
 }
 
+// Hairline fake-bold as a text-shadow list, from a stroke width in `em`.
+//
+// This used to be `-webkit-text-stroke`, which Chrome DROPS while painting
+// selected text: the ::selection highlight style never specifies
+// -webkit-text-stroke-width, so it resolves to 0 and every emphasized prefix
+// inside a selection rendered at plain weight. Re-declaring the stroke in
+// ::selection does not help — Blink's selection paint path ignores text-stroke
+// entirely (verified with both the shorthand and the longhands). text-shadow IS
+// honored in ::selection, and like a stroke it is paint-only, so the engine's
+// width calibration (targetW / word-spacing / --scale-x) still holds. Real
+// font-weight would survive selection too, but it changes glyph advances.
+//
+// A centered stroke of width W thickens a glyph by W/2 on each side, and an
+// axis-aligned shadow at offset D thickens it by D — so D = W/2. Four
+// directions is enough at hairline widths and keeps the glyph repaints cheap.
+function emphasisShadow(strokeEm) {
+  const d = strokeEm / 2;
+  if (!(d > 0.00001)) return "none";
+  const o = d.toFixed(5);
+  return `${o}em 0 currentColor, -${o}em 0 currentColor, 0 ${o}em currentColor, 0 -${o}em currentColor`;
+}
+
 function applyStyleVars(s) {
   const root = document.documentElement.style;
   // Bundled-face modes: the faces exist only at 400 and 700, so the weight
-  // slider ramps with the nearest real face plus a hairline stroke —
-  // 500/600 use the 400 face + stroke, 700 is the true bold, 800/900 add
-  // stroke on the 700 face. (Stroke is paint-only: no layout impact.)
+  // slider ramps with the nearest real face plus a hairline fake bold —
+  // 500/600 use the 400 face + shadow, 700 is the true bold, 800/900 add
+  // shadow on the 700 face.
   const w = s.boldWeight;
   root.setProperty("--fx-stack-weight", w >= 700 ? "700" : "400");
-  root.setProperty("--fx-stack-stroke", `${(w >= 700 ? w - 700 : w - 400) / 10000}em`);
-  // Emphasis stroke width for original-font mode: 500 → light, 900 → heavy.
-  root.setProperty("--fx-stroke", `${(s.boldWeight - 400) / 10000}em`);
+  root.setProperty(
+    "--fx-stack-shadow",
+    emphasisShadow((w >= 700 ? w - 700 : w - 400) / 10000),
+  );
+  // Emphasis strength for original-font mode: 500 → light, 900 → heavy.
+  root.setProperty("--fx-shadow", emphasisShadow((w - 400) / 10000));
   const container =
     app.appConfig.mainContainer ?? document.getElementById("viewerContainer");
   container.dataset.fxFont = s.fontMode ?? "original";

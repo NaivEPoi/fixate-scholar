@@ -71,23 +71,49 @@
   color: var(--fx-text-color) !important;
 }
 
-/* Bundled reading faces ship only 400 and 700, and CSS maps a 500/600
-   request straight onto the 400 face (emphasis vanishes) while 800/900
-   collapse onto 700. Ramp with the nearest real face + a hairline stroke:
-   500/600 → 400-face + stroke, 700 → true bold, 800/900 → 700-face +
-   stroke. Both custom props are set from the weight slider in overlay.mjs. */
+/* EMPHASIS. A hairline fake bold, painted with text-shadow rather than
+   -webkit-text-stroke. DON'T switch it back to text-stroke: Chrome drops
+   text-stroke while painting SELECTED text (the ::selection highlight style
+   never specifies -webkit-text-stroke-width, so it resolves to 0), which made
+   every emphasized prefix render at plain weight inside a selection —
+   re-declaring the stroke in ::selection doesn't help, Blink's selection paint
+   path ignores text-stroke outright. text-shadow is honored in ::selection (see
+   the ::selection rules below, which must keep repeating it) and, like a
+   stroke, is paint-only: the engine's width calibration still holds. Both
+   shadow lists are built from the weight slider in overlay.mjs.
+
+   Bundled reading faces ship only 400 and 700, and CSS maps a 500/600 request
+   straight onto the 400 face (emphasis vanishes) while 800/900 collapse onto
+   700. Ramp with the nearest real face + the shadow: 500/600 → 400-face +
+   shadow, 700 → true bold, 800/900 → 700-face + shadow. */
 #viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b {
   font-weight: var(--fx-stack-weight, 700);
-  -webkit-text-stroke: var(--fx-stack-stroke, 0) currentColor;
+  text-shadow: var(--fx-stack-shadow, none);
 }
 
 /* Embedded PDF fonts rarely ship a bold variant, and the browser's synthetic
-   bold is a single heavy weight. In original-font mode, emphasize with a
-   hairline stroke instead — its width follows the weight slider, giving a
-   true light/semi/heavy range. */
+   bold is a single heavy weight that also changes glyph advances. In
+   original-font mode, keep the face at 400 and emphasize with the shadow alone
+   — its width follows the weight slider, giving a true light/semi/heavy
+   range at zero layout cost. */
 #viewerContainer.fx-on[data-fx-font="original"] .textLayer span[data-fx-done] .fx-b {
   font-weight: 400;
-  -webkit-text-stroke: var(--fx-stroke, 0.0125em) currentColor;
+  text-shadow: var(--fx-shadow, 0.00625em 0 currentColor, -0.00625em 0 currentColor, 0 0.00625em currentColor, 0 -0.00625em currentColor);
+}
+
+/* Selected emphasis. Chrome paints selected text from the ::selection highlight
+   style, and every paint property it doesn't find there falls back to its
+   INITIAL value rather than the element's — so the shadow above has to be
+   repeated here or the emphasis vanishes the moment a drag covers it. Same
+   background as the general selection rule further down (a highlight pseudo
+   that sets no background paints none). */
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b::selection {
+  background: rgb(0 120 215 / 0.35);
+  text-shadow: var(--fx-stack-shadow, none);
+}
+
+#viewerContainer.fx-on[data-fx-font="original"] .textLayer span[data-fx-done] .fx-b::selection {
+  text-shadow: var(--fx-shadow, 0.00625em 0 currentColor, -0.00625em 0 currentColor, 0 0.00625em currentColor, 0 -0.00625em currentColor);
 }
 
 /* Per-span masks covering the duplicate canvas glyphs. Sits between the
