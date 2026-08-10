@@ -18,7 +18,7 @@ paper-specific hack.
 | **First syllable only** remains available as an option; **fixed fraction** (configurable slider) as another | settings `emphasisMode`, popup/options UI |
 | Never bold an entire multi-character word | `emphasisLength`, unit tests |
 | Emphasis must not change font size or color: text renders in the document's own embedded fonts at original size/color by default; bundled open-source reading fonts (Atkinson Hyperlegible, Inter, Literata — all SIL OFL) are opt-in replacements | `engine.mjs #fontFamilyFor`, `papers.mjs fontOk` |
-| Light emphasis weight: embedded fonts rarely have a bold variant, so original-font mode uses a hairline text-stroke scaled by the weight slider instead of the browser's all-or-nothing synthetic bold | `overlay.css`, `overlay.mjs applyStyleVars` |
+| Light emphasis weight: embedded fonts rarely have a bold variant, so original-font mode uses a hairline text-shadow fake bold scaled by the weight slider instead of the browser's all-or-nothing synthetic bold. Not `-webkit-text-stroke` — Chrome drops text-stroke when painting selected text, so emphasis must be a property that `::selection` honors | `overlay.css` (incl. the `.fx-b::selection` rules), `overlay.mjs applyStyleVars` |
 | **Figure/table captions are emphasized like body text**, including multi-line captions — the `Figure N`/`Table N` leader plus its same-size, tight-spacing continuation block. They bypass the smaller-than-body size filter; the figure/table contents themselves are never emphasized | `engine.mjs #skipRegions` caption block + size-filter bypass |
 
 ## 2. Layout fidelity (text stays in its original space)

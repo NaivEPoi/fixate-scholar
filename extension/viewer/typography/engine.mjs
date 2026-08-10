@@ -19,6 +19,21 @@ import { emphasizeParts } from "./segmenter.mjs";
 
 const CHUNK = 150;
 const ABSTRACT = /^\s*abstract\s*$/i;
+
+// PDF.js's drag-selection helper relocates its `.endOfContent` div next to the
+// selection edge on every selectionchange, and before patch 5 (see
+// scripts/fetch-pdfjs.mjs) a drag whose edge landed inside one of our
+// <b class="fx-b"> prefixes parked it INSIDE the text span. Rewriting such a
+// span (replaceChildren here, innerHTML in #restorePage) would DESTROY that
+// node while PDF.js still holds it in its #textLayers map — selection would
+// stay broken on the page even after toggling reading mode off. Hoist it back
+// to the layer first. Cheap, and keeps us safe if a future PDF.js finds a new
+// way to nest it.
+function evictEndOfContent(span, layerDiv) {
+  const stray = span.querySelector(".endOfContent");
+  if (stray) (layerDiv ?? span.closest(".textLayer") ?? span).append(stray);
+}
+
 // Faces that are never emphasized — they mark intentional special typography:
 // TeX/Type1 math and symbol fonts, monospace/typewriter (code, URLs), small
 // caps (system names), and bold display variants.
@@ -324,6 +339,7 @@ export class TypographyEngine {
     for (const span of layerDiv.querySelectorAll("span[data-fx-done]")) {
       const orig = this.#pristine.get(span);
       if (orig) {
+        evictEndOfContent(span, layerDiv);
         span.innerHTML = orig.html;
         span.style.setProperty("--scale-x", orig.scaleX || "");
         span.style.fontFamily = orig.fontFamily;
@@ -2594,6 +2610,9 @@ export class TypographyEngine {
         for (const entry of batch) {
           const { pair, parts } = entry;
           const span = pair.div;
+          // Before snapshotting/replacing the markup — a drag between the idle
+          // chunks could have parked PDF.js's live .endOfContent in here.
+          evictEndOfContent(span, textLayerDiv);
           this.#pristine.set(span, {
             html: span.innerHTML,
             scaleX: span.style.getPropertyValue("--scale-x"),

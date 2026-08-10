@@ -866,3 +866,79 @@ defects:
   precedes the highlight SVG in .canvasWrapper, asserts /Highlight +
   /QuadPoints in the saved bytes and one Highlight after reload, and
   asserts .fx-cite-hit computes pointer-events:none while editing.
+
+## Round 16 (R16) - drag-selection stopped at bold prefixes; emphasis vanished inside the selection (user report)
+
+User: "when I try to select the text in fx mode, the bolded and unbolded text
+seems in different layer, I can only select the bolded part of a word. Also,
+under selection, the bolded text become not bolded."
+
+Two independent root causes; both reproduced live and fixed.
+
+### R16-1 - PDF.js parks its .endOfContent INSIDE a text span, mid-word
+- On every selectionchange during a drag, TextLayerBuilder walks the selection
+  edge up from its text node and relocates the .endOfContent div - sized to the
+  WHOLE text layer and forced to user-select:text - next to that anchor. It
+  normalizes exactly ONE level, plus one more for its own
+  <span class="highlight"> wrapper: that special case is proof the code requires
+  the anchor to be a direct child of the .textLayer.
+- Reading mode nests too (<b class="fx-b"> emphasis; .fx-cite-c/.fx-ref-c
+  citation wrappers), so an edge inside a bold prefix makes anchor.parentElement
+  the text SPAN, and the layer-sized div lands in the middle of a word. Measured
+  on arXiv 1706.03762 mid-drag: parent SPAN, previousSibling "prop",
+  nextSibling "ose" - spliced into "propose", exactly at the bold boundary.
+  A synthetic repro showed it then wins every hit-test over that span
+  (x=2..102px returned DIV.endOfContent instead of B.fx-b / SPAN), so the drag
+  cannot reach the rest of the line: selection sticks at the bold prefix and the
+  copy loses the non-bold tails. Latent upstream PDF.js bug that fx mode makes
+  routine; worth reporting to mozilla/pdf.js.
+- Fix: patch 5 in scripts/fetch-pdfjs.mjs replaces the .highlight-only hop with
+  a loop that climbs out of ANY wrapper until anchor.parentElement is the
+  .textLayer (a superset of the stock behaviour, so PDF.js's own find-match case
+  still works). extension/vendor/ is gitignored, so the patch script is the only
+  thing that ships this - editing the vendored copy alone is NOT enough.
+- Defensive: engine.mjs evictEndOfContent() hoists any .endOfContent found
+  inside a span back to the layer before the content pass's replaceChildren and
+  before #restorePage's `span.innerHTML = orig.html`. Without it, a mislocated
+  div would be DESTROYED while PDF.js still held it in its #textLayers map,
+  breaking selection on that page even after toggling fx off.
+
+### R16-2 - -webkit-text-stroke emphasis is dropped when Chrome paints selected text
+- Default settings emphasize with a hairline -webkit-text-stroke (fontMode
+  "original", boldWeight 650), deliberately, because embedded PDF faces rarely
+  ship a bold and synthetic bold is one heavy weight that also changes advances.
+  But Chrome resolves selected text's paint from the ::selection highlight style
+  and falls back to INITIAL values for anything absent there, so
+  -webkit-text-stroke-width resolved to 0 and every emphasized prefix rendered
+  at plain weight inside a selection.
+- Re-declaring the stroke in ::selection does NOT help - verified with both the
+  shorthand and the -webkit-text-stroke-width/-color longhands; Blink's
+  selection paint path ignores text-stroke outright. Real font-weight:700 does
+  survive selection, but it changes glyph advances (would break the width
+  calibration and collapse the 500-900 ramp).
+- Fix: emphasize with a 4-direction text-shadow at half the old stroke width (a
+  centred stroke of width W thickens a glyph by W/2 per side; an axis-aligned
+  shadow at offset D thickens by D). text-shadow IS honoured in ::selection and
+  is paint-only, so targetW / word-spacing / --scale-x are unaffected.
+  overlay.mjs emits --fx-shadow and --fx-stack-shadow from the weight slider;
+  overlay.css carries matching .fx-b::selection rules that MUST keep repeating
+  the shadow. Do not revert to text-stroke.
+
+### Verification
+- npm test 38/38. scripts/fetch-pdfjs.mjs applies all 5 patches against a
+  pristine 6.0.227 extract (hash-verified), so patch 5's anchor is valid.
+- test/diag-drag.mjs is now a pass/fail guard: it samples endOfContent placement
+  MID-DRAG (PDF.js's pointerup reset() puts it back, which hides the bug),
+  asserts every fully-covered span's text is in the selection, that the copy
+  event carries it, and that emphasis uses a ::selection-honoured property.
+  PASS on arXiv + Two-column B; FAILS with patch 5 reverted (negative control),
+  reporting the "prop"/"ose" splice above.
+- papers.mjs 7/7, search.mjs, highlights.mjs, diag-select-cite.mjs all PASS.
+- matrix-fonts.mjs (Two-column B p14, 4 font modes x weights 500/700/900):
+  0 jams, 0 overlaps, width residual median 0.01px / max 0.3px, text-stroke now
+  0px in every combo - confirming the swap is layout-neutral.
+- PRE-EXISTING, unrelated: test/stylemodes.mjs throws
+  "Cannot read properties of undefined (reading 'textLayer')" - it reads
+  getPageView(PAGE-1).textLayer.div without waiting for the page view. Fails
+  identically on unmodified main (verified by stashing). matrix-fonts.mjs covers
+  the same font x weight matrix.

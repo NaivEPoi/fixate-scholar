@@ -84,7 +84,7 @@ try {
     const st = document.createElement('style'); st.id='__probe';
     st.textContent = '#viewerContainer.fx-on .fx-mask{display:none !important} ' +
       '#viewerContainer.fx-on .textLayer span[data-fx-done]{color:red !important} ' +
-      '#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b{color:red !important; -webkit-text-stroke: 0 !important}';
+      '#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b{color:red !important; -webkit-text-stroke: 0 !important; text-shadow: none !important}';
     document.head.appendChild(st);
   })()`);
   await sleep(600);

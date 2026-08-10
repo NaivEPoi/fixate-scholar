@@ -1,8 +1,22 @@
-// Real mouse-drag selection + copy probe. Drags across a body line via CDP
-// Input events, reads the resulting selection, screenshots it (to see whether
-// the highlight is visible), and confirms a Ctrl+C copy isn't swallowed by
-// PDF.js's select-all handler. Run before/after the fixes for before/after
-// evidence. Usage: node test/diag-drag.mjs [template]
+// Real mouse-drag selection + copy probe, and the regression guard for R16.
+// Drags across a body line via CDP Input events, reads the resulting selection,
+// screenshots it (to see whether the highlight is visible), and confirms a
+// Ctrl+C copy isn't swallowed by PDF.js's select-all handler.
+//
+// Checks that FAIL the run (exit 1):
+//   1. endOfContent stays in the .textLayer MID-DRAG. PDF.js relocates that div
+//      next to the selection edge on every selectionchange; before patch 5 an
+//      edge inside one of our <b class="fx-b"> prefixes parked it inside the
+//      text span, where it covered the span and swallowed further hit-tests —
+//      the drag stuck at the bold prefix. Must be sampled BEFORE mouseReleased:
+//      PDF.js's own pointerup reset() puts it back, hiding the bug.
+//   2. Every fully-covered span's text is in the selection — i.e. the non-bold
+//      tails aren't missing.
+//   3. Emphasis is painted with something ::selection honors (text-shadow), so
+//      it doesn't vanish inside the selection band the way -webkit-text-stroke
+//      did.
+//
+// Usage: node test/diag-drag.mjs [template] [--tag=post]
 
 import { spawn } from "node:child_process";
 import { writeFileSync, rmSync, mkdirSync } from "node:fs";
@@ -24,6 +38,8 @@ const EXT = join(root, "extension");
 const PORT = 9411 + (process.pid % 150);
 const userDataDir = join(tmpdir(), `fx-drag-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const failures = [];
+const fail = (msg) => { failures.push(msg); console.log(`  FAIL ${msg}`); };
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
 const browser = spawn(browserPath("edge"), [
@@ -95,15 +111,35 @@ try {
       if (d.length >= 4) { done = d; break; }
     }
     if (done.length < 4) return null;
+    const endIdx = Math.min(done.length - 1, 5);
     const a = done[2].getBoundingClientRect();
-    const b = done[Math.min(done.length - 1, 5)].getBoundingClientRect();
-    return { x0: a.left + 2, y0: a.top + a.height / 2, x1: b.right - 2, y1: b.top + b.height / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), left: a.left, right: b.right };
+    const b = done[endIdx].getBoundingClientRect();
+    // Spans strictly between the drag endpoints are covered end-to-end, so
+    // their full text MUST show up in the selection. (The first and last are
+    // clipped by the 2px inset, so they're excluded.)
+    const covered = done.slice(3, endIdx).map((s) => s.textContent.trim()).filter((t) => t.length > 3);
+    return { x0: a.left + 2, y0: a.top + a.height / 2, x1: b.right - 2, y1: b.top + b.height / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), left: a.left, right: b.right, covered };
   })()`);
-  if (!drag) { console.log("no draggable line found"); }
+  if (!drag) { fail("no draggable processed line found — nothing was verified"); }
   else {
     await mouse("mousePressed", drag.x0, drag.y0);
     const steps = 8;
-    for (let s = 1; s <= steps; s++) await mouse("mouseMoved", drag.x0 + (drag.x1 - drag.x0) * s / steps, drag.y0 + (drag.y1 - drag.y0) * s / steps);
+    // Sample endOfContent placement after every move: the misplacement only
+    // exists WHILE dragging (pointerup resets it), and only on the moves whose
+    // edge happens to land inside a <b class="fx-b">.
+    let stray = null;
+    for (let s = 1; s <= steps; s++) {
+      await mouse("mouseMoved", drag.x0 + (drag.x1 - drag.x0) * s / steps, drag.y0 + (drag.y1 - drag.y0) * s / steps);
+      stray = stray ?? await ev(`(() => {
+        for (const e of document.querySelectorAll(".endOfContent")) {
+          const p = e.parentElement;
+          if (p && !p.classList.contains("textLayer")) {
+            return { parent: p.nodeName + (p.className ? "." + p.className : ""), prev: e.previousSibling?.textContent ?? null, next: e.nextSibling?.textContent ?? null };
+          }
+        }
+        return null;
+      })()`);
+    }
     await mouse("mouseReleased", drag.x1, drag.y1);
     await sleep(300);
     const selText = await ev(`document.getSelection().toString()`);
@@ -120,6 +156,60 @@ try {
     const outPath = join(root, "test", "out", `drag-${FILTER.replace(/\W+/g, "")}-${TAG}.png`);
     writeFileSync(outPath, Buffer.from(shot.data, "base64"));
     console.log("saved", outPath);
+
+    // Emphasis must be painted with a property ::selection honors. Chrome
+    // resolves selected text's paint from the highlight style and falls back to
+    // INITIAL values for anything absent there, so -webkit-text-stroke (which
+    // Blink's selection paint ignores outright) silently flattened every
+    // emphasized prefix inside a selection.
+    const emph = await ev(`(() => {
+      const b = document.querySelector('.textLayer span[data-fx-done] .fx-b');
+      if (!b) return null;
+      const cs = getComputedStyle(b);
+      let selRules = 0, selWithShadow = 0;
+      for (const sheet of document.styleSheets) {
+        let rules; try { rules = sheet.cssRules; } catch { continue; }
+        for (const r of rules) {
+          if (!r.selectorText || !r.selectorText.includes('.fx-b') || !r.selectorText.includes('selection')) continue;
+          selRules++;
+          if (r.style.textShadow && r.style.textShadow !== 'none') selWithShadow++;
+        }
+      }
+      return { textShadow: cs.textShadow, strokeWidth: cs.webkitTextStrokeWidth, fontWeight: cs.fontWeight, selRules, selWithShadow };
+    })()`);
+    console.log("emphasis paint:", JSON.stringify(emph));
+
+    // ---- verdicts ----
+    if (stray) {
+      fail(`endOfContent was moved INSIDE a text span mid-drag: ${JSON.stringify(stray)}`);
+    }
+    const norm = (s) => s.replace(/\s+/g, " ").trim();
+    const selNorm = norm(selText);
+    for (const c of drag.covered ?? []) {
+      if (!selNorm.includes(norm(c))) {
+        fail(`fully-covered span missing from the selection: ${JSON.stringify(c.slice(0, 60))}`);
+      }
+    }
+    if (!copyInfo || norm(copyInfo.sel) !== selNorm) {
+      fail(`copy event did not carry the selection: ${JSON.stringify(copyInfo)}`);
+    }
+    if (!emph) fail("no .fx-b found — reading mode did not process the page");
+    else {
+      // The stack rule resolves to `none` at exactly 400/700 (a real face does
+      // the work there); only flag a face that has NO emphasis at all.
+      if (emph.textShadow === "none" && emph.fontWeight === "400") {
+        fail(`emphasis has neither a text-shadow nor a bold weight (computed: ${JSON.stringify(emph)})`);
+      }
+      if (parseFloat(emph.strokeWidth) > 0) {
+        fail(`emphasis still uses -webkit-text-stroke (${emph.strokeWidth}) — dropped inside selections`);
+      }
+      if (emph.selRules === 0 || emph.selWithShadow === 0) {
+        fail(".fx-b::selection rules missing or carry no text-shadow — emphasis will flatten under selection");
+      }
+    }
   }
-} catch (e) { console.error("drag error:", e); }
+} catch (e) { fail(`drag error: ${e.message ?? e}`); }
 finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
+
+console.log(failures.length ? `\n${FILTER}: FAIL (${failures.length})` : `\n${FILTER}: PASS`);
+process.exit(failures.length ? 1 : 0);
