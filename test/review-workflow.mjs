@@ -21,19 +21,23 @@ let A = args;
 if (typeof A === "string") { try { A = JSON.parse(A); } catch { A = null; } }
 const BASE = (A && A.base) || "test/out/review";
 const papers = (A && A.papers) || [
-  { paper: "Two-column A", dir: "Two_column_A", pages: 21 },
-  { paper: "Two-column B", dir: "Two_column_B", pages: 19 },
-  { paper: "Two-column C", dir: "Two_column_C", pages: 17 },
-  { paper: "Two-column D", dir: "Two_column_D", pages: 15 },
-  { paper: "Two-column E", dir: "Two_column_E", pages: 6 },
-  { paper: "Two-column F", dir: "Two_column_F", pages: 6 },
-  { paper: "arXiv", dir: "arXiv", pages: 15 },
+  { paper: "USENIX (baseline)", pages: 21 },
+  { paper: "USENIX (code + algorithms)", pages: 19 },
+  { paper: "USENIX (no cover page)", pages: 17 },
+  { paper: "ACM acmart (full)", pages: 15 },
+  { paper: "ACM acmart (short)", pages: 6 },
+  { paper: "IEEE conference (stamped)", pages: 6 },
+  { paper: "NeurIPS", pages: 15 },
 ];
 const items = [];
 for (const p of papers) {
+  // review-capture.mjs derives each paper's output directory from the template
+  // label the same way, so DERIVE it here too rather than repeating a slug that
+  // silently goes stale when a label is renamed.
+  const dir = p.dir || p.paper.replace(/[^\w]+/g, "_");
   for (let pg = 1; pg <= p.pages; pg++) {
     const n = String(pg).padStart(2, "0");
-    items.push({ paper: p.paper, page: pg, png: `${BASE}/${p.dir}/p${n}.png`, json: `${BASE}/${p.dir}/p${n}.json` });
+    items.push({ paper: p.paper, page: pg, png: `${BASE}/${dir}/p${n}.png`, json: `${BASE}/${dir}/p${n}.json` });
   }
 }
 if (!items.length) { log("no page items (args.papers empty)"); return { error: "no items" }; }

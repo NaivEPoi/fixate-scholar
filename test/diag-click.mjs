@@ -11,10 +11,10 @@ import { fileURLToPath } from "node:url";
 
 import { browserPath } from "./lib/env.mjs";
 
-const FILTER = process.argv.slice(2).find((a) => !a.toLowerCase().endsWith(".exe")) ?? "arXiv";
+const FILTER = process.argv.slice(2).find((a) => !a.toLowerCase().endsWith(".exe")) ?? "NeurIPS";
 const PAPERS = {
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "arXiv": "https://arxiv.org/pdf/1706.03762",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
 };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");

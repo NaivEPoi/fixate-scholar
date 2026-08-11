@@ -10,18 +10,18 @@ import { fileURLToPath } from "node:url";
 import { browserPath } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-const FILTER = POS[0] ?? "Two-column A";
+const FILTER = POS[0] ?? "USENIX (baseline)";
 const PAGE = parseInt(POS[1] ?? "20", 10);
 const STREAM = POS[2] ?? "right";
 const GREP = POS[3] ?? "";
 const PAPERS = {
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
   "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
   "ACL": "https://yilud.me/2026.acl-long.2136.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
-  "Two-column D": "https://yilud.me/Proteus-ccs24.pdf",
+  "ACM acmart (full)": "https://yilud.me/Proteus-ccs24.pdf",
 };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");

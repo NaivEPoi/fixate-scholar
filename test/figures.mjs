@@ -22,13 +22,13 @@ const FILTER = POS[0] ?? "5GShield";
 const URL_OVERRIDE = process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6); // any PDF URL, e.g. a local test server
 const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const PAPERS = {
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "Two-column C": "https://yilud.me/AFC_Attacks_NSDI.pdf",
-  "Two-column D": "https://yilud.me/Proteus-ccs24.pdf",
-  "Two-column E": "https://yilud.me/SIB-Auth.pdf",
-  "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
-  "arXiv": "https://arxiv.org/pdf/2502.04915",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (no cover page)": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "ACM acmart (full)": "https://yilud.me/Proteus-ccs24.pdf",
+  "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
+  "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
+  "IEEE journal": "https://arxiv.org/pdf/2502.04915",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",

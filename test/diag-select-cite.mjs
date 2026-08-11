@@ -17,12 +17,12 @@ import { fileURLToPath } from "node:url";
 
 import { browserPath } from "./lib/env.mjs";
 
-const FILTER = process.argv.slice(2).find((a) => !a.toLowerCase().endsWith(".exe")) ?? "Two-column B";
+const FILTER = process.argv.slice(2).find((a) => !a.toLowerCase().endsWith(".exe")) ?? "USENIX (code + algorithms)";
 const PAPERS = {
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "Two-column C": "https://yilud.me/AFC_Attacks_NSDI.pdf",
-  "arXiv": "https://arxiv.org/pdf/1706.03762",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (no cover page)": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
 };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });

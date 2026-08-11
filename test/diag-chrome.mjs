@@ -18,17 +18,17 @@ import { fileURLToPath } from "node:url";
 import { browserPath } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe"));
-const FILTER = POS.find((a) => !/^\d+$/.test(a)) ?? "arXiv";
+const FILTER = POS.find((a) => !/^\d+$/.test(a)) ?? "NeurIPS";
 const PAGE = parseInt(POS.find((a) => /^\d+$/.test(a)) ?? "10", 10);
 const DSF = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--dsf="))?.slice(6) ?? "0"); // device scale factor (high-DPI repro)
 const PAPERS = {
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "Two-column C": "https://yilud.me/AFC_Attacks_NSDI.pdf",
-  "Two-column D": "https://yilud.me/Proteus-ccs24.pdf",
-  "Two-column E": "https://yilud.me/SIB-Auth.pdf",
-  "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
-  "arXiv": "https://arxiv.org/pdf/1706.03762",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (no cover page)": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "ACM acmart (full)": "https://yilud.me/Proteus-ccs24.pdf",
+  "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
+  "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
 };
 const USE_EDGE = process.argv.slice(2).includes("--edge");
 const CHROME = USE_EDGE

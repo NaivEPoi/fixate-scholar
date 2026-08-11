@@ -12,20 +12,30 @@
 
 ## Template corpus (automated: `node test/papers.mjs`)
 
-Real papers spanning a range of common academic-paper templates (two-column
-conference/journal layouts and an arXiv preprint), used by the multi-template
-smoke test. The labels are intentionally template-agnostic — the rules they
-exercise are based on document structure, not any specific publisher template:
+Real papers covering **five templates**, used by the multi-template smoke test.
+Templates were identified from the PDFs themselves — page box, body size,
+leading, column extents, embedded fonts, publisher boilerplate, heading style.
 
-| Template | URL |
-|---|---|
-| Two-column A | https://yilud.me/usenixsecurity25-dong-yilu.pdf |
-| Two-column B (dense math, tables, algorithms, appendix) | https://yilud.me/usenixsecurity24-tu.pdf |
-| Two-column C | https://yilud.me/AFC_Attacks_NSDI.pdf |
-| Two-column D | https://yilud.me/Proteus-ccs24.pdf |
-| Two-column E (short paper) | https://yilud.me/SIB-Auth.pdf |
-| Two-column F (stamped header) | https://yilud.me/a33-dong%20stamped.pdf |
-| arXiv preprint | https://arxiv.org/pdf/2502.04915 |
+Several templates are represented by more than one paper; the parenthesized part
+of a label is that paper's COVERAGE VARIANT, not another template. The three
+USENIX papers measure identically (612x792, 10pt body / 12pt leading, columns
+54–296 + 318–560, Nimbus Roman + Nimbus Sans), as do the two ACM ones (9pt/11,
+Libertine/Biolinum) — they are kept because their CONTENT differs, which is what
+the structural rules actually key on. Hosting is not a template either: the last
+three are arXiv preprints, each typeset in one of these same templates (their
+arXiv side stamp is its own hazard, covered either way).
+
+| Template | Variant | Identified by | URL |
+|---|---|---|---|
+| USENIX | baseline | proceedings cover page; 21pp, plain body/figures | https://yilud.me/usenixsecurity25-dong-yilu.pdf |
+| USENIX | code + algorithms | same layout; LMMono code, algorithm listings, dense tables, appendix — the probe workhorse | https://yilud.me/usenixsecurity24-tu.pdf |
+| USENIX | no cover page | same layout; front matter starts on page 1 | https://yilud.me/AFC_Attacks_NSDI.pdf |
+| ACM acmart | full | Linux Libertine/Biolinum, ACM Reference Format, CCS Concepts, ISBN/DOI | https://yilud.me/Proteus-ccs24.pdf |
+| ACM acmart | short | same acmart boilerplate, 6-page short paper | https://yilud.me/SIB-Auth.pdf |
+| IEEE (IEEEtran) | conference, stamped | "Abstract—", "Index Terms—", "I. INTRODUCTION", no running head; stamp overlay | https://yilud.me/a33-dong%20stamped.pdf |
+| IEEE (IEEEtran) | journal | "Member, IEEE" byline, running head with page number | https://arxiv.org/pdf/2502.04915 |
+| NeurIPS | — | own style file: single column Times, block 108–506, 10pt/11, NeurIPS footer | https://arxiv.org/pdf/1706.03762 |
+| LaTeX article | Computer Modern | plain single column, block 116–496, running heads, no publisher boilerplate | https://arxiv.org/pdf/quant-ph/9508027 |
 
 `node test/debug-refs.mjs <pdf-url>` dumps heading candidates and surrounding
 extracted lines when reference parsing misbehaves on a new paper.

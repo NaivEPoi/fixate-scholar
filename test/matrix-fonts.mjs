@@ -12,14 +12,14 @@ import { fileURLToPath } from "node:url";
 import { browserPath, profileDir } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-const FILTER = POS[0] ?? "Two-column B";
+const FILTER = POS[0] ?? "USENIX (code + algorithms)";
 const PAGE = parseInt(POS[1] ?? "14", 10);
 const ZOOMV = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "1.25");
 const BROWSER = process.argv.slice(2).find((a) => a.startsWith("--browser="))?.slice(10) ?? "chrome";
 const NEEDLE = JSON.stringify(process.argv.slice(2).find((a) => a.startsWith("--find="))?.slice(7) ?? "We address");
 const PAPERS = {
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
 };
 const MATRIX = [];
 for (const fontMode of ["original", "atkinson", "inter", "literata"])

@@ -6,7 +6,7 @@
 // figure and table against TESTING.md Section 3. See REVIEW_LOG.md.
 //
 // Usage:
-//   node test/review-capture.mjs "Two-column B"   # one paper, all pages
+//   node test/review-capture.mjs "USENIX (code + algorithms)"   # one paper, all pages
 //   node test/review-capture.mjs                  # every paper
 // Output: test/out/review/<paper>/pNN.png + pNN.json, and <paper>.json roll-up.
 
@@ -19,13 +19,13 @@ import { fileURLToPath } from "node:url";
 import { browserPath } from "./lib/env.mjs";
 
 const PAPERS = {
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "Two-column C": "https://yilud.me/AFC_Attacks_NSDI.pdf",
-  "Two-column D": "https://yilud.me/Proteus-ccs24.pdf",
-  "Two-column E": "https://yilud.me/SIB-Auth.pdf",
-  "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
-  "arXiv": "https://arxiv.org/pdf/1706.03762",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (no cover page)": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "ACM acmart (full)": "https://yilud.me/Proteus-ccs24.pdf",
+  "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
+  "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
   // Added 2026-07 from the updated yilud.me publications list.
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",

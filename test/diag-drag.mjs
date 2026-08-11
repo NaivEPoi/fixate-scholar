@@ -45,13 +45,13 @@ import { browserPath } from "./lib/env.mjs";
 // filenames out of urls and screenshot names too. One paper per run, like the
 // other sweeps: loop from the shell so each gets a fresh browser.
 const PAPERS = {
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "Two-column C": "https://yilud.me/AFC_Attacks_NSDI.pdf",
-  "Two-column D": "https://yilud.me/Proteus-ccs24.pdf",
-  "Two-column E": "https://yilud.me/SIB-Auth.pdf",
-  "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
-  "arXiv": "https://arxiv.org/pdf/1706.03762",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (no cover page)": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "ACM acmart (full)": "https://yilud.me/Proteus-ccs24.pdf",
+  "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
+  "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",
@@ -67,7 +67,7 @@ const TRACE = ARGV.includes("--trace");
 const TAG = ARGV.find((a) => a.startsWith("--tag="))?.slice(6) ?? "pre";
 const FILTER = URL_ARG
   ? (ARGV.find((a) => a.startsWith("--label="))?.slice(8) ?? "url")
-  : (ARGV.find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe")) ?? "arXiv");
+  : (ARGV.find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe")) ?? "NeurIPS");
 const TARGET = URL_ARG ?? PAPERS[FILTER];
 if (!TARGET) {
   console.error(`diag-drag: unknown template ${JSON.stringify(FILTER)}`);

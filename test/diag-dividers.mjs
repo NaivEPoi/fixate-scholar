@@ -18,17 +18,17 @@ import { fileURLToPath } from "node:url";
 import { browserPath } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-const FILTER = POS[0] ?? "Two-column B";
+const FILTER = POS[0] ?? "USENIX (code + algorithms)";
 const HEADFUL = process.argv.includes("--headful");
 const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const PAPERS = {
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "Two-column C": "https://yilud.me/AFC_Attacks_NSDI.pdf",
-  "Two-column D": "https://yilud.me/Proteus-ccs24.pdf",
-  "Two-column E": "https://yilud.me/SIB-Auth.pdf",
-  "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
-  "arXiv": "https://arxiv.org/pdf/1706.03762",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (no cover page)": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "ACM acmart (full)": "https://yilud.me/Proteus-ccs24.pdf",
+  "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
+  "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",

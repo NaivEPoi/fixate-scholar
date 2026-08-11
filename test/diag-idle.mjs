@@ -13,10 +13,10 @@ import { fileURLToPath } from "node:url";
 import { browserPath } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe"));
-const FILTER = POS.find((a) => !/^\d+$/.test(a)) ?? "Two-column B";
+const FILTER = POS.find((a) => !/^\d+$/.test(a)) ?? "USENIX (code + algorithms)";
 const PAGE = parseInt(POS.find((a) => /^\d+$/.test(a)) ?? "3", 10);
 const HEADFUL = process.argv.includes("--headful");
-const PAPERS = { "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf", "arXiv": "https://arxiv.org/pdf/1706.03762" };
+const PAPERS = { "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf", "NeurIPS": "https://arxiv.org/pdf/1706.03762" };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
 const PORT = 9631 + (process.pid % 120);
