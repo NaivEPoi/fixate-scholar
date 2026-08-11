@@ -36,6 +36,8 @@ const PAPERS = {
   "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
   "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
   "IEEE journal": "https://arxiv.org/pdf/2502.04915",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
+  "LaTeX article (CM)": "https://arxiv.org/pdf/quant-ph/9508027",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",
@@ -68,7 +70,7 @@ const PROBE = `(() => {
     const div = pv?.textLayer?.div;
     if (!div || !div.childElementCount) continue;
     const page = pv.id;
-    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span") && s.textContent.trim());
+    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.trim());
     const masks = [...pv.div.querySelectorAll(".fx-mask > div")].map((m) => m.getBoundingClientRect()).filter((r) => r.width > 0);
     const done = leaves.filter((s) => s.dataset.fxDone);
     const fxRect = pv.div.getBoundingClientRect();
@@ -197,7 +199,18 @@ const PROBE = `(() => {
       if (r.width < 2 || r.height < 2) continue;
       const el = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
       if (!el) continue;
-      if (el.closest(".textLayer")) selOk++;
+      // A LINK on top is expected, not a defect: PDF.js paints the document's
+      // own hyperref annotations (bare <a> inside .annotationLayer) above the
+      // text layer, and our citation/reference hit-targets deliberately sit
+      // there too so a click opens a card. The native viewer behaves the same,
+      // with fx on or off. What this check is for is an UNEXPECTED cover — a
+      // mask div, another span, PDF.js's .endOfContent (the R16 failure mode) —
+      // so those still count. Without this exemption the metric reads non-zero
+      // forever on any citation-dense paper and stops meaning anything (ACL: 7,
+      // identical pre- and post-R20, every one a hyperlinked "(Author, 2024)").
+      const expected = el.closest(".annotationLayer, .fx-cite-hit, .fx-ref-hit") ||
+        (el.tagName === "A" && !el.className);
+      if (el.closest(".textLayer") || expected) selOk++;
       else { selBad++; if (selSamples.length < 4) selSamples.push({ t: s.textContent.trim().slice(0, 16), el: el.className || el.tagName }); }
       if (selOk >= 8) break;
     }

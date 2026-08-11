@@ -82,7 +82,7 @@ try {
       if (!r.width) continue;
       // text under the link rect
       let txt = "";
-      for (const s of div.querySelectorAll("span")) { if (s.querySelector("span")) continue; const sr = s.getBoundingClientRect(); if (ov(sr, r) > 0.3*sr.width*sr.height) txt += s.textContent; }
+      for (const s of div.querySelectorAll("span")) { if (s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)")) continue; const sr = s.getBoundingClientRect(); if (ov(sr, r) > 0.3*sr.width*sr.height) txt += s.textContent; }
       const overlapsCite = citeHits.some((h) => ov(h, r) > 0.3*r.width*r.height);
       links.push({ internal, pe: a.style.pointerEvents || "auto", overlapsCite, txt: txt.trim().slice(0, 24) });
     }
