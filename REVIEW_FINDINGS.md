@@ -1338,14 +1338,14 @@ The rule-zone backstop leaves everything centered between chained canvas rules
 on the canvas, exempting a full-width line of >= 4 lowercase words (a paragraph
 between two stacked framed listings) and, within it, spans that are themselves
 prose-sized. Both counts used a bare letter-run match, which counts runs INSIDE
-identifiers: a Cypher line ("RETURN s.name AS software, c.name AS component,")
-scored 4 and became an exempt "prose" line, and a lone `threatCount`
-continuation line scored 2 ("threat" + "ount") and chained off it as a paragraph
-tail. That span was processed inside a framed listing on a 16-zone page - the
-last table leak in either corpus.
-- Fix: proseWordCount - whole lowercase WORDS, bounded at both ends. The Cypher
-  line's identifiers no longer count as sentence words, `threatCount` scores 0,
-  and the >= 12-char per-span escape now also requires at least one real word.
+identifiers: a query line of the shape `RETURN x.name AS label, y.name AS owner,`
+scored 4 and became an exempt "prose" line, and a lone camelCase continuation line
+scored 2 (two letter runs inside one identifier) and chained off it as that
+paragraph's tail. That span was processed inside a framed listing on a 16-zone
+page - the last table leak in either corpus.
+- Fix: proseWordCount - whole lowercase WORDS, bounded at both ends. The query
+  line's identifiers no longer count as sentence words, a camelCase token scores
+  0, and the >= 12-char per-span escape now also requires at least one real word.
   test/tables.mjs's oracle mirrors it, as it did before.
 - Result: that page's offenders 1 -> 0; the genuine prose-between-frames case on
   the same page still exempt (a 9-word sentence and its 4-word tail line).
@@ -1403,6 +1403,84 @@ box.
   - the failure was R22-3's capProse); refbold 28/28.
 - Console gate (viewer page AND extension service worker, every page): 5 public
   papers, `PROBLEMS=0`, allowlist unused.
-- NOT tagged. Step 4 of the gate (look at every document) is still TARGETED - 5
-  regions across 3 documents, chosen where these changes act - not the 42-document
-  fan-out the gate asks for.
+- Step 4 of the gate was completed separately, over both corpora - see R23, which
+  is where the two defects it found are written up.
+
+## Round 23 (R23) - step 4 of the gate, done properly: 42 documents looked at
+
+R22 shipped with step 4 TARGETED (5 regions where those changes act). Doing it as
+the gate asks - one matched fx-on/fx-off pair per document, at zoom, across the
+public corpus AND all 28 private documents - found two defects that every DOM
+oracle in this repo passes. Both are PRE-EXISTING (reproduced against 0102b52),
+and neither is expressible as a span count: one is a glyph that appears twice,
+the other is a weight that is uneven inside a word.
+
+Method: `shot-region2 <doc> <page> --find=" the " --zoom=2 --pad=150`, which
+frames a PARAGRAPH rather than a line. The one-line band R21 used cannot show the
+defect classes the gate lists (baseline drift, jammed spacing, one span in the
+wrong face, a whited-out word) - there are no neighbours to judge against.
+
+### R23-1 - a THREE-LINE running head was emphasized, and peeked
+The engine's furniture defence is a margin cut: the outer 6% of the page. That
+reaches a one-line running head. One private document repeats a three-line title
+block at the top of every odd page, set at 7pt (under body size): the block hangs
+well below the 6% band, no per-page rule has anything to go on, and it was
+emphasized as body prose. Worse, being processed made a canvas glyph visible past
+its mask: at 3x, one hyphenated word of the head rendered with a DOUBLED letter
+the document does not contain. The DOM was correct - the emphasis wrapper split
+that word exactly where it should - so the extra glyph is canvas ink showing
+through a gap between two mask rects, not a text bug.
+- Fix: `findFurniture` in parser.mjs, plumbed as `engine.setFurniture` beside the
+  refs region and contentStart. Repetition across pages identifies furniture, and
+  only a document-wide pass can see it: a line in the page's top/bottom band
+  whose text repeats VERBATIM on 3+ pages, or - for lines under 40 characters -
+  whose digit-stripped text does (a head carrying its own page number).
+- The verbatim/short split is load-bearing. Digit-stripping alone (the rule the
+  reference-body loop uses) makes two DIFFERENT body lines look identical when a
+  number is all that separates them; the first unit test written for this failed
+  in exactly that way.
+- Result: the head renders as the author set it. papers.mjs stays 8/8 with one
+  measurable change - the CM paper's bolded count 1291 -> 1275, which is its own
+  running heads no longer being emphasized.
+
+### R23-2 - a ruled table's HEADER row was emphasized over the document's bold
+The rule-zone backstop exempts a full-width, wordy line inside a rule chain: the
+paragraph that legitimately sits between two stacked framed listings. A table
+HEADER row is also full-width and wordy, so the exemption claimed it, and its
+cells were re-emphasized on top of the template's own bold - uneven weight inside
+each word of a ruled table's header.
+- Fix: an exempt line must stand CLEAR of the rules bracketing it, by half a line
+  height at each end. The numbers separate cleanly: the header row measures
+  gapTop 4 / gapBot 4 against a 15px line, while the genuine
+  prose-between-frames case on another document measures 22 / 42 against 15.
+- A paragraph that hugs a frame loses its emphasis under this rule. That is the
+  right way to be wrong here: table structure is the invariant the zone backstop
+  exists to hold, and the cost is emphasis on one line.
+
+### Verification
+- npm test 53/53 (three new unit tests: a multi-line head IS furniture, unique
+  per-page lines are NOT, and a short head carrying its page number still is).
+- papers.mjs 8/8; refs and cites counts unchanged.
+- Public corpus, all 14 papers, every page: audit hard criteria 0, tables 0
+  offenders. Private corpus, all 28: the same. refbold unchanged (14/14, 28/28).
+- 42 documents seen, one matched pair each (two pages for six of them). The two
+  defects above are the only ones found.
+
+### Harness repairs made while running it
+1. shot-region2 had no timeout on its CDP calls: one paper wedged and the corpus
+   loop simply stopped, which reads as "still running" rather than "this document
+   failed". Every call is now bounded at 60s.
+2. A failed capture exited 0, so a sweep reported PASS for a document whose image
+   was never written. It exits 1 now - which is how the one document whose page 5
+   contains no " the " announced itself instead of vanishing.
+3. Its PAPERS map was missing AFC-Diss - the same incomplete-map defect R21 fixed
+   for the other entries. The guard added then did its job: exit 2 with the list.
+4. shot-region2 gained `--pad`, so a capture can frame a paragraph.
+
+### A note for whoever edits this file next
+Do NOT round-trip it through PowerShell (`Get-Content -Raw` + `Set-Content`, or
+`Out-File`): 5.1 reads it as ANSI and writes back mojibake for every em dash, and
+a backtick in a here-string becomes a control character (`` `f `` really does emit
+a form feed). This warning was already here for Set-Content, and it happened again
+anyway. Use an editor that writes UTF-8, and check with
+`node -e "..."` for control characters before committing.

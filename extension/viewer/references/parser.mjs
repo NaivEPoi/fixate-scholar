@@ -131,6 +131,74 @@ function runningHeadTexts(lines, edges) {
   return out;
 }
 
+/**
+ * Running heads and feet as GEOMETRY, for the typography engine to leave alone.
+ *
+ * The engine's own defence is a margin cut — the outer 6% of the page — which
+ * only reaches a ONE-LINE head. A three-line running head (an acmart-style title
+ * block repeated at the top of every odd page) hangs well below that band, is set
+ * at or under body size, and carries no other signal, so it was emphasized as
+ * body prose. Repetition across pages is the signal that identifies it, and only
+ * a document-wide pass (this one) can see it.
+ *
+ * A line qualifies when it sits in the top/bottom band of its page AND its
+ * digit-stripped text recurs on three or more pages (or it is a bare page
+ * number). Body text does not repeat verbatim on three pages, so the band can be
+ * generous: it is the repetition that decides.
+ *
+ * @returns {Map<number, Array<{x0,x1,y0,y1}>>} boxes per page (PDF coordinates)
+ */
+export function findFurniture(lines) {
+  const edges = pageEdges(lines);
+  const inBand = (l) => {
+    const e = edges.get(l.page);
+    if (!e) return false;
+    const m = Math.max((l.h || 9) * 1.2, (e.top - e.bot) * 0.08);
+    return l.y >= e.top - m || l.y <= e.bot + m;
+  };
+  // Two ledgers. VERBATIM repetition is the safe signal and carries no length
+  // limit — a three-line title block repeats word for word. Digit-stripped
+  // repetition is needed for a head that embeds its page number ("Journal Name,
+  // Vol. 5, No. 3"), but it also makes two DIFFERENT body lines look identical
+  // when a number is all that separates them, so it is allowed only for short
+  // lines, where a page number is the plausible difference.
+  const exact = new Map();
+  const stripped = new Map();
+  const add = (map, key, page) => {
+    if (!map.has(key)) map.set(key, new Set());
+    map.get(key).add(page);
+  };
+  for (const l of lines) {
+    if (!inBand(l)) continue;
+    const raw = (l.text ?? "").trim();
+    if (raw.length >= 3 && raw.length <= 120) add(exact, raw.toLowerCase(), l.page);
+    const t = normHead(raw);
+    if (t.length >= 3 && raw.length <= 40) add(stripped, t, l.page);
+  }
+  const repeats = (map, key) => (map.get(key)?.size ?? 0) >= 3;
+  const boxes = new Map();
+  for (const l of lines) {
+    if (!inBand(l)) continue;
+    const raw = (l.text ?? "").trim();
+    if (
+      !/^\d{1,4}$/.test(raw) &&
+      !repeats(exact, raw.toLowerCase()) &&
+      !(raw.length <= 40 && repeats(stripped, normHead(raw)))
+    ) {
+      continue;
+    }
+    const pad = (l.h || 9) * 0.7;
+    if (!boxes.has(l.page)) boxes.set(l.page, []);
+    boxes.get(l.page).push({
+      x0: l.x - 2,
+      x1: (l.endX ?? l.x + 1000) + 2,
+      y0: l.y - pad,
+      y1: l.y + pad,
+    });
+  }
+  return boxes;
+}
+
 export function findReferencesBody(lines) {
   const start = findHeadingIndex(lines);
   if (start === -1) return { heading: null, body: [] };

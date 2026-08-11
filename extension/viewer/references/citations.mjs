@@ -7,6 +7,7 @@ import {
   parseReferences,
   findReferencesBody,
   findContentStart,
+  findFurniture,
   findCitations,
   findInternalRefs,
   resolveCitation,
@@ -27,6 +28,9 @@ export class ReferencesFeature {
 
   /** Called with the document-wide body-text height once known. */
   onBodyHeight = null;
+
+  /** Called with running-head/foot line boxes (Map<page, boxes>) once known. */
+  onFurniture = null;
 
   constructor(app) {
     this.#app = app;
@@ -60,6 +64,11 @@ export class ReferencesFeature {
         if (bodyH) await this.onBodyHeight?.(bodyH);
         const contentStart = findContentStart(lines);
         if (contentStart) await this.onContentStart?.(contentStart);
+        // Running heads and feet: only a document-wide pass can recognize them
+        // (repetition across pages), and the engine's margin cut reaches just a
+        // one-line head.
+        const furniture = findFurniture(lines);
+        if (furniture.size) await this.onFurniture?.(furniture);
         const { heading, body } = findReferencesBody(lines);
         if (globalThis.__fxDebug) {
           globalThis.__fxRefBody = body.map((l) => l.text); // test introspection
