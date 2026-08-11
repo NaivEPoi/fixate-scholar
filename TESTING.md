@@ -71,8 +71,8 @@ this be processed?" — review everything against them.
 
 ```bash
 cd /c/misc/Claude_Workspace/fixate-scholar
-npm test                 # naming guard + 32 unit tests (segmenter/parser). MUST be 32/32.
-node test/papers.mjs     # 7-paper corpus smoke test. MUST be 7/7 PASS, all checks true.
+npm test                 # naming guard + 45 unit tests (segmenter/parser/fontclass). MUST be 45/45.
+node test/papers.mjs     # 8-paper corpus smoke test. MUST be 8/8 PASS, all checks true.
 ```
 
 `papers.mjs` per-paper checks (all must be `true`):
@@ -102,8 +102,8 @@ node test/skipline.mjs "<paper>"        # unprocessed PROSE lines — only front
 
 | Command | What it verifies | Pass criteria |
 |---|---|---|
-| `npm test` | naming guard (trademarked 2-word brand absent) + unit tests | `Naming guard passed`, 32/32 |
-| `node test/papers.mjs` | full corpus classification + color + links | 7/7 PASS |
+| `npm test` | naming guard (trademarked 2-word brand absent) + unit tests | `Naming guard passed`, 45/45 |
+| `node test/papers.mjs` | full corpus classification + color + links | 8/8 PASS |
 | `node test/verify-links.mjs` | hyperref borders suppressed in fx-on, links still clickable, masks track glyphs | `ALL LINK CHECKS PASSED` |
 | `node test/diagnose.mjs <paper>` | rendering fidelity: true whiteout, mask peek, font fallback, skipped paragraphs, citation alignment, selectability | whiteout 0; peek low; fontBad 0; selBad 0 |
 | `node test/audit.mjs <paper>` | classification issue classes | keepFallback 0; tableLeak 0; capProse 0; skipBody ≈ 0 |
@@ -136,11 +136,38 @@ Two gotchas when sweeping a local corpus:
   screenshot after the paper, so pass a neutral `--label=`. Serving the corpus
   under positional aliases keeps real names out of URLs and output alike.
 
-Paper templates (the `<paper>` arg): the full 12-paper corpus —
-`"Two-column A"`..`"Two-column F"`, `"arXiv"`, `"5GCVerif"`, `"5GShield"`,
-`"AFC-Diss"`, `"ACL"`, `"UC-Scheme"` (the `PAPERS` map at the top of each
-probe; all but arXiv are on yilud.me — enumerate new ones via
+Paper templates (the `<paper>` arg) — **five templates**, identified from the
+PDFs themselves (page box, body size, leading, column extents, embedded fonts,
+publisher boilerplate, heading style). Several are represented by more than one
+paper: the parenthesized part of a label is that paper's COVERAGE VARIANT, not
+another template. `FILTER` is a substring match, so `"USENIX"` runs all three
+USENIX papers and `"IEEE"` both IEEE modes.
+
+| Template | Variant | Identified by | Was |
+|---|---|---|---|
+| USENIX | `"USENIX (baseline)"` | 612x792, 10pt/12, cols 54–296 + 318–560, Nimbus Roman + Sans, `1 Introduction` heads; proceedings cover page | Two-column A |
+| USENIX | `"USENIX (code + algorithms)"` | identical layout; LMMono code, algorithm listings, dense tables, appendix — the workhorse most probes default to | Two-column B |
+| USENIX | `"USENIX (no cover page)"` | identical layout; front matter starts on page 1 | Two-column C |
+| ACM acmart | `"ACM acmart (full)"` | 9pt/11, Linux Libertine/Biolinum, ACM Reference Format, CCS Concepts, ISBN/DOI | Two-column D |
+| ACM acmart | `"ACM acmart (short)"` | identical layout, 6-page short paper | Two-column E |
+| IEEE (IEEEtran) | `"IEEE conference (stamped)"` | cols 49–300 + 312–563, `Abstract—`, `Index Terms—`, `I. INTRODUCTION`, no running head; stamp overlay | Two-column F |
+| IEEE (IEEEtran) | `"IEEE journal"` | same class in journal mode: `Member, IEEE` byline, running head with page number | arXiv (2502.04915) |
+| NeurIPS | `"NeurIPS"` | own style file: single column Times, block 108–506, 10pt/11, NeurIPS footer | arXiv (1706.03762) |
+| LaTeX article | `"LaTeX article (CM)"` | plain single column Computer Modern, block 116–496, running heads, no publisher boilerplate | (new in R19) |
+
+Two papers of one template are kept when their CONTENT differs (code/algorithms,
+cover page, paper length) — the rules key on structure, so content is what
+actually varies the coverage. Hosting is NOT a template either: the last three
+are arXiv preprints, each typeset in one of the above (their arXiv side stamp is
+a separate hazard, covered either way). Plus `"5GCVerif"`, `"5GShield"`,
+`"AFC-Diss"`, `"ACL"`, `"UC-Scheme"` (the `PAPERS` map at the top of each probe;
+all but the arXiv ones are on yilud.me — enumerate new ones via
 `https://yilud.me/sitemap.xml`).
+
+Note the old `"arXiv"` key meant DIFFERENT papers in different harnesses
+(2502.04915 in some, 1706.03762 in others) — a second reason it was a poor
+label; the two names above split them. Findings entries written before this
+rename use the old letter labels; the "Was" column is the mapping.
 
 Classification debug: set `globalThis.__fxDebug = true` in the page BEFORE
 processing → every skipped span gets `data-fx-why`, and the engine records
@@ -472,6 +499,6 @@ Lessons from the F1–F16 investigations. Each of these cost hours; don't re-pay
 - The user sees the FIRST processing pass at THEIR zoom/DPI with fx enabled
   BEFORE the document loads — reproduce with `--preset` and headful when a
   report doesn't reproduce headless.
-- After ANY engine change, the full gate is: `npm test` → `papers.mjs` (7/7) →
+- After ANY engine change, the full gate is: `npm test` → `papers.mjs` (8/8) →
   `diagnose` whiteout 0 → 12-paper `diag-dividers` sweep masked 0 → and, if
   fonts/weights were touched, `matrix-fonts` in both browsers.

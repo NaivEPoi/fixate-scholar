@@ -942,3 +942,260 @@ Two independent root causes; both reproduced live and fixed.
   getPageView(PAGE-1).textLayer.div without waiting for the page view. Fails
   identically on unmodified main (verified by stashing). matrix-fonts.mjs covers
   the same font x weight matrix.
+
+## Round 17 (R17) - italic body prose rendered UPRIGHT in the bundled reading fonts
+
+ITALIC_FONT missed the two most common LaTeX italic TEXT faces, so under a
+bundled reading font (atkinson/inter/literata) engine.mjs swapped the face
+without re-applying `fontStyle: "italic"` - italic prose came out roman.
+Original-font mode was never affected (no face change, so that branch is skipped
+by design). Two independent gaps, both a case of a face-name spelling the regex
+could not reach:
+- `cmti` was lowercase-only, but LaTeX Type1 subset names are conventionally
+  UPPERCASE (`ABCDEF+CMTI10`). SPECIAL_FONT already listed BOTH cases for its
+  math faces, so the hazard was known; ITALIC_FONT never got the uppercase
+  forms. Confirmed uppercase in the wild on arXiv quant-ph/9508027 (CMTI8/9/10)
+  and math/0211159 (CMTI12, CMR12, CMMI12).
+- `-It(?![a-z])` could not match `-Ital` (the lookahead rejects the following
+  `a`) - and the real URW Nimbus name has no hyphen there at all:
+  `NimbusRomNo9L-ReguItal` / `-MediItal`. URW Nimbus Roman is the standard
+  LaTeX Times clone, the same family both corpus papers use for Regu/Medi.
+- Fix: `Ital(?![a-z])` (covers `-Ital`, `ReguItal`, `MediItal`) plus `CMTI|CMMI`
+  next to the existing `cmti|cmmi`, keeping the dual-case listing style of
+  SPECIAL_FONT. `-It(?![a-z])` stays for bare `-It`; an upright face merely
+  starting "Ital" (`Italiana-Regular`) still does not match.
+
+### Verification
+- Neither corpus paper has an italic TEXT face, so test/stylemodes.mjs reported
+  `n/a` on both. Reproduced on a private-corpus paper set in Nimbus
+  (`NimbusRomNo9L-ReguItal` body italics): with the oracle corrected and the
+  engine unpatched, p4 gave `italicItems=43 italicProcessed=19
+  italicProcessedRendered=0` -> `italicPreserved=false`. After the fix: 17/17
+  italic (p4) and 13/13 (p6).
+- Public repros of both halves: `stylemodes.mjs
+  https://arxiv.org/pdf/quant-ph/9508027 2` (CMTI, 3/3) and `stylemodes.mjs
+  https://arxiv.org/pdf/1207.0580 3` (NimbusRomNo9L-ReguItal, 1/1).
+- Run-in-lead skip path (the other isItalic consumer): papers.mjs 7/7 twice.
+  The widening does newly engage `skipItalicLead` on Nimbus-italic papers - on
+  a private paper's p4 two spans moved from processed to skipped, both italic
+  NUMBERED SUBSECTION LEADS ending in a colon ("N) Title of the subsection:"),
+  which is exactly what that rule is for.
+- npm test 42/42, including the new test/unit/fontclass.test.mjs face-name
+  tables (ITALIC_FONT and SPECIAL_FONT are exported for it). A missed face
+  neither throws nor fails a corpus check - it just renders wrong - so the
+  tables are the guard against the next case/spelling variant.
+
+### Same class of gap, fixed separately in R18
+Two more names, found while building those tables; both would newly EXCLUDE
+spans from processing/emphasis - a different behavior change than the italic
+fix, so they were validated on their own. See R18.
+
+## Round 18 (R18) - typewriter and small-caps text emphasized as body prose
+
+Follow-up to R17: the same "a face name the alternatives cannot spell" hazard,
+this time in SPECIAL_FONT / BOLD_FONT. Faces listed there are meant to be left
+on the canvas (intentional special typography); a name that slips through is
+emphasized as ordinary body prose.
+- `NimbusMonL-Regu` - URW Nimbus Mono, the standard LaTeX Courier clone. The
+  monospace alternative was `Mono(?![a-z])`, and "MonL" contains no "Mono", so
+  typewriter text (code, identifiers, URLs) in it was body text. Now
+  `Mon[oL](?![a-z])`, which also picks up `NimbusMonL-Bold` /
+  `NimbusMonL-ReguObli` and still rejects Montserrat / MonaSans /
+  Monotype-Corsiva, plus the sibling Nimbus TEXT faces that share the
+  short-suffix shape (`NimbusSanL-Regu`, `NimbusRomNo9L-Regu`).
+- `CMBX` and `CMCSC` in UPPERCASE Type1 subset names (`ABCDEF+CMBX12`,
+  `ABCDEF+CMCSC10`) - the bold and small-caps alternatives listed only
+  lowercase `cmbx` / `cmcsc`. BOLD_FONT had the same bold gap, so CM bold was
+  invisible to the unlabelled run-in heading detector too. Both cases are now
+  listed for every CM alternative, and the two bold lines (SPECIAL_FONT's and
+  BOLD_FONT's) must stay identical. `CMTT` needs no entry: `TT(?=[0-9-])`
+  already reaches it.
+- Finished the same symmetry on the math line while there (`cmbsy`, `msam`,
+  `msbm` next to the uppercase forms). Those faces are math-only, so a
+  lowercase-naming toolchain was the only way to hit them, and the corpus
+  cannot exercise the aliases at all - it names them in uppercase.
+
+### Verification
+Both halves were confirmed by NEGATIVE CONTROL - reverting the single
+alternation and re-probing the same page, reporting each matching item's
+processed flag, .fx-b count and skip reason:
+- Monospace, on a private paper that sets protocol identifiers and message names
+  in NimbusMonL (typewriter runs inside body prose, table cells and figure
+  labels): p3 24 of 55 matching items processed / 19 EMPHASIZED before, 0 / 0
+  after; p8 25 processed / 9 emphasized before, 0 / 0 after.
+- Small caps, on arXiv quant-ph/9508027 p26 (bibliography author names set in
+  CMCSC10): 14 of 54 processed and emphasized before, 0 after - they now take
+  the `runin` (skipHeadingRun) path, i.e. BOLD_FONT/SPECIAL_FONT finally see
+  them.
+- CM bold NUMBERED headings were already skipped before the fix by the
+  font-independent `line-head` path (quant-ph/9508027 p5 "2 Quantum
+  computation" - identical before and after), so the CMBX win shows up in
+  run-in / bibliography contexts rather than in section headings.
+- arXiv 1207.0580 EMBEDS NimbusMonL-Regu but no page's text uses it (0 items),
+  so despite being a public paper it is not a usable repro for this half.
+- papers.mjs 7/7. On the corpus the only CMBX/CMCSC/MonL items are 5 table
+  numerals on arXiv 1706.03762 p8, already skipped as `line-cells`, so corpus
+  output is unchanged. On the private Nimbus paper p4, processed spans go
+  205 -> 184 (the typewriter runs), while stylemodes.mjs still reports
+  `italicPreserved=true` 17/17 and 882 emphasized prefixes - body prose is
+  untouched.
+- npm test 44/44; test/unit/fontclass.test.mjs now asserts the fixed names, a
+  near-miss table for `Mon[oL]`, and BOLD_FONT directly (it is exported for
+  the test alongside SPECIAL_FONT / ITALIC_FONT).
+
+## Round 19 (R19) - single-column math paper: prose swept as tables, bibliography emphasized (user report)
+
+User, on a Computer Modern journal-template paper added to the corpus (Shor,
+arXiv quant-ph/9508027): "some of the references get processed but some of the
+main texts are not processed." Two independent causes, both template-shaped:
+nothing about them is specific to this paper.
+
+### R19-1 - a paragraph broken by DISPLAYED EQUATIONS read as a table
+TeX sets display math in math faces, cuts it into many small items, leaves wide
+gaps around relation/operator symbols, aligns a multi-line derivation on that
+symbol row after row, and puts the equation TAG at the right margin. That is
+exactly what all three table passes look for - a cell gap (`maxCells`), a shared
+gap-x (`skipAlignedTable`), aligned interior starts (`skipAlignedStarts`) - so
+paragraphs interleaved with equations were classified `blk-table` /
+`table-starts` / `table-aligned` / `table-region` and their PROSE lines were
+skipped to the canvas. Pages ran 16-43% processed; whole arguments were left
+unemphasized ("It would be sufficient to observe solely the value…").
+- Fix: `isDisplayMathRow` - a row with no prose word whose characters are ≥25%
+  math-faced (new MATH_FONT, the math line of SPECIAL_FONT, exported with it) is
+  invisible to the table passes: no cell tally, no gap band, no start seeds.
+  This is the same principle already applied to off-size rows ("figure labels
+  are never table cells").
+- Two traps in "no prose word": `\exp`, `\log`, `\cos` … are set as upright
+  lowercase words INSIDE the equation, and LOWER_WORD accepts 2-letter tokens,
+  so juxtaposed variables ("rc", "br", "bT" in `T = rc + d − r{c(p−1)}q, (6.8)`)
+  counted as prose. Hence MATH_OP plus a 3+-letter PROSE_WORD for this test
+  only. Without the first, the (6.7)/(6.8)/(6.9) tag column still formed a run;
+  without the second, the derivation rows still did.
+- `proseDense` counts its ≥4-lowercase-words-per-row average over the same
+  prose-carrying rows: the equation rows spent whole lines on math and dragged
+  the average under the bar (p17: 20 rows, lc=78, needed 80 — off by two words).
+- `skipAlignedTable` also gained a straddle test: running prose reaching ACROSS
+  the band ends the run even when a word gap lands inside it. The band-coverage
+  comment already intended this, but `smallHit` took priority, so prose lines
+  between a math paragraph's inline-fraction fragments were absorbed. A
+  prose-cell table is unaffected - its wordy cell sits INSIDE a column
+  (`oneSide`), it does not straddle the boundary.
+
+### R19-2 - the bibliography ended at the first page break
+`findReferencesBody` stops at a heading-SIZED line. A journal template prints a
+running head and page number on every page - including the bibliography's
+continuation pages - at BODY size, while the bibliography is set smaller (here
+10 vs 8). The next page's "26" / "P. W. SHOR" therefore read as a new section:
+the body stopped after page 25 (26 lines, 9 entries), the refs region covered
+only that page, and pages 26-28 of references were emphasized as body prose -
+which is exactly what the user saw. Conference templates print no running head,
+so the corpus never showed it.
+- Fix: `runningHeadTexts` collects page furniture - a bare page number, or a
+  short line whose text (page number aside) repeats on ≥3 pages - and the body
+  loop steps OVER those lines instead of breaking on them. Result: body 26 →
+  150 lines, entries 9 → 64 (the true count), region covers p25-p28.
+
+### Verification
+- Prose sweep over every content page (p2-p24), listing unprocessed spans with
+  ≥3 lowercase words and their skip reason: **zero body prose lost**. The only
+  remaining ones are policy - two table/figure captions, and the section
+  headings "Reversible logic and modular exponentiation" / "Comments and open
+  problems". Before: 15 on p17, 5 on p18, 2 on p20, 1 on p21, 6 on p22.
+- Per-page processed share on the math pages: p17 16→43%, p20 43→52%, p21
+  41→48%, p22 43→55%, p14 59→60%, p16 71→74%. The rest of each page is math
+  spans (never candidates), formulas and captions.
+- References: p26/p27/p28 go from 43/42/49 processed spans to 0, all inside the
+  refs region; p25 keeps exactly its 12 spans of closing body prose above the
+  References heading.
+- papers.mjs 7/7 unchanged, refs counts identical (63/58/67/73/33/23/68), then
+  8/8 with the paper added as the "LaTeX article (CM)" template: `untouched`
+  probes for two unnumbered bibliography entry titles (the numeric-marker
+  refsOk check cannot see an author-year list) and `processedOnPage` probes for
+  three prose fragments on p17. Final run: 8/8 PASS, the new template reporting
+  refs=64, proseOk, tableOk (412 marked), refsOk, headingClean. npm test 45/45
+  with a parser unit test for a bibliography crossing a page break under a
+  running head.
+- Corpus template labels renamed (test-only, same URLs). The letters said
+  nothing about what each paper exercises, so labels now name the TEMPLATE,
+  identified by MEASURING the PDFs (page box, body size, leading, column
+  extents, faces, boilerplate, heading style). The measurement also corrected
+  two wrong assumptions of the first pass:
+  - The three "two-column A/B/C" papers are ONE template, not three: all measure
+    612x792, 10pt body / 12pt leading, columns 54-296 + 318-560, Nimbus Roman +
+    Nimbus Sans, numbered headings. Same for D/E (acmart, 9pt/11,
+    Libertine/Biolinum). Labels therefore carry a template name plus a COVERAGE
+    VARIANT — `USENIX (baseline)` / `(code + algorithms)` / `(no cover page)`,
+    `ACM acmart (full)` / `(short)` — and the docs say plainly that those extra
+    papers are kept for CONTENT coverage, not template coverage.
+  - "arXiv preprint" is not a template: hosting says nothing about layout. Those
+    entries are named by their template — `IEEE journal` and `NeurIPS`, the two
+    documents that BOTH used to answer to the key `"arXiv"` (a different paper
+    per harness), plus R19's `LaTeX article (CM)`.
+  Final coverage: 5 templates over 9 papers — USENIX x3, ACM acmart x2, IEEEtran
+  in both its conference and journal modes, NeurIPS, plain LaTeX article.
+  TESTING.md carries the old→new mapping and the identifying evidence; earlier
+  entries in this file keep the letters they were written with.
+- Pre-existing and unrelated to R19, found by adding the template and fixed in
+  R20: that paper linked 0 CITATIONS ("⚠ no citations linked" — a warning, not a
+  failure), because its in-text citations are NARRATIVE author-year.
+- Two-column D reported 0 bolded / 0 masks / 0 cites in ONE intermediate run and
+  its normal 1987/369/72 in every run before and after, including with the same
+  code — a load flake in that run, not a classification change.
+- test/debug-fig.mjs and stylemodes.mjs re-run clean (italic preservation still
+  3/3 on the CMTI paper), and skipAlignedStarts now has a `__fxStarts` debug
+  hook like its sibling passes - it is what identified the (6.8)/(6.9) seed.
+
+## Round 20 (R20) - narrative author-year citations were never linked (user request)
+
+The R19 paper linked ZERO of its ~90 citations while its 64 references parsed
+perfectly, because it cites in the NARRATIVE author-year form (natbib
+`\citet`): the authors are running PROSE and only the year is bracketed —
+"shown in papers of Church [1936], Turing [1936], and Post [1936]", "which
+Vergis et al. [1986] have called", "the Invariance Thesis of van Emde Boas
+[1990]", "Benioff [1980, 1982a]". Neither existing pattern can see that form:
+NUMERIC_CITE matches 1-3-digit ENTRY NUMBERS (a 4-digit year never matches it,
+which is also why `[1936]` was not mistaken for entry 193), and
+AUTHOR_YEAR_CITE requires the author INSIDE the parentheses. Any paper written
+this way got no cards, no coloring and no hit-targets at all.
+- Fix: NARRATIVE_CITE in parser.mjs. The name run accepts initials
+  ("L. M. Adleman"), lowercase nobiliary particles ("van Emde Boas"), "et al."
+  and "and" — and nothing else, so prose cannot grow into it: any other
+  lowercase word ends the run and the year bracket must follow immediately.
+  Either bracket style is accepted, plus a year LIST inside one bracket
+  ("[1980, 1982a]" → two keys). The surname key is the LAST multi-letter
+  capitalized token, so initials are skipped; resolveCitation's
+  entry-text fallback handles the particle case ("Boas" → "P. van Emde Boas").
+- Two supporting fixes: findCitations now DROPS overlapping ranges (the
+  annotator wraps each range in the span markup, so two ranges over the same
+  characters would nest and corrupt it), and resolveCitation splits a key on
+  its LAST hyphen — "Ben-Or-1994" previously parsed as surname "Ben", year
+  "Or". NOT_A_SURNAME (Table/Figure/Section/Theorem/Lemma/…) guards both
+  author-year patterns now, not just the parenthetical one.
+
+### Verification
+- The paper goes from 0 to 97 citation hit-targets, `citeColored` from null to
+  the blue `rgb(11, 87, 208)`, and the "no citations linked" warning is gone.
+  A hit-target only exists when a card was built, and an UNRESOLVED author-year
+  key builds none — so all 97 resolved.
+- Clicked the cards on p2 and read them back: `Church-1936` →
+  "A. Church (1936), An unsolvable problem of elementary number theory";
+  `Turing-1936` → "A. M. Turing (1936), On computable numbers …";
+  `Post-1936` → "E. Post (1936), Finite combinatory processes";
+  `Vergis-1986` → "A. Vergis, K. Steiglitz, and B. Dickinson (1986) …";
+  `Emde-1990` → "P. van Emde Boas (1990), Machine models and simulations".
+- papers.mjs 8/8 with the other seven papers' citation counts UNCHANGED
+  (55/75/49/72/151/46/149) — no false positives on numeric or parenthetical
+  templates. npm test 49/49, including negative cases: "the Turing machine
+  [1936]", "see Table [1990]", "in Section [2020]" and "[1936, and beyond]"
+  must not match, while "as Shor [12]" stays a NUMERIC citation.
+
+### Also fixed here: refsOk could silently pass (guard weakness)
+`__fxRefCount` is set when the bibliography is PARSED, but the refs REGION (what
+protects it from processing, and what papers.mjs's refsOk reads) is applied a few
+async steps later. The wait loop broke on `refs > 0`, raced that gap, and an
+empty region made refsOk report `null` — a silent pass — on a DIFFERENT paper
+each run (A and C in one run, E in another; all three parse their bibliographies
+fine). Same shape as R17's vacuous italic check. papers.mjs now waits for
+`refPages > 0` as well, and a paper with a parsed bibliography but no region
+scores refsOk=false instead of null; `null` is left only for a document with no
+bibliography. All 8 papers now report refsOk=true with refPages 1-4.

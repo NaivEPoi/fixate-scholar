@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { browserPath, profileDir } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-const FILTER = POS[0] ?? "Two-column B";
+const FILTER = POS[0] ?? "USENIX (code + algorithms)";
 const PAGE = parseInt(POS[1] ?? "10", 10);
 const ZOOMV = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "1.25");
 const IDLE = parseInt(process.argv.slice(2).find((a) => a.startsWith("--idle="))?.slice(7) ?? "0", 10);
@@ -22,13 +22,13 @@ const BROWSER = process.argv.slice(2).find((a) => a.startsWith("--browser="))?.s
 const NEEDLE = JSON.stringify(process.argv.slice(2).find((a) => a.startsWith("--find="))?.slice(7) ?? "Consider two deviations");
 const PRESET = process.argv.includes("--preset"); // enable fx BEFORE the paper loads (the user's real flow)
 const PAPERS = {
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "Two-column C": "https://yilud.me/AFC_Attacks_NSDI.pdf",
-  "Two-column D": "https://yilud.me/Proteus-ccs24.pdf",
-  "Two-column E": "https://yilud.me/SIB-Auth.pdf",
-  "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
-  "arXiv": "https://arxiv.org/pdf/2502.04915",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (no cover page)": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "ACM acmart (full)": "https://yilud.me/Proteus-ccs24.pdf",
+  "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
+  "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
+  "IEEE journal": "https://arxiv.org/pdf/2502.04915",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",

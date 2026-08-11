@@ -16,11 +16,11 @@ import { browserPath } from "./lib/env.mjs";
 const BROWSER = process.argv.slice(2).find((a) => a.toLowerCase().endsWith(".exe")) ??
   browserPath("edge");
 const PAPERS = [
-  ["Two-column A", "https://yilud.me/usenixsecurity25-dong-yilu.pdf", [3, 5]],
-  ["Two-column B", "https://yilud.me/usenixsecurity24-tu.pdf", [4, 10]],
-  ["Two-column C", "https://yilud.me/AFC_Attacks_NSDI.pdf", [3, 5]],
-  ["Two-column D", "https://yilud.me/Proteus-ccs24.pdf", [3, 6]],
-  ["arXiv", "https://arxiv.org/pdf/1706.03762", [3, 10]],
+  ["USENIX (baseline)", "https://yilud.me/usenixsecurity25-dong-yilu.pdf", [3, 5]],
+  ["USENIX (code + algorithms)", "https://yilud.me/usenixsecurity24-tu.pdf", [4, 10]],
+  ["USENIX (no cover page)", "https://yilud.me/AFC_Attacks_NSDI.pdf", [3, 5]],
+  ["ACM acmart (full)", "https://yilud.me/Proteus-ccs24.pdf", [3, 6]],
+  ["NeurIPS", "https://arxiv.org/pdf/1706.03762", [3, 10]],
 ];
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");

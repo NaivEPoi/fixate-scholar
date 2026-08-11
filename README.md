@@ -39,7 +39,9 @@ code, fonts, or assets.
   right-click a link → **Open in FixateScholar**.
 - **References & citations** (academic papers): detects the bibliography, links in-text
   citations like `[12]`, `[1–3]`, locator forms like `[9, §5.2.2.1]` or `[26, Lemma 1]`,
-  and `(Smith et al., 2020)` to their entries, and shows a hover preview of the entry.
+  author-year `(Smith et al., 2020)`, and the narrative form where only the year is
+  bracketed (`Church [1936]`, `Vergis et al. [1986]`, `van Emde Boas [1990]`) to their
+  entries, and shows a hover preview of the entry.
   Citations and in-paper references (Figure/Table/Section/…) are marked in distinct,
   high-contrast colors. Clicking a citation opens a pinned, Google-Scholar-reader-style
   card — title linking to the paper, authors, abstract snippet, cited-by, and actions for
@@ -88,10 +90,10 @@ npm run package       # build a store-uploadable zip into dist/
 node test/e2e.mjs
 
 # full corpus + rendering-fidelity harnesses (12 real papers, both browsers):
-node test/papers.mjs                          # classification/color/link gate (must be 7/7 PASS)
-node test/diag-dividers.mjs "Two-column B"    # masks must never cover table rules/underlines
-node test/chrome-xray.mjs  "Two-column B" 10 --browser=chrome   # real-Chrome overlay-vs-canvas x-ray
-node test/matrix-fonts.mjs "Two-column B" 14 --browser=edge     # every fontMode × boldWeight combo
+node test/papers.mjs                          # classification/color/link gate (must be 8/8 PASS)
+node test/diag-dividers.mjs "USENIX (code + algorithms)"    # masks must never cover table rules/underlines
+node test/chrome-xray.mjs  "USENIX (code + algorithms)" 10 --browser=chrome   # real-Chrome overlay-vs-canvas x-ray
+node test/matrix-fonts.mjs "USENIX (code + algorithms)" 14 --browser=edge     # every fontMode × boldWeight combo
 node test/citeaudit.mjs  "<pdf-url>"          # citations: never jump to bib, always carded (jumpCites 0)
 node test/highlights.mjs "<pdf-url>"          # highlight over processed text + save-to-PDF round-trip
 node test/search.mjs "<pdf-url>" protocol     # find matches stay visible AND stay bolded

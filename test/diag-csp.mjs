@@ -14,15 +14,15 @@ import { fileURLToPath } from "node:url";
 
 import { browserPath } from "./lib/env.mjs";
 
-const FILTER = process.argv.slice(2).find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe")) ?? "arXiv";
+const FILTER = process.argv.slice(2).find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe")) ?? "NeurIPS";
 const DSF = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--dsf="))?.slice(6) ?? "0");
 const HEADFUL = process.argv.includes("--headful");
 const ZOOMV = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "0");
 const PG = parseInt(process.argv.slice(2).find((a) => a.startsWith("--page="))?.slice(7) ?? "1", 10);
 const IDLE = parseInt(process.argv.slice(2).find((a) => a.startsWith("--idle="))?.slice(7) ?? "0", 10);
 const PAPERS = {
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "arXiv": "https://arxiv.org/pdf/1706.03762",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
 };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });

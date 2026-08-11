@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { browserPath } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe"));
-const FILTER = POS.find((a) => !/^\d+$/.test(a)) ?? "arXiv";
+const FILTER = POS.find((a) => !/^\d+$/.test(a)) ?? "NeurIPS";
 const PAGE = parseInt(POS.find((a) => /^\d+$/.test(a)) ?? "10", 10);
 const DSF = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--dsf="))?.slice(6) ?? "0");
 const ZOOM = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "0"); // PDF.js currentScale
@@ -28,7 +28,7 @@ const ATTACH = parseInt(process.argv.slice(2).find((a) => a.startsWith("--attach
 // does not). Edge (same Chromium) allows loading the extension + opening the
 // viewer directly, unlike updated Chrome.
 const HEADFUL = process.argv.includes("--headful");
-const PAPERS = { "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf", "arXiv": "https://arxiv.org/pdf/1706.03762" };
+const PAPERS = { "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf", "NeurIPS": "https://arxiv.org/pdf/1706.03762" };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
 const PORT = ATTACH || 9551 + (process.pid % 120);

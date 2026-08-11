@@ -1,7 +1,35 @@
-// Multi-template smoke test: loads a set of real academic papers spanning a
-// range of common templates (two-column conference/journal layouts and an
-// arXiv preprint) in the extension viewer and reports per-paper typography and
-// reference-parsing results. Labels are template-agnostic by design.
+// Multi-template smoke test: loads a set of real academic papers spanning the
+// common publication templates in the extension viewer and reports per-paper
+// typography and reference-parsing results.
+//
+// FIVE templates, identified from the PDFs themselves (page box, body size,
+// leading, column extents, embedded fonts, publisher boilerplate, heading
+// style) — several are represented by more than one paper, and the parenthesized
+// part of a label is that paper's COVERAGE VARIANT, never a separate template:
+//   USENIX ........ 612x792, 10pt/12, cols 54-296 + 318-560, Nimbus Roman +
+//                   Nimbus Sans, numbered headings ("1 Introduction").
+//                   3 papers, one template — verified identical on every one of
+//                   those measurements. They differ in CONTENT: (baseline),
+//                   (code + algorithms) = the math/table/algorithm/appendix
+//                   workhorse most probes default to, and (no cover page) =
+//                   front matter starting on page 1 with no proceedings cover.
+//   ACM acmart .... 612x792, 9pt/11, same column grid, Linux Libertine body /
+//                   Biolinum headings, ACM Reference Format + CCS Concepts +
+//                   ISBN/DOI. 2 papers, one template: (full) and (short).
+//   IEEE .......... IEEEtran, cols 49-300 + 312-563 (a tighter 12pt gutter than
+//                   USENIX), "Abstract—" / "Index Terms—", roman-numeral
+//                   headings. The two entries are the class's two real MODES:
+//                   conference (no running head; this copy also carries a
+//                   stamp overlay) and journal ("Member, IEEE" byline, running
+//                   head with page number).
+//   NeurIPS ....... its own style file: single column, Times, text block
+//                   108-506, 10pt/11, NeurIPS proceedings footer.
+//   LaTeX article . plain single column, Computer Modern, block 116-496, running
+//                   heads, no publisher boilerplate.
+// Hosting is not a template: three of these are arXiv preprints, each typeset in
+// one of the above, so none is labelled "arXiv". Older entries in
+// REVIEW_FINDINGS.md / REVIEW_LOG.md use the previous letter labels; TESTING.md
+// carries the old→new mapping.
 //
 // Usage: node test/papers.mjs [path-to-browser]
 // (Regular Chrome ≥137 ignores --load-extension; use Edge/Chromium.)
@@ -21,9 +49,9 @@ const FILTER = process.argv[3] ?? "";
 // references-heavy page). Probe pages must be rendered by the refs/appendix
 // navigation, so they should sit on late pages.
 const PAPERS = [
-  { template: "Two-column A", url: "https://yilud.me/usenixsecurity25-dong-yilu.pdf" },
+  { template: "USENIX (baseline)", url: "https://yilud.me/usenixsecurity25-dong-yilu.pdf" },
   {
-    template: "Two-column B",
+    template: "USENIX (code + algorithms)",
     url: "https://yilud.me/usenixsecurity24-tu.pdf",
     untouched: ["Snapdragon 865", "learning not terminate", "Network Traces ("],
     // Early probes run before refs-page navigation (their pages may get
@@ -35,11 +63,25 @@ const PAPERS = [
     processedPage: 4,
     processedOnPage: ["primarily comprises three major", "consists of several Network"],
   },
-  { template: "Two-column C", url: "https://yilud.me/AFC_Attacks_NSDI.pdf" },
-  { template: "Two-column D", url: "https://yilud.me/Proteus-ccs24.pdf" },
-  { template: "Two-column E", url: "https://yilud.me/SIB-Auth.pdf" },
-  { template: "Two-column F (stamped)", url: "https://yilud.me/a33-dong%20stamped.pdf" },
-  { template: "arXiv preprint", url: "https://arxiv.org/pdf/2502.04915" },
+  { template: "USENIX (no cover page)", url: "https://yilud.me/AFC_Attacks_NSDI.pdf" },
+  { template: "ACM acmart (full)", url: "https://yilud.me/Proteus-ccs24.pdf" },
+  { template: "ACM acmart (short)", url: "https://yilud.me/SIB-Auth.pdf" },
+  { template: "IEEE conference (stamped)", url: "https://yilud.me/a33-dong%20stamped.pdf" },
+  { template: "IEEE journal", url: "https://arxiv.org/pdf/2502.04915" },
+  {
+    // Single-column journal template, Computer Modern, math-dense, with a
+    // running head on every page and an UNNUMBERED author-year bibliography
+    // spanning four pages (R19). Both probe sets below are regression guards:
+    // paragraphs broken by displayed equations were swept as tables, and the
+    // bibliography's continuation pages were emphasized as body prose.
+    template: "LaTeX article (CM)",
+    url: "https://arxiv.org/pdf/quant-ph/9508027",
+    // Bibliography entry titles: unnumbered, so the numeric-marker refsOk
+    // check cannot see them — probe them directly.
+    untouched: ["Oracle quantum computing", "Quantum circuit complexity"],
+    processedPage: 17,
+    processedOnPage: ["to reach the state", "that the above probability is", "where the sum is over all"],
+  },
 ];
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -153,12 +195,18 @@ try {
           masks: document.querySelectorAll('.fx-mask > div').length,
           cites: document.querySelectorAll('.fx-cite-hit').length,
           refs: globalThis.__fxRefCount ?? 0,
+          refPages: (globalThis.__fxRefPages ?? []).length,
           fxOn: !!document.querySelector('#viewerContainer.fx-on'),
         }))()`);
       } catch {
         continue;
       }
-      if (state.bolded > 100 && state.refs > 0 && state.cites > 0) break;
+      // refPages too: __fxRefCount is set when the bibliography is PARSED,
+      // while the refs REGION (which protects it from processing, and which the
+      // refsOk check below reads) is applied a few async steps later. Breaking
+      // on refs alone raced that gap, and an empty region made refsOk report
+      // `null` — a silent pass — on a different paper each run.
+      if (state.bolded > 100 && state.refs > 0 && state.cites > 0 && state.refPages > 0) break;
     }
 
     // Early ground-truth probes, before navigation virtualizes early pages.
@@ -279,9 +327,14 @@ try {
         // Bibliography region: render its pages; no span that looks like a
         // reference entry start ("[18] Name ...") may be processed. Then the
         // last page (appendices, when present) must still be processed.
-        out.refsOk = null;
+        // A paper with a parsed bibliography but NO region is a real failure,
+        // not an inapplicable check: nothing would keep the reference list from
+        // being emphasized. Only a document with no bibliography at all leaves
+        // refsOk null.
+        out.refsOk = (globalThis.__fxRefCount ?? 0) > 0 ? false : null;
         out.appendixOk = null;
         const refPages = globalThis.__fxRefPages ?? [];
+        out.refPages = refPages.length;
         const app = window.PDFViewerApplication;
         if (refPages.length) {
           for (const p of refPages.slice(0, 3)) {
@@ -367,16 +420,19 @@ try {
       state && (state.refs === 0 ? " ⚠ no references parsed" : state.cites === 0 ? " ⚠ no citations linked" : "");
     results.push({ paper, state, ok, warn });
     console.log(
-      `${ok ? "PASS" : "FAIL"}  ${paper.template.padEnd(16)} ${JSON.stringify(state)} checks=${JSON.stringify(checks)}${warn}`,
+      `${ok ? "PASS" : "FAIL"}  ${paper.template.padEnd(26)} ${JSON.stringify(state)} checks=${JSON.stringify(checks)}${warn}`,
     );
   }
 
+  // Column width from the longest label actually printed — template names vary
+  // in length, and a fixed width leaves the table ragged.
+  const w = Math.max(8, ...results.map((r) => r.paper.template.length));
   console.log("\nSummary:");
-  console.log("Template         | pages | bolded | masks | refs | cites");
+  console.log(`${"Template".padEnd(w)} | pages | bolded | masks | refs | cites`);
   for (const { paper, state, ok } of results) {
     const s = state ?? {};
     console.log(
-      `${paper.template.padEnd(16)} | ${String(s.pages ?? "-").padStart(5)} | ${String(s.bolded ?? "-").padStart(6)} | ${String(s.masks ?? "-").padStart(5)} | ${String(s.refs ?? "-").padStart(4)} | ${String(s.cites ?? "-").padStart(5)}${ok ? "" : "  << FAIL"}`,
+      `${paper.template.padEnd(w)} | ${String(s.pages ?? "-").padStart(5)} | ${String(s.bolded ?? "-").padStart(6)} | ${String(s.masks ?? "-").padStart(5)} | ${String(s.refs ?? "-").padStart(4)} | ${String(s.cites ?? "-").padStart(5)}${ok ? "" : "  << FAIL"}`,
     );
   }
 } catch (e) {

@@ -12,20 +12,20 @@ import { fileURLToPath } from "node:url";
 import { browserPath } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-const FILTER = POS[0] ?? "Two-column B";
+const FILTER = POS[0] ?? "USENIX (code + algorithms)";
 const PAGE = parseInt(POS[1] ?? "11", 10);
 const Y0 = parseInt(POS[2] ?? "0", 10);
 const Y1 = parseInt(POS[3] ?? "300", 10);
 const ZOOM = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "0");
 const FIND = process.argv.slice(2).find((a) => a.startsWith("--find="))?.slice(7); // capture band around this text instead of Y0/Y1
 const PAPERS = {
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
   "ACL": "https://yilud.me/2026.acl-long.2136.pdf",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
-  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
-  "Two-column C": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
+  "USENIX (no cover page)": "https://yilud.me/AFC_Attacks_NSDI.pdf",
 };
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });
