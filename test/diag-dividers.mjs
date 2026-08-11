@@ -200,5 +200,9 @@ try {
     for (const m of masked) console.log(`   ${m.dir === "h" ? "horiz y" : "vert x"}=${m.pos} len=${m.len} white=${Math.round(m.whiteFrac * 100)}% dark=${Math.round(m.darkFrac * 100)}%`);
   }
   console.log(`\nTOTAL: rules=${totalRules} masked=${totalMasked}`);
+  // masked MUST be 0 on every page (TESTING.md section 1). Exit non-zero so a
+  // corpus sweep driving this by exit code reports a real verdict rather than a
+  // PASS that only means the harness ran.
+  if (totalMasked > 0) { console.log(`FAIL masked=${totalMasked}`); process.exitCode = 1; }
 } catch (e) { console.error("divider diag error:", e.message); }
 finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
