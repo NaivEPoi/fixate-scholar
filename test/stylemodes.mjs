@@ -5,7 +5,10 @@
 //       page must actually contain italic-faced prose, which is established
 //       independently from PDF.js's own font objects, NOT from our markup —
 //       see italicOracle below. Neither corpus paper has any, so this check
-//       usually reports "n/a"; it only gates the run when it applies.
+//       usually reports "n/a"; it only gates the run when it applies. Papers
+//       that DO exercise it (R17): arxiv.org/pdf/quant-ph/9508027 page 2
+//       (Computer Modern CMTI) and arxiv.org/pdf/1207.0580 page 3 (URW Nimbus
+//       NimbusRomNo9L-ReguItal).
 //   (c) emphasisMode "none" + bundled font = font-only mode: spans processed,
 //       zero .fx-b;
 //   (d) emphasisMode "none" + original font = fully inert (nothing processed,
@@ -24,10 +27,10 @@ import { browserPath, extensionDir } from "./lib/env.mjs";
 
 // Same templates as the sibling harnesses (papers.mjs, diag-drag.mjs).
 const PAPERS = {
-  "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
-  "arXiv": "https://arxiv.org/pdf/1706.03762",
+  "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
 };
-const DEFAULT_PAPER = "Two-column B";
+const DEFAULT_PAPER = "USENIX (code + algorithms)";
 const DEFAULT_PAGE = 14;
 const ARG0 = process.argv[2];
 const URL0 = !ARG0 ? PAPERS[DEFAULT_PAPER] : (PAPERS[ARG0] ?? ARG0);
@@ -90,7 +93,10 @@ const waitProcessed = async () => {
 
 // Independent oracle for check (b): which of the page's text items are set in
 // an italic face, per PDF.js's OWN resolved font objects (pdfPage.commonObjs),
-// not per anything the engine wrote. Mirrors engine.mjs ITALIC_FONT. Without
+// not per anything the engine wrote. The regex below is a copy of engine.mjs
+// ITALIC_FONT and must be kept in sync with it (it is inlined into a page
+// expression, so it cannot be imported); test/unit/fontclass.test.mjs asserts
+// the engine's own copy against real face names. Without
 // this the italic assertion can't tell "the face swap flattened italics" from
 // "this page has no italics", so a corpus with no italic prose would make the
 // check silently vacuous — which is exactly what it was.
@@ -98,7 +104,7 @@ const italicOracle = async () => await ev(`(async () => {
   const pv = window.PDFViewerApplication.pdfViewer.getPageView(${PAGE - 1});
   const div = pv?.textLayer?.div;
   if (!div || !pv.pdfPage) return null;
-  const ITALIC = /Italic|italic|Oblique|Slanted|cmti|cmmi|-It(?![a-z])|Libertine\\w*I(?![a-zA-Z])/;
+  const ITALIC = /Italic|italic|Oblique|Slanted|Ital(?![a-z])|CMTI|CMMI|cmti|cmmi|-It(?![a-z])|Libertine\\w*I(?![a-zA-Z])/;
   // Same item<->div pairing engine.mjs #pagePairs uses, so indices line up.
   const divs = pv.textLayer?.highlighter?.textDivs;
   if (!divs?.length) return { zipped: false, why: "no textDivs" };
