@@ -158,6 +158,14 @@ try {
   let kb = 0, tl = 0, cp = 0, sk = 0, sb = 0;
   for (const r of res) { kb += r.keepBad; tl += r.tableLeak; cp += r.capProse.length; sk += r.skipRun; sb += r.skipBody.length; }
   console.log(`TOTALS keepFallback=${kb} tableLeak=${tl} capProse=${cp} skipPara=${sk} skipBody=${sb}\n`);
+  // The four hard criteria must be 0 (TESTING.md section 1); skipBody is a
+  // standing baseline (1-9 per page across the whole corpus, pre-existing) so it
+  // is reported but does not fail. Exit non-zero so a corpus sweep driving this
+  // by exit code cannot report "PASS" without having checked anything.
+  if (kb || tl || cp || sk) {
+    console.log(`FAIL keepFallback=${kb} tableLeak=${tl} capProse=${cp} skipPara=${sk}`);
+    process.exitCode = 1;
+  }
   for (const r of res) {
     console.log(`p${r.page}: keepBad=${r.keepBad} tableLeak=${r.tableLeak} capProse=${r.capProse.length} skipRun=${r.skipRun} skipBody=${r.skipBody.length}`);
     if (r.keepBad) console.log(`   keep:`, JSON.stringify(r.keepSample));

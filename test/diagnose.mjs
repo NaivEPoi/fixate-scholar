@@ -312,6 +312,16 @@ const url = URL_OVERRIDE ?? PAPERS[FILTER];
     console.log(`${String(r.page).padStart(4)} | ${String(r.done).padStart(4)} | ${String(r.masks).padStart(4)} | ${String(r.whiteout).padStart(8)} | ${String(r.peek).padStart(3)}(${String(r.peekMax).padStart(4)}) | ${String(r.fontBad).padStart(7)} | ${String(r.skipRun).padStart(7)} | ${String(r.citeGapN).padStart(3)},${String(r.citeGapMax).padStart(5)} | ${String(r.refColored).padStart(3)}/${String(r.refHits).padStart(3)} | ${String(r.selBad).padStart(6)}${flag}`);
   }
   console.log("\nTOTALS:", JSON.stringify(totals));
+  // FAIL on the metrics that have hard targets, so a sweep driving this harness
+  // by exit code (local/sweep-private.mjs) reports something real. Without this
+  // the harness only failed when it CRASHED, and a corpus sweep of it returned
+  // "28/28 PASS" while never having checked anything — the always-passes twin of
+  // a check that reads zero because it is blind. peek and skipRun stay advisory
+  // (no hard target; peek scales with how much prose is legitimately processed).
+  if (totals.whiteout || totals.fontBad || totals.selBad) {
+    console.log(`FAIL whiteout=${totals.whiteout} fontBad=${totals.fontBad} selBad=${totals.selBad}`);
+    process.exitCode = 1;
+  }
   // Show a few concrete samples for the worst pages.
   for (const r of perPage) {
     if (r.whiteout) console.log(`  p${r.page} whiteout:`, JSON.stringify(r.whiteoutSamples));
