@@ -26,7 +26,30 @@ const PAPERS = {
   "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
   "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
   "USENIX (no cover page)": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "ACM acmart (full)": "https://yilud.me/Proteus-ccs24.pdf",
+  "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
+  "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
+  "IEEE journal": "https://arxiv.org/pdf/2502.04915",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
+  "LaTeX article (CM)": "https://arxiv.org/pdf/quant-ph/9508027",
 };
+// --url= runs any PDF the viewer can fetch (the private corpus is served on
+// localhost under neutral aliases); --label= names the output file.
+const URL_OVERRIDE = process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6);
+const LABEL = process.argv.slice(2).find((a) => a.startsWith("--label="))?.slice(8);
+const TARGET = URL_OVERRIDE ?? PAPERS[FILTER];
+// An unknown template used to sail on and open the viewer with file=undefined.
+// Nothing loaded, and the failure surfaced much later as "cannot read properties
+// of undefined (reading 'canvas')" - which reads as a page-rendering problem, not
+// a missing map entry. Half this map was absent after the corpus was renamed, and
+// three wrong diagnoses came out of that before the map was checked.
+if (!TARGET) {
+  console.error(`shot-region2: unknown template ${JSON.stringify(FILTER)}`);
+  console.error(`  templates: ${Object.keys(PAPERS).join(", ")}`);
+  console.error(`  or: --url=<pdf url> [--label=name]`);
+  process.exit(2);
+}
+const OUTNAME = (LABEL ?? FILTER).replace(/\W+/g, "_");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });
 const EXT = join(root, "extension");
@@ -56,7 +79,7 @@ try {
   for (let i = 0; i < 50 && !version; i++) { try { version = await http("/json/version"); } catch { await sleep(300); } }
   let extId = null;
   for (let i = 0; i < 60 && !extId; i++) { const t = await http("/json/list"); const sw = t.find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs")); if (sw) extId = new URL(sw.url).hostname; else await sleep(300); }
-  const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(PAPERS[FILTER])}`, "PUT");
+  const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(TARGET)}`, "PUT");
   ws = new WebSocket(tab.webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
   await send("Page.enable"); await sleep(2500);
@@ -106,11 +129,24 @@ try {
     return { x: cr.left + ${band.x0} * s, y: cr.top + ${band.y0} * s, width: (${band.x1} - ${band.x0}) * s, height: (${band.y1} - ${band.y0}) * s, scale: 2 };
   })()`);
   const shotOn = await send("Page.captureScreenshot", { format: "png", clip });
-  writeFileSync(join(root, "test", "out", `region-${FILTER.replace(/\W+/g, "")}-p${PAGE}-fxon.png`), Buffer.from(shotOn.data, "base64"));
+  writeFileSync(join(root, "test", "out", `region-${OUTNAME}-p${PAGE}-fxon.png`), Buffer.from(shotOn.data, "base64"));
   await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:false},r))`);
-  await sleep(2500);
+  // WAIT for the restore to be observable, do not just sleep. Restoring is
+  // idle-chunked, and at a high zoom on a dense page 2.5s was not enough: the
+  // "fx off" shot came back byte-identical to the fx-on one, emphasis included.
+  // A matched pair that is two copies of the same state shows no difference no
+  // matter what is wrong, so every comparison made with it would have "passed".
+  let restored = false;
+  for (let i = 0; i < 40; i++) {
+    restored = await ev(`(() => document.querySelectorAll("[data-fx-done], .fx-b").length === 0 &&
+      !document.querySelector("#viewerContainer.fx-on"))()`).catch(() => false);
+    if (restored) break;
+    await sleep(500);
+  }
+  if (!restored) throw new Error("reading mode never restored — the fx-off half would be a duplicate of fx-on, not a control");
+  await sleep(1200); // let the canvas repaint settle after the restore
   const shotOff = await send("Page.captureScreenshot", { format: "png", clip });
-  writeFileSync(join(root, "test", "out", `region-${FILTER.replace(/\W+/g, "")}-p${PAGE}-fxoff.png`), Buffer.from(shotOff.data, "base64"));
-  console.log(`saved region-${FILTER.replace(/\W+/g, "")}-p${PAGE}-{fxon,fxoff}.png  (canvas y ${band.y0}-${band.y1} x ${band.x0}-${band.x1}${ZOOM ? " zoom " + ZOOM : ""})`);
+  writeFileSync(join(root, "test", "out", `region-${OUTNAME}-p${PAGE}-fxoff.png`), Buffer.from(shotOff.data, "base64"));
+  console.log(`saved region-${OUTNAME}-p${PAGE}-{fxon,fxoff}.png  (canvas y ${band.y0}-${band.y1} x ${band.x0}-${band.x1}${ZOOM ? " zoom " + ZOOM : ""})`);
 } catch (e) { console.error("shot-region2 error:", e.message); }
 finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
