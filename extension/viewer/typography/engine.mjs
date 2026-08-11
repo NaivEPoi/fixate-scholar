@@ -2061,8 +2061,12 @@ export class TypographyEngine {
       if (!furnitureBoxes || !item?.transform) return false;
       const x = item.transform[4];
       const y = item.transform[5];
+      // No extra slack here — findFurniture already pads each box by 2 units,
+      // and a second helping let the span NEXT TO a narrow box count as inside
+      // it. The refs region can afford the slack because its boxes are whole
+      // reference lines; a head's box can be one word wide.
       return furnitureBoxes.some(
-        (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2,
+        (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 && x <= b.x1,
       );
     };
     if (globalThis.__fxDebug) globalThis.__fxCurPage = pageNumber;
