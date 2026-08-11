@@ -61,10 +61,47 @@ export function findContentStart(lines) {
  * geometry (page, x..endX, y, h), so callers can leave exactly this region
  * untouched while appendices after it are still processed.
  */
+/** Normalized line text for running-head matching: digits (the page number)
+ *  dropped, whitespace collapsed, case-folded. */
+const normHead = (t) =>
+  t.replace(/\d+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Running heads and feet — page furniture, not content.
+ *
+ * A bare page number, or a short line whose text (page number aside) repeats on
+ * three or more pages: "P. W. SHOR", "FACTORING WITH A QUANTUM COMPUTER", a
+ * journal's volume line. Conference templates print none, which is why this
+ * never came up on the corpus; a journal/preprint template prints them on EVERY
+ * page, including the bibliography's continuation pages, and sets them at BODY
+ * size while the bibliography itself is set smaller. findReferencesBody's
+ * heading-size test then read the next page's running head as the start of a new
+ * section and cut the bibliography off at the page break (Shor quant-ph/9508027:
+ * 26 body lines and 9 entries instead of ~60, and the reference pages after the
+ * first were emphasized as body prose).
+ */
+function runningHeadTexts(lines) {
+  const pages = new Map();
+  for (const l of lines) {
+    const t = normHead(l.text ?? "");
+    if (t.length < 3 || t.length > 60) continue;
+    if (!pages.has(t)) pages.set(t, new Set());
+    pages.get(t).add(l.page);
+  }
+  const out = new Set();
+  for (const [t, ps] of pages) if (ps.size >= 3) out.add(t);
+  return out;
+}
+
 export function findReferencesBody(lines) {
   const start = findHeadingIndex(lines);
   if (start === -1) return { heading: null, body: [] };
   const heading = lines[start];
+  const heads = runningHeadTexts(lines);
+  const isFurniture = (l) => {
+    const t = (l.text ?? "").trim();
+    return /^\d{1,4}$/.test(t) || heads.has(normHead(t));
+  };
   // A following section may not say "appendix" (some templates use bare
   // "B Title" appendix headings), so also stop at any heading-sized line: at
   // least as large as the References heading itself and clearly larger than
@@ -73,6 +110,9 @@ export function findReferencesBody(lines) {
   const body = [];
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i];
+    // Furniture is neither a section boundary nor bibliography content: step
+    // over it so a page break inside the reference list does not end the body.
+    if (isFurniture(line)) continue;
     if (SECTION_AFTER.test(line.text) || HEADING.test(line.text)) break;
     // Heading-SIZED alone is not enough: a stray oversized glyph (a lone
     // quotation mark split onto its own line by the font-size line rule)
@@ -230,6 +270,28 @@ const NUMERIC_CITE =
   /\[(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)(?:\s*,\s*(?:§|¶|pp?\.|[A-Z])[^\]]{0,55})?\]/g;
 const AUTHOR_YEAR_CITE = /\(([^()]{2,120}?(?:19|20)\d{2}[a-z]?(?:\s*[;,]\s*(?:p+\.\s*[\d–-]+|[^();]*?(?:19|20)\d{2}[a-z]?))*)\)/g;
 
+// NARRATIVE author-year (natbib \citet): the author names are running PROSE and
+// only the year is bracketed — "Church [1936]", "Vergis et al. [1986]",
+// "van Emde Boas [1990]", "Benioff [1980, 1982a]", "Bennett (1973)". Neither
+// pattern above can see these: NUMERIC_CITE takes 1-3-digit entry numbers (a
+// 4-digit year never matches), and AUTHOR_YEAR_CITE needs the AUTHOR inside the
+// parentheses. On a paper written this way nothing was linked at all (Shor
+// quant-ph/9508027 — 0 citations, while its 64 references parsed fine).
+//
+// The name run accepts initials ("L. M. Adleman"), lowercase nobiliary
+// particles ("van Emde Boas"), "et al." and "and" — but nothing else, so
+// ordinary prose cannot grow into it: a lowercase word ends the run, and the
+// year bracket must follow immediately.
+const CITE_NAME = "\\p{Lu}[\\p{L}'’-]*\\.?";
+const CITE_PARTICLE = "(?:van|von|de[nrl]?|del|della|di|da|ter|ten)";
+const CITE_YEARS = "(?:19|20)\\d{2}[a-z]?(?:\\s*[,;]\\s*(?:19|20)\\d{2}[a-z]?)*";
+const NARRATIVE_CITE = new RegExp(
+  `((?:${CITE_PARTICLE}\\s+)?${CITE_NAME}(?:\\s+(?:et\\s+al\\.?|and|&|${CITE_PARTICLE}|${CITE_NAME}))*)\\s*[[(](${CITE_YEARS})[\\])]`,
+  "gu",
+);
+// Words that look like a surname but introduce a NUMBER, not an author.
+const NOT_A_SURNAME = /^(Table|Figure|Fig|Section|Sec|Eq|Equation|Chapter|Appendix|Algorithm|Theorem|Lemma|Definition|Part|Step|Line|No|Vol|Ref)$/i;
+
 /**
  * Find citation-like substrings in a text-layer span's text.
  * @returns Array<{start, end, keys: string[]}> keys match entry labels.
@@ -248,14 +310,40 @@ export function findCitations(text) {
     for (const part of m[1].split(";")) {
       const year = YEAR.exec(part)?.[0];
       const surname = /\p{Lu}[\p{L}'’-]+/u.exec(part)?.[0];
-      if (year && surname && !/^(Table|Figure|Fig|Section|Eq|Equation)$/i.test(surname)) {
+      if (year && surname && !NOT_A_SURNAME.test(surname)) {
         keys.push(`${surname}-${year}`);
       }
     }
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
   }
+  for (const m of text.matchAll(NARRATIVE_CITE)) {
+    // The surname is the LAST multi-letter capitalized token of the run, so
+    // initials are skipped ("L. M. Adleman" → Adleman) and a particle name
+    // keeps its head word ("van Emde Boas" → Boas, which resolveCitation still
+    // matches against the entry text).
+    const surname = (m[1].match(/\p{Lu}[\p{L}'’-]{1,}/gu) ?? []).at(-1);
+    if (!surname || NOT_A_SURNAME.test(surname)) continue;
+    const keys = m[2]
+      .split(/[,;]/)
+      .map((y) => y.trim())
+      .filter(Boolean)
+      .map((y) => `${surname}-${y}`);
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
+  }
   out.sort((a, b) => a.start - b.start);
-  return out;
+  // Drop overlaps: the annotator wraps each range in the span's text, so two
+  // ranges covering the same characters would nest and corrupt the markup.
+  // Earliest (then longest) wins.
+  const kept = [];
+  for (const c of out) {
+    const prev = kept.at(-1);
+    if (prev && c.start < prev.end) {
+      if (c.end - c.start > prev.end - prev.start) kept[kept.length - 1] = c;
+      continue;
+    }
+    kept.push(c);
+  }
+  return kept;
 }
 
 function expandNumericList(list) {
@@ -281,7 +369,11 @@ export function resolveCitation(keys, entries) {
       const e = entries.find((x) => x.number === parseInt(key, 10));
       if (e) found.push(e);
     } else {
-      const [surname, year] = key.split("-");
+      // Split on the LAST hyphen — a hyphenated surname ("Ben-Or-1994") would
+      // otherwise yield surname "Ben", year "Or".
+      const cut = key.lastIndexOf("-");
+      const surname = key.slice(0, cut);
+      const year = key.slice(cut + 1);
       const e =
         entries.find((x) => x.surname === surname && x.year === year) ||
         entries.find(
