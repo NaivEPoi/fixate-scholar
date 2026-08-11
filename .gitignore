@@ -6,3 +6,11 @@ dist/
 test/fixtures/*.pdf
 test/out/
 scratch_*
+
+# Local-only agent notes and tooling. CLAUDE.md records the private verification
+# corpus (paths, how to sweep it) and MUST NOT be committed — nothing about those
+# documents may enter this repo. Kept out via .git/info/exclude as well, so
+# editing this file cannot expose them.
+CLAUDE.md
+CLAUDE.local.md
+local/
