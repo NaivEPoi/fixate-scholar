@@ -140,7 +140,10 @@ try {
   let extId = null;
   for (let i = 0; i < 40 && !extId; i++) { const t = await http("/json/list"); const sw = t.find((x) => x.url.includes("service-worker")); if (sw) extId = new URL(sw.url).hostname; else await sleep(250); }
   console.log(`Browser: ${version.Browser}  paper: ${FILTER}\n`);
-  const url = PAPERS[FILTER];
+  // --url=: any PDF the viewer can fetch (the private corpus is served on
+  // localhost under neutral aliases). See the note in diagnose.mjs.
+  const URL_OVERRIDE = process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6);
+  const url = URL_OVERRIDE ?? PAPERS[FILTER];
   const viewerUrl = `chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(url)}`;
   const tab = await http(`/json/new?${viewerUrl}`, "PUT");
   ws = new WebSocket(tab.webSocketDebuggerUrl);
