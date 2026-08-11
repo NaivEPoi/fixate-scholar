@@ -92,7 +92,10 @@ const PROBE = `(() => {
     for (const s of leaves) {
       const t = s.textContent.trim();
       if (/^(?:Figure|Fig\\.?|Table|Tab\\.?|Algorithm|Section)\\s*\\d+[a-z]?\\s+[a-zà-ÿ]/.test(t)) {
-        if (!s.dataset.fxDone) capProse.push({ t: t.slice(0, 40), done: !!s.dataset.fxDone, table: !!s.dataset.fxTable });
+        // Report the SKIP REASON (data-fx-why, set by #classifyBlocks under
+        // __fxDebug): without it a capProse hit says only "some pass claimed
+        // this line", which is not enough to fix anything.
+        if (!s.dataset.fxDone) capProse.push({ t: t.slice(0, 40), table: !!s.dataset.fxTable, why: s.dataset.fxWhy || null });
       }
     }
 
@@ -109,10 +112,30 @@ const PROBE = `(() => {
       skipBody.push({ t: txt.slice(0, 46), why: s.dataset.fxWhy || null, lw });
     }
 
-    // skipPara: contiguous unprocessed body-prose lines (exclude refs pages).
+    // skipPara: contiguous unprocessed body-prose lines (exclude refs pages AND
+    // front matter). Front matter — the title/authors/affiliations/emails block
+    // above the Abstract — is skipped BY DESIGN, so counting it as lost prose
+    // made this criterion report a failure on every paper whose author block
+    // runs 3+ lines (acmart short: 2 runs on page 1, "…@psu.edu Carleton
+    // University"). It is cut here the same way the bibliography is: by the
+    // engine's own document-level contentStart.
     let skipRun = 0, skipSamples = [];
-    if (!refPages.has(page)) {
-      const body = leaves.filter((s) => { const r = s.getBoundingClientRect(); const ry = (r.top + r.bottom) / 2 - fxRect.top; return ry > fxRect.height * 0.07 && ry < fxRect.height * 0.93; });
+    const cs = globalThis.__fxContentStart || null;
+    if (!refPages.has(page) && !(cs && page < cs.page)) {
+      const frontCut = cs && page === cs.page
+        ? (() => {
+            // contentStart is in PDF user space; the probe works in CSS px.
+            const vp = pv.viewport;
+            const [, top] = vp.convertToViewportPoint(0, cs.y + (cs.h || 9) * 0.6);
+            return fxRect.top + top;
+          })()
+        : null;
+      const body = leaves.filter((s) => {
+        const r = s.getBoundingClientRect();
+        if (frontCut != null && r.bottom <= frontCut) return false;
+        const ry = (r.top + r.bottom) / 2 - fxRect.top;
+        return ry > fxRect.height * 0.07 && ry < fxRect.height * 0.93;
+      });
       const byLine = new Map();
       for (const s of body) { const r = s.getBoundingClientRect(); const key = Math.round((r.top - fxRect.top) / 4); if (!byLine.has(key)) byLine.set(key, []); byLine.get(key).push(s); }
       let cur = 0, sample = null;

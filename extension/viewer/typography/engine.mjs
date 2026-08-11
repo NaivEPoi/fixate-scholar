@@ -86,6 +86,23 @@ export const BOLD_FONT = /Bold|bold|CMBX|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])
 // unrecognized (a case variant, a name spelled without the expected hyphen).
 export const ITALIC_FONT = /Italic|italic|Oblique|Slanted|Ital(?![a-z])|CMTI|CMMI|cmti|cmmi|-It(?![a-z])|Libertine\w*I(?![a-zA-Z])/;
 
+/**
+ * Whole lowercase WORDS in a string — the prose signal used by the rule-bounded
+ * zone exemption (the paragraph that legitimately sits between two framed
+ * listings stays emphasized).
+ *
+ * A word must begin at a boundary and end at one, which is what separates prose
+ * from code: `/[a-zà-ÿ]{2,}/g` counted the letter runs INSIDE identifiers, so a
+ * query line of the shape `RETURN x.name AS label, y.name AS owner,` scored as
+ * high as a sentence, and a lone camelCase continuation line (`itemCount`)
+ * scored 2 ("item" + "ount") and chained off it as that paragraph's tail — the
+ * span was then processed inside a framed listing, the only remaining table leak
+ * in either corpus. Here such a token scores 0 and `parseName ( id )` scores 1.
+ */
+export function proseWordCount(s) {
+  return (s.match(/(?:^|[\s(“"'])[a-zà-ÿ]{2,}(?=[\s.,;:)\]”"']|$)/g) || []).length;
+}
+
 // Bundled reading fonts (SIL OFL, vendored by scripts/fetch-pdfjs.mjs);
 // @font-face rules live in overlay.css. These ship real 700 weights, so
 // emphasis uses true bold instead of the original-mode hairline stroke.
@@ -1229,6 +1246,53 @@ export class TypographyEngine {
         dbg(its[j].div, "runin");
       }
     };
+    // The measure of a column band: the right edge its full lines reach. Taken
+    // as the widest line end in the band (justified text makes them all equal),
+    // so a line ending at the measure is a FULL line and a short line is not.
+    const measureCache = new Map();
+    const bandMeasure = (bx0, bx1) => {
+      if (measureCache.has(bx0)) return measureCache.get(bx0);
+      let m = 0;
+      for (const ln of lines)
+        for (const p of ln.items) {
+          const x = p.item.transform[4];
+          const end = x + (p.item.width ?? 0);
+          // Wholly inside the band: an item that STARTS in this column and runs
+          // across the gutter (a full-width figure label, a spanning table row)
+          // would otherwise set the measure to the far edge of the page, and no
+          // line in the column would ever look full.
+          if (x < bx0 || end > bx1 + 2) continue;
+          m = Math.max(m, end);
+        }
+      measureCache.set(bx0, m);
+      return m;
+    };
+    /**
+     * The heading part of a NUMBERED RUN-IN heading line, or null when the line
+     * is an ordinary standalone heading (the caller then skips the whole band).
+     *
+     * A run-in heading is followed by body prose ON ITS OWN LINE, so the line
+     * runs to the column's measure; the split point is the heading's terminal
+     * period. The tail must read as prose (2+ lowercase words) — otherwise this
+     * is a heading that merely happens to end in a period.
+     */
+    const runinHeadRun = (band, bx0, bx1) => {
+      if (band.length < 2) return null;
+      const lineEnd = Math.max(
+        ...band.map((p) => p.item.transform[4] + (p.item.width ?? 0)),
+      );
+      const measure = bandMeasure(bx0, bx1);
+      if (!measure || lineEnd < measure - (band[0].item.height || 8) * 0.5) return null;
+      for (let j = 0; j < band.length - 1; j++) {
+        const t = band[j].item.str.trim();
+        // The number alone ("4.2.1.") also ends in a period — only a piece
+        // carrying letters can be the end of the heading's TITLE.
+        if (!/\.$/.test(t) || !/[A-Za-zÀ-ɏ]/.test(t)) continue;
+        const tail = band.slice(j + 1);
+        if (lowerWords(tail) >= 2) return band.slice(0, j + 1);
+      }
+      return null;
+    };
     // Styled (often UNDERLINED) italic run-in lead: "Establishing
     // privacy-preserving mutual authentication …:" / "P1: Preventing identity
     // exposure:" opening a paragraph. Processing it would erase the underline
@@ -1287,7 +1351,18 @@ export class TypographyEngine {
           for (const p of band) { skip.add(p.div); dbg(p.div, "line-algo"); }
         } else if (HEAD_LEAD.test(leadStr)) {
           if (lowerWords(band) <= 3) {
-            for (const p of band) {
+            // A NUMBERED RUN-IN heading shares its line with the paragraph it
+            // opens ("2.3.1. Latency overhead.  Table 5 shows the measured …").
+            // HEAD_LEAD fires on the line's lead, and skipping the
+            // whole band took the sentence after the heading's period with it —
+            // an in-text reference at a line start left unemphasized (the
+            // capProse criterion). Skip only the heading run in that case:
+            // qualify by the LINE FILLING ITS COLUMN'S MEASURE (a standalone
+            // heading stops well short of it) and cut after the first
+            // period-terminated item that carries letters, provided real prose
+            // follows on the same line.
+            const head = runinHeadRun(band, bx0, bx1) ?? band;
+            for (const p of head) {
               skip.add(p.div);
               dbg(p.div, "line-head");
               // An italic-led heading line is often UNDERLINED ("P1:
@@ -1368,13 +1443,36 @@ export class TypographyEngine {
     // so the whole table stays on the canvas. Body above/below the table is
     // outside the box; justified prose forms no region.
     if (tableLines.length >= 2) {
-      const rowsT = tableLines.slice().sort((a, b) => b.y - a.y); // top → bottom
+      // Regions are built PER COLUMN. A table spanning the gutter (a full-width
+      // "list of tested devices" table above two columns of text) used to give
+      // one page-wide box, and the box then chained downward through whatever
+      // table rows either column offered — the other column's prose was inside
+      // it and got swept. On USENIX (code + algorithms) p19 that was the whole
+      // page below Table 8: the right column's Table 9 rows and the left
+      // column's Algorithm 2 lines kept one region growing from y710 to y76,
+      // and six lines of appendix prose between them ("…extracted by the
+      // Wp-method as TCEs (line 19)…") were skipped as table-region. Clipping
+      // each row to its own column band keeps a full-width table covered (both
+      // bands see its rows) while a single column's rows can only ever extend
+      // that column's own region.
+      const bands = twoColumn
+        ? [[vx0, centerX], [centerX, vx0 + pageW]]
+        : [[vx0, vx0 + pageW]];
       const regions = [];
-      for (const t of rowsT) {
-        const reg = regions.find((r) =>
-          r.yBot - t.y >= -1 && r.yBot - t.y < Math.max(t.h, r.h) * 4 && t.x0 < r.x1 + 2 && t.x1 > r.x0 - 2);
-        if (reg) { reg.yBot = Math.min(reg.yBot, t.y); reg.x0 = Math.min(reg.x0, t.x0); reg.x1 = Math.max(reg.x1, t.x1); reg.h = Math.max(reg.h, t.h); reg.n++; }
-        else regions.push({ yTop: t.y, yBot: t.y, x0: t.x0, x1: t.x1, h: t.h, n: 1 });
+      for (const [b0, b1] of bands) {
+        const rowsT = tableLines
+          // Clip to the band; a row barely brushing it (a cell's last glyph
+          // crossing the gutter) contributes nothing and must not seed a region.
+          .map((t) => ({ ...t, x0: Math.max(t.x0, b0), x1: Math.min(t.x1, b1) }))
+          .filter((t) => t.x1 - t.x0 >= Math.min(12, (b1 - b0) * 0.1))
+          .sort((a, b) => b.y - a.y); // top → bottom
+        for (const t of rowsT) {
+          const reg = regions.find((r) =>
+            r.band === b0 &&
+            r.yBot - t.y >= -1 && r.yBot - t.y < Math.max(t.h, r.h) * 4 && t.x0 < r.x1 + 2 && t.x1 > r.x0 - 2);
+          if (reg) { reg.yBot = Math.min(reg.yBot, t.y); reg.x0 = Math.min(reg.x0, t.x0); reg.x1 = Math.max(reg.x1, t.x1); reg.h = Math.max(reg.h, t.h); reg.n++; }
+          else regions.push({ yTop: t.y, yBot: t.y, x0: t.x0, x1: t.x1, h: t.h, n: 1, band: b0 });
+        }
       }
       // Absorb the table's TAIL: rows of multi-line bottom cells sit below the
       // last CONFIRMED (gap-qualified) row — their sub-lines carry only one
@@ -2492,7 +2590,7 @@ export class TypographyEngine {
               const group = byLine.get(key);
               const [zi, lineKey] = key.split(":").map(Number);
               const text = group.map((g) => g.pr.div.textContent).join(" ");
-              const lw = (text.match(/[a-zà-ÿ]{2,}/g) || []).length;
+              const lw = proseWordCount(text);
               const gx0 = Math.min(...group.map((g) => g.r.left));
               const gx1 = Math.max(...group.map((g) => g.r.right));
               const z = group[0].z;
@@ -2501,11 +2599,18 @@ export class TypographyEngine {
                 (lw >= 4 && gx1 - gx0 >= (z.x1 - z.x0) * 0.55) ||
                 (lw >= 2 && prev != null && lineKey - prev <= 5);
               if (exemptLine) lastExempt.set(zi, lineKey);
+              if (globalThis.__fxDebug) {
+                (globalThis.__fxZoneLines ??= []).push({
+                  page: pageNumber, zi, lineKey, lw, exempt: exemptLine, prev: prev ?? null,
+                  w: Math.round(gx1 - gx0), zw: Math.round(z.x1 - z.x0),
+                  t: text.slice(0, 40),
+                }); // test introspection
+              }
               for (const g of group) {
                 if (exemptLine) {
                   const t = g.pr.div.textContent.trim();
-                  const slw = (t.match(/[a-zà-ÿ]{2,}/g) || []).length;
-                  if (slw >= 2 || t.length >= 12) continue;
+                  const slw = proseWordCount(t);
+                  if (slw >= 2 || (slw >= 1 && t.length >= 12)) continue;
                 }
                 zoneDrops.add(g.pr.div);
               }

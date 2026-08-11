@@ -1263,3 +1263,141 @@ fine). Same shape as R17's vacuous italic check. papers.mjs now waits for
 `refPages > 0` as well, and a paper with a parsed bibliography but no region
 scores refsOk=false instead of null; `null` is left only for a document with no
 bibliography. All 8 papers now report refsOk=true with refPages 1-4.
+
+## Round 22 (R22) - the reference list must never be emphasized; the three standing prose-vs-structure defects (user request)
+
+User: "do not bold text on references and fix the three pre-existing
+prose-versus-structure defects" - the three R21 left open, each confirmed
+pre-existing there and deliberately deferred out of a release being verified.
+
+### R22-1 - reference lines that repeat get emphasized (the reference-list ask)
+The bibliography is left exactly as the author set it via per-line boxes built
+from findReferencesBody's body lines - so a bibliography line that never REACHES
+that list gets no box, and is emphasized like body prose. R19-2 introduced
+exactly such a hole: furniture (a bare page number, or a short line whose
+digit-stripped text repeats on 3+ pages) is stepped over, and repetition alone
+also describes lines of the reference list itself. On ACL's five-page
+bibliography, "Software Engineering" (an italic journal name ending an entry) and
+"pages 1251-1263. IEEE." (digits stripped -> "pages . IEEE.") each appear on
+three or more pages: 13 spans across four pages were emphasized inside the
+reference list.
+- Fix: furniture must live in the MARGINS. A running head or foot is the
+  topmost or bottommost line on its page (tolerance half a line height - a full
+  line height lets the last entry line of a reference page count as a foot,
+  which is the distinction being made). Only margin lines can establish a
+  repeated-head text, and only a margin line can be treated as one.
+- Result: ACL 13 -> 0 emphasized reference spans, body 440 -> 462 lines, entries
+  unchanged at 91. Other bibliographies gained the lines they had been losing
+  the same way: USENIX (no cover) 277 -> 280, NeurIPS 114 -> 119, Shor 150 ->
+  157, UC-Scheme 215 -> 216 - with entry counts identical (67/40/64/70), i.e.
+  the lines were being dropped from a list that had already been grouped.
+- The R19-2 case is untouched: those running heads ARE the top line of their
+  pages. Unit test added for each direction.
+
+### R22-2 - a full-width table welded both columns into one page-wide region
+table-region groups confirmed table rows into a bounding box and skips
+everything inside it. Growth was unbounded horizontally: a table SPANNING the
+gutter yields a page-wide box, and the box's downward chain then continues
+through whatever table rows either column offers. On USENIX (code + algorithms)
+p19 that swallowed the page below the full-width Table 8 - the right column's
+Table 9 rows and the left column's Algorithm 2 lines kept one region growing from
+y710 to y76 (n=244) - and the six lines of appendix prose between them were
+skipped as table-region ("extracted by the Wp-method as TCEs (line 19)",
+"quently, previously learned CEs are also utilized", "until the termination
+condition is reached", "first pass of learning all implementation FSMs", "of
+model refinement is performed to ensure", "are utilized for prior implementations
+as well").
+- Fix: build regions PER COLUMN BAND, each row clipped to the band (a row
+  brushing the gutter with under 10% of the band contributes nothing). A
+  full-width table stays covered - both bands see its rows - while a single
+  column's rows can only ever extend that column's own region.
+- Result: p19 skipBody 6 -> 0, paper total 30 -> 24, all four hard audit criteria
+  still 0, tables.mjs offenders still 0.
+
+### R22-3 - a numbered RUN-IN heading took its paragraph's first sentence with it
+The line-level heading pass skips a whole column band when the line's lead
+matches HEAD_LEAD and the band has <= 3 lowercase words. A numbered run-in
+heading shares its line with the paragraph it opens - the shape is "2.3.1.
+Latency overhead.  Table 5 shows the measured ..." - and a title's last word
+carries a trailing period, so it does not count as a lowercase word: the line
+squeezed under the bar at exactly 3 and the sentence after the heading lost its
+emphasis. (The document is in the private corpus; the example is synthetic, the
+geometry is not.) That was the capProse
+finding - an in-text reference at a line start left unprocessed - and the only
+capProse hit in either corpus.
+- Fix: runinHeadRun. Qualify by the line FILLING ITS COLUMN'S MEASURE (a
+  standalone heading stops well short of it; the measure counts only items that
+  do not cross the gutter, or one full-width figure label would set it to the
+  far page edge and no line would ever look full), then cut after the first
+  period-terminated item that carries LETTERS - the number alone ("2.3.1.") ends
+  in a period too - provided real prose follows on the same line.
+- Result: capProse 1 -> 0 on that document, skipBody unchanged at 32.
+
+### R22-4 - a code line inside a framed listing read as prose between frames
+The rule-zone backstop leaves everything centered between chained canvas rules
+on the canvas, exempting a full-width line of >= 4 lowercase words (a paragraph
+between two stacked framed listings) and, within it, spans that are themselves
+prose-sized. Both counts used a bare letter-run match, which counts runs INSIDE
+identifiers: a Cypher line ("RETURN s.name AS software, c.name AS component,")
+scored 4 and became an exempt "prose" line, and a lone `threatCount`
+continuation line scored 2 ("threat" + "ount") and chained off it as a paragraph
+tail. That span was processed inside a framed listing on a 16-zone page - the
+last table leak in either corpus.
+- Fix: proseWordCount - whole lowercase WORDS, bounded at both ends. The Cypher
+  line's identifiers no longer count as sentence words, `threatCount` scores 0,
+  and the >= 12-char per-span escape now also requires at least one real word.
+  test/tables.mjs's oracle mirrors it, as it did before.
+- Result: that page's offenders 1 -> 0; the genuine prose-between-frames case on
+  the same page still exempt (a 9-word sentence and its 4-word tail line).
+
+### New harness: test/refbold.mjs
+papers.mjs's refsOk only looks for "[18] Name ..." entry OPENERS, so R22-1 was
+invisible to the whole gate - continuation lines, unnumbered bibliographies and
+missing boxes all pass it. refbold recomputes the bibliography's EXTENT from the
+parser (heading + body lines, grouped per page and COLUMN, x bounds from the
+5th/95th percentile so one extractor-merged line cannot stretch a box across the
+page) and reports every processed span inside it. It checks the OUTCOME, not the
+mechanism: a line the box list never received still falls inside its column's
+box.
+- Per-column matters: a per-page y band called the prose beside a mid-column
+  References heading "bibliography" and produced 82/31/100/45/47 false hits on
+  five papers. Fixed before any of them was believed.
+- Negative control: with the R22-1 fix reverted, the harness reports exactly the
+  13 ACL spans again; with it, 0.
+
+### Two harness repairs found while verifying
+1. audit's capProse printed no skip reason, so a hit said only "some pass claimed
+   this line" - not enough to fix anything. It now reports `data-fx-why`, which
+   is how R22-3 was traced to the line-head pass in one run.
+2. audit's skipPara excluded the bibliography pages but NOT front matter. The
+   title/authors/affiliations block above the Abstract is skipped by design, so
+   every paper with a 3-line author block failed this criterion (acmart short: 2
+   runs on page 1). Confirmed PRE-EXISTING by control (identical with the engine
+   reverted). It is now cut by the engine's own contentStart, like the
+   bibliography.
+
+### Verification
+- npm test 50/50, including new unit tests in BOTH directions: a phrase repeated
+  inside the bibliography stays in the body, while a real running head and a page
+  number at the foot stay out.
+- papers.mjs 8/8, reference counts unchanged (63/58/67/73/33/23/68/64).
+- tables.mjs: 14/14 public papers, 0 offenders. audit: 14/14 public, all four
+  hard criteria 0. diag-dividers over seven papers: 695 rules, masked=0.
+- refbold: 14/14 public, 28/28 private - and every one of those 28 printed a
+  TOTAL line, i.e. a bibliography was found and actually checked (a document
+  without one prints "no bibliography found", which would be a SKIP).
+- citeaudit on ACL: unresolved=0, refCount=91 - the parser change did not disturb
+  citation resolution.
+- diagnose on the p19 paper: whiteout/fontBad/selBad 0, peek 438 vs 437 and
+  skipRun 15 vs 15 against a reverted control - the six newly processed spans
+  cost one unit of mask overhang and nothing else.
+- Matched fx-on/fx-off pairs at 2.5-3x (`shot-region2`): the p19 prose shows
+  leading syllables ("ex|tracted by| the| Wp-met|hod as| TCEs (line 19), and|
+  conse-") at identical glyph positions; the run-in heading's sentence is
+  emphasized with the heading's own terminal period left alone; the ACL
+  bibliography region is pixel-identical between fx-on and fx-off, and its
+  pre-fix control is not.
+- Private sweeps of tables and audit were still running when this landed; the
+  numbers above are public plus the private refbold sweep and the two private
+  documents the defects came from (offenders 1 -> 0, capProse 1 -> 0, skipBody
+  unchanged). NOT tagged: step 4 of the gate is still targeted, not a fan-out.

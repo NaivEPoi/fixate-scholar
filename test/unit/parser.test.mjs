@@ -172,6 +172,52 @@ test("a running head at a page break does not end the bibliography", () => {
   assert.equal(entries.length, 3);
 });
 
+test("a phrase repeated inside the bibliography is not furniture", () => {
+  // Furniture is recognized by repetition, so a line that recurs in the
+  // reference list itself qualified — an italic journal name ending an entry, or
+  // a page range whose digits normalize away ("pages 1251–1263. IEEE." →
+  // "pages . IEEE."). Those lines were dropped from the body, so they got no
+  // box in the region the engine leaves alone and were EMPHASIZED inside the
+  // reference list (ACL, five reference pages, three of them affected).
+  // A running head is the first or last line on its page; these are neither.
+  const head = (p) => ({ text: "SOME JOURNAL, VOL. 9", x: 50, y: 740, page: p, h: 10, column: 0 });
+  const page = (texts, p, startY) =>
+    texts.map((t, i) => ({
+      text: typeof t === "object" ? t.text : t,
+      x: typeof t === "object" ? 62 : 50,
+      y: startY - i * 12,
+      page: p,
+      h: 8,
+      column: 0,
+    }));
+  const foot = (n, p) => ({ text: String(n), x: 300, y: 60, page: p, h: 8, column: 0 });
+  const doc = [
+    head(10), head(11), head(12),
+    foot(10, 10), foot(11, 11), foot(12, 12),
+    { text: "References", x: 50, y: 600, page: 10, h: 8, column: 0 },
+    ...page([
+      "[1] A. Author. An entry with a title long enough to pass the length gate. In Trans.",
+      { text: "Software Engineering" },
+      { text: "pages 100–200. IEEE." },
+    ], 10, 580),
+    ...page([
+      "[2] B. Author. Another entry with a title long enough to pass the gate. In Trans.",
+      { text: "Software Engineering" },
+      { text: "pages 300–400. IEEE." },
+    ], 11, 700),
+    ...page([
+      "[3] C. Author. A third entry with a title long enough to pass the gate. In Trans.",
+      { text: "Software Engineering" },
+      { text: "pages 500–600. IEEE." },
+    ], 12, 700),
+  ];
+  const { body } = findReferencesBody(doc);
+  assert.equal(body.filter((l) => l.text === "Software Engineering").length, 3);
+  assert.equal(body.filter((l) => /^pages /.test(l.text)).length, 3);
+  assert.ok(!body.some((l) => /SOME JOURNAL/.test(l.text)), "the real running head stays out");
+  assert.ok(!body.some((l) => /^1[012]$/.test(l.text)), "the page number at the foot stays out");
+});
+
 test("stops at appendix", () => {
   const doc = [
     ...NUMERIC_DOC,

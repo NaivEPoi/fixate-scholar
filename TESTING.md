@@ -94,7 +94,13 @@ node test/audit.mjs "<paper>"           # classification issue classes — keepF
 node test/diagnose.mjs "<paper>"        # whiteout MUST be 0; watch the peek total for regressions
 node test/tables.mjs "<paper>"          # NO processed span inside a rule-bounded table zone (exit 1 on offenders)
 node test/skipline.mjs "<paper>"        # unprocessed PROSE lines — only front matter/refs/headings may appear
+node test/refbold.mjs "<paper>"         # NO processed span inside the bibliography (exit 1 on offenders)
 ```
+
+**If you touched `parser.mjs`'s reference-body detection or the extractor, run
+`refbold.mjs`** — `papers.mjs`'s `refsOk` only looks for `[18] Name …` entry
+OPENERS, so continuation lines, unnumbered bibliographies and lines the box list
+never received all pass it.
 
 ---
 
@@ -111,7 +117,8 @@ node test/skipline.mjs "<paper>"        # unprocessed PROSE lines — only front
 | `node test/diag-dividers.mjs <paper>` | table rules / box frames / underlines / separators vs masks (canvas dark-run scan + composite whiteness) | `masked=0` on every page |
 | `node test/chrome-xray.mjs <paper> <page> [--browser=chrome\|edge] [--preset] [--zoom=N] [--find="text"] [--idle=S] [--shotonly] [--outline]` | REAL-Chrome/Edge captures: normal + x-ray + micro-marker shots, per-span width forensics, idle drift | visual; forensic `sx≈1`, `live == item.width×scale` |
 | `node test/matrix-fonts.mjs <paper> <page> [--browser=…]` | every fontMode × boldWeight combo live: width residual vs PDF item widths, jams, overlaps, computed `.fx-b` style | residual ≤ ~0.2px; jams 0; overlaps 0; weight/stroke ramps monotonically |
-| `node test/tables.mjs <paper> [--pages=A-B]` | no processed text inside tables: horizontal canvas rules chained (≥3 rules, ≥70% overlap, gap ≤15% page height) bound table interiors; flags `span[data-fx-done]` centered inside | `TOTAL offenders: 0` (exit 1 otherwise). Isolated rule PAIRS (underlined run-in leads) form no zone; full-width prose lines + their paragraph continuations are exempt. KNOWN NOISE: UC-Scheme p17 flags 3 prose lines around side-by-side screenshot frames (full-width zones make column-width prose fail the width test) — verified correct rendering; confirm any NEW flag with a capture before touching the engine |
+| `node test/tables.mjs <paper> [--pages=A-B]` | no processed text inside tables: horizontal canvas rules chained (≥3 rules, ≥70% overlap, gap ≤15% page height) bound table interiors; flags `span[data-fx-done]` centered inside | `TOTAL offenders: 0` (exit 1 otherwise). Isolated rule PAIRS (underlined run-in leads) form no zone; full-width prose lines + their paragraph continuations are exempt. The former KNOWN NOISE (UC-Scheme p17, 3 prose lines around side-by-side screenshot frames) no longer reproduces — p17 forms 52 zones and reports 0 offenders both before and after the R22 word-count change, and `skipline` reports 0 unprocessed prose lines there. Confirm any NEW flag with a capture before touching the engine |
+| `node test/refbold.mjs [paper] [--url= --label=]` | no emphasis ANYWHERE in the reference list. Recomputes the bibliography's extent from the parser — heading + body lines grouped per page and COLUMN, x bounds from the 5th/95th percentile of the column's line extents — and flags every `span[data-fx-done]` whose baseline falls inside. Checks the outcome, not the box mechanism: a reference line the box list never received still falls inside its column's box | `TOTAL emphasized bibliography spans: 0` (exit 1 otherwise). A document with no bibliography prints "no bibliography found" and exits 0 — that is a SKIP, not a pass, so read the line. Per-column grouping is essential: a per-page y band reads the prose beside a mid-column References heading as bibliography (82/31/100/45/47 false hits on five papers before it was fixed) |
 | `node test/skipline.mjs <paper> [--pages=A-B]` | per column, prose lines (≥4 lowercase words) with no processed/kept span — catches single skipped lines that diagnose's ≥3-line runs miss (contentStart cut, script-window bleed) | only intentional skips: title-page front matter, bibliography pages, heading wrap lines |
 | `node test/figures.mjs <paper> [--pages=A-B]` | no processed text inside figures: the region between a "Figure N:" caption and the nearest running-prose line above it (per column, paragraph tails absorbed) is figure interior; flags `span[data-fx-done]` centered inside | `TOTAL offenders: 0` (exit 1 otherwise). Caption-below-figure layouts only; a figure text box spanning ≥72% of the column truncates the region (sensitivity loss, not a false flag) |
 | `node test/citecolor.mjs <url> [--pages=A-B]` | every [N] citation inside a processed span carries an .fx-cite-c coloring wrap (numeric citations color even when the bibliography entry did not resolve). The `<url>` arg is REQUIRED — without it the viewer opens `?file=undefined` and the run false-greens as `cites=0 colored=0` | `TOTAL cites=N colored=N` with N > 0 |
@@ -270,8 +277,13 @@ All write to `test/out/`. Add `--headful` (where supported) for real-DPI.
 
 - **Classification** (did we process the right blocks?):
   `node test/audit.mjs <paper>` → keepFallback / tableLeak / capProse / skipPara /
-  skipBody (each should be ~0; skipBody prints `data-fx-why` reasons).
+  skipBody (each should be ~0; skipBody and capProse print `data-fx-why` reasons).
+  skipPara excludes the bibliography pages AND front matter (the author block
+  above the Abstract is skipped by design — counted, it failed every paper with a
+  3-line author block).
   Per-page deep dive: `node test/probe.mjs <paper> <page> <query> [--shot]`.
+- **Bibliography emphasis**: `node test/refbold.mjs <paper> [--url=]` → 0 processed
+  spans inside the reference list, per page and column.
 - **Baseline alignment**:
   `node test/diag-baseline.mjs <paper> <page> [--headful] [--zoom=1.25] [--dsf=1.75]`
   → `medBotErr` in the aligned range (~−2 to −3); per-span `topErr/botErr`.
@@ -471,6 +483,20 @@ Lessons from the F1–F16 investigations. Each of these cost hours; don't re-pay
   catch what still leaks.
 - Block grouping can MERGE a paragraph with figure-label rows (size tolerance
   0.3): count table-cell gaps only on body-height rows (`r.h ≥ b.h×0.8`).
+- **A structure box must never outgrow its COLUMN.** A table spanning the gutter
+  gave table-region a page-wide box, and its downward chain then continued
+  through whatever rows either column offered — a full-width table plus a table
+  on one side and a listing on the other swallowed a whole page of prose (R22).
+  Regions are per column band; the same hazard applies to any pass that grows a
+  box from row geometry.
+- **"Lowercase words" must mean whole WORDS, not letter runs.** A bare
+  `[a-zà-ÿ]{2,}` match counts the runs inside identifiers, so a query line
+  (`RETURN x.name AS label, …`) scores like a sentence and a lone camelCase token
+  scores 2 — which is how a framed listing's interior passed as prose between
+  frames (R22). Use `proseWordCount`; the `tables.mjs` oracle mirrors it.
+- **A run-in heading shares its line with body prose.** Whole-band skips keyed on
+  a line's LEAD (`HEAD_LEAD`, caption leads, algo leads) must ask whether the
+  line runs to the column's measure before claiming all of it (R22).
 - A wrapped body line can START with "Figure 4." — a caption lead is vetoed
   when the line above it in the same band is running prose at normal leading.
 - In gutter-split passes, a row with NO gutter gap may live entirely in the
@@ -499,6 +525,12 @@ Lessons from the F1–F16 investigations. Each of these cost hours; don't re-pay
 - The user sees the FIRST processing pass at THEIR zoom/DPI with fx enabled
   BEFORE the document loads — reproduce with `--preset` and headful when a
   report doesn't reproduce headless.
+- **An oracle whose criterion never fires proves nothing.** `refsOk` only looks
+  for `[18] Name …` entry openers, so 13 emphasized reference lines across four
+  pages passed the entire gate (R22-1); `refbold.mjs` was written to check the
+  outcome instead. When a criterion greens out, ask what shape of defect it
+  cannot express.
 - After ANY engine change, the full gate is: `npm test` → `papers.mjs` (8/8) →
   `diagnose` whiteout 0 → 12-paper `diag-dividers` sweep masked 0 → and, if
-  fonts/weights were touched, `matrix-fonts` in both browsers.
+  fonts/weights were touched, `matrix-fonts` in both browsers. Reference-body or
+  extractor changes add `refbold.mjs`.
