@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseReferences,
   findReferencesBody,
+  findFurniture,
   guessTitle,
   findCitations,
   findInternalRefs,
@@ -216,6 +217,59 @@ test("a phrase repeated inside the bibliography is not furniture", () => {
   assert.equal(body.filter((l) => /^pages /.test(l.text)).length, 3);
   assert.ok(!body.some((l) => /SOME JOURNAL/.test(l.text)), "the real running head stays out");
   assert.ok(!body.some((l) => /^1[012]$/.test(l.text)), "the page number at the foot stays out");
+});
+
+test("findFurniture: a MULTI-LINE running head is furniture, body prose is not", () => {
+  // The engine's margin cut (outer 6% of the page) reaches a one-line head. A
+  // three-line title block repeated at the top of every odd page hangs below it
+  // at or under body size, so it was emphasized as body prose — and being
+  // processed, a canvas glyph peeked past its mask — one word rendered with a
+  // doubled letter. Repetition across pages is what identifies it.
+  const head = (text, p, y) => ({ text, x: 50, y, page: p, h: 7, column: 0, endX: 300 });
+  const body = (text, p, y) => ({ text, x: 50, y, page: p, h: 9, column: 0, endX: 500 });
+  const doc = [];
+  for (const p of [3, 5, 7]) {
+    doc.push(head("A Long Paper Title That Repeats:", p, 731));
+    doc.push(head("Second Line Of The Same Title Block", p, 723));
+    doc.push(head("Third Line Of The Same Title Block", p, 714));
+    doc.push({ text: String(p), x: 300, y: 60, page: p, h: 7, column: 0, endX: 310 });
+    // Unique body prose, some of it inside the top band.
+    doc.push(body(`Body prose on page ${p} that appears nowhere else at all.`, p, 700));
+    doc.push(body(`More prose on page ${p} lower down the page, also unique.`, p, 400));
+  }
+  const boxes = findFurniture(doc);
+  assert.deepEqual([...boxes.keys()].sort((a, b) => a - b), [3, 5, 7]);
+  // three head lines + the page number
+  assert.equal(boxes.get(5).length, 4);
+  const covers = (page, y) => boxes.get(page).some((b) => y >= b.y0 && y <= b.y1);
+  assert.ok(covers(5, 731) && covers(5, 723) && covers(5, 714), "every head line is covered");
+  assert.ok(covers(5, 60), "the page number at the foot is covered");
+  assert.ok(!covers(5, 700), "body prose in the top band is NOT furniture");
+  assert.ok(!covers(5, 400), "body prose mid-page is NOT furniture");
+});
+
+test("findFurniture: nothing repeats ⇒ no furniture", () => {
+  const words = ["Introduction", "Background", "Evaluation"];
+  const doc = [];
+  for (const p of [1, 2, 3]) {
+    doc.push({ text: `${words[p - 1]} of the system`, x: 50, y: 730, page: p, h: 9, column: 0, endX: 300 });
+    doc.push({ text: `Body text about ${words[p - 1]} with enough words to be prose.`, x: 50, y: 400, page: p, h: 9, column: 0, endX: 500 });
+  }
+  assert.equal(findFurniture(doc).size, 0);
+});
+
+test("findFurniture: a SHORT head carrying its page number still counts", () => {
+  // The digit-stripped ledger exists for this shape ("Journal Name, Vol. 5, No.
+  // 3" / "12  ACM Trans. Something"). It is limited to short lines because two
+  // different BODY lines separated only by a number would otherwise match.
+  const doc = [];
+  for (const p of [4, 5, 6]) {
+    doc.push({ text: `Journal of Things, Vol. 9, No. ${p}`, x: 50, y: 740, page: p, h: 8, column: 0, endX: 280 });
+    doc.push({ text: `A long body sentence on page ${p} that differs only by its number, which is why the exact ledger is what governs a line this long.`, x: 50, y: 700, page: p, h: 9, column: 0, endX: 520 });
+  }
+  const boxes = findFurniture(doc);
+  assert.deepEqual([...boxes.keys()].sort((a, b) => a - b), [4, 5, 6]);
+  assert.equal(boxes.get(5).length, 1, "only the head, not the long body line");
 });
 
 test("stops at appendix", () => {

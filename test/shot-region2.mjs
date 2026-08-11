@@ -18,9 +18,15 @@ const Y0 = parseInt(POS[2] ?? "0", 10);
 const Y1 = parseInt(POS[3] ?? "300", 10);
 const ZOOM = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "0");
 const FIND = process.argv.slice(2).find((a) => a.startsWith("--find="))?.slice(7); // capture band around this text instead of Y0/Y1
+// Extra backing px above and below the --find band. The bare band is one line,
+// which is right for judging a single word and too little for a paragraph: the
+// defects the release gate looks for (baseline drift, jammed spacing, one span in
+// the wrong face, a whited-out word) are only visible against their neighbours.
+const PAD = parseInt(process.argv.slice(2).find((a) => a.startsWith("--pad="))?.slice(6) ?? "0", 10);
 const PAPERS = {
   "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
   "ACL": "https://yilud.me/2026.acl-long.2136.pdf",
+  "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
@@ -66,9 +72,20 @@ const browser = spawn(browserPath("edge"), [
 ], { stdio: "ignore" });
 
 let ws, nextId = 0;
+// Every CDP call is bounded. Without this a wedged target (a page that never
+// finishes rendering, a screenshot that never returns) hangs forever with no
+// output, and a corpus loop driving this harness simply stops — which reads as
+// "still running" rather than "this document failed".
 const send = (method, params = {}) => new Promise((resolve, reject) => {
   const id = ++nextId;
-  const h = (e) => { const m = JSON.parse(e.data); if (m.id === id) { ws.removeEventListener("message", h); m.error ? reject(new Error(m.error.message)) : resolve(m.result); } };
+  const timer = setTimeout(() => reject(new Error(`${method}: timed out after 60s`)), 60000);
+  const h = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.id !== id) return;
+    clearTimeout(timer);
+    ws.removeEventListener("message", h);
+    m.error ? reject(new Error(m.error.message)) : resolve(m.result);
+  };
   ws.addEventListener("message", h);
   ws.send(JSON.stringify({ id, method, params }));
 });
@@ -113,7 +130,13 @@ try {
       const hit = [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.includes(find));
       if (!hit) return { error: "text not found post-scroll" };
       const r = hit.getBoundingClientRect();
-      return { y0: Math.max(0, Math.round((r.top - cr.top - 12) * syb)), y1: Math.round((r.bottom - cr.top + 16) * syb), x0: Math.max(0, Math.round((r.left - cr.left - 24) * syb)), x1: Math.round((r.right - cr.left + 60) * syb) };
+      const pad = ${PAD};
+      return {
+        y0: Math.max(0, Math.round((r.top - cr.top - 12) * syb) - pad),
+        y1: Math.min(canvas.height, Math.round((r.bottom - cr.top + 16) * syb) + pad),
+        x0: Math.max(0, Math.round((r.left - cr.left - 24) * syb)),
+        x1: Math.round((r.right - cr.left + 60) * syb),
+      };
     }
     return { y0: ${Y0}, y1: ${Y1}, x0: 0, x1: canvas.width };
   })()`);
@@ -148,5 +171,11 @@ try {
   const shotOff = await send("Page.captureScreenshot", { format: "png", clip });
   writeFileSync(join(root, "test", "out", `region-${OUTNAME}-p${PAGE}-fxoff.png`), Buffer.from(shotOff.data, "base64"));
   console.log(`saved region-${OUTNAME}-p${PAGE}-{fxon,fxoff}.png  (canvas y ${band.y0}-${band.y1} x ${band.x0}-${band.x1}${ZOOM ? " zoom " + ZOOM : ""})`);
-} catch (e) { console.error("shot-region2 error:", e.message); }
+} catch (e) {
+  // A capture that never happened must not read as success: this runs inside
+  // corpus sweeps, where exit 0 with no file is indistinguishable from a clean
+  // inspection.
+  console.error("shot-region2 error:", e.message);
+  process.exitCode = 1;
+}
 finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }

@@ -128,7 +128,7 @@ never received all pass it.
 | `node test/stylemodes.mjs [url\|template] [page]` | settings surface: dynamic+bundled font bolds AND preserves italic originals; emphasisMode “none” renders zero .fx-b with spans in the bundled face; none+original leaves the page pristine. Defaults to a body page of a template when given no args | `dynOk=true fontOnlyOk=true inertOk=true`, and `italicPreserved` either `true` or `n/a`. `n/a` means the page has NO italic-faced processed spans, so that check could not run — it is not a pass. No corpus paper has an italic TEXT face, so `n/a` is the normal result |
 | `node test/diag-drag.mjs <paper> [--tag=] [--trace]` | REAL mouse-drag selection (R16 guard): the drag selects something; PDF.js's `.endOfContent` stays in the `.textLayer` MID-DRAG (its pointerup reset hides the bug, so it is sampled during the drag); every fully-covered span's text is in the selection (non-bold tails not lost); the copy event carries it; emphasis uses a property `::selection` honors. `--trace` prints the selection after each mouse step | `<paper>: PASS` (exit 1 otherwise). Dispatches at INTEGER viewport coords — fractional ones do not register as a drag at all (caret placed, never extended), which mimics a product bug |
 | `node test/dump-stream.mjs <paper> <page> <left\|right\|full> [filter]` | the engine's-eye line/stream geometry (debug `#classifyBlocks`) | inspection |
-| `node test/shot-region2.mjs <paper> <page> [--zoom=] [--find=]` | fx-on vs fx-off matched captures of one region | images should differ only by emphasis |
+| `node test/shot-region2.mjs <paper> <page> [--zoom=] [--find=] [--pad=N] [--url= --label=]` | fx-on vs fx-off matched captures of one region. `--find` bands one LINE; add `--pad=150` for a paragraph-sized region — the release gate's defect list (baseline drift, jammed spacing, a span in the wrong face, a whited-out word) needs neighbours to judge against. Every CDP call is bounded at 60s and a failed capture exits 1, so a corpus loop cannot silently stall or report a capture that never happened | images should differ only by emphasis |
 
 Every harness with a PAPERS map also accepts `--url=<any PDF URL>` (e.g. a
 local file:// path) for ad-hoc documents — used to verify against private
@@ -497,6 +497,15 @@ Lessons from the F1–F16 investigations. Each of these cost hours; don't re-pay
 - **A run-in heading shares its line with body prose.** Whole-band skips keyed on
   a line's LEAD (`HEAD_LEAD`, caption leads, algo leads) must ask whether the
   line runs to the column's measure before claiming all of it (R22).
+- **Page furniture is not always one line.** The 6% margin band assumes a
+  one-line running head; a repeated three-line title block hangs below it at body
+  size and reads as prose to every per-page rule. Repetition across pages is the
+  only signal, so it lives in `parser.mjs findFurniture` (document-wide) and
+  reaches the engine as a region, like the bibliography (R22).
+- **A table HEADER row looks exactly like the prose the rule-zone exemption is
+  for**: wordy, full-width, inside a rule chain. What separates them is distance
+  from the rules — a header hugs the rule above it (4px against a 15px line),
+  a paragraph between frames clears it by 1.5–3 line heights (R22).
 - A wrapped body line can START with "Figure 4." — a caption lead is vetoed
   when the line above it in the same band is running prose at normal leading.
 - In gutter-split passes, a row with NO gutter gap may live entirely in the

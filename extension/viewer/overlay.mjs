@@ -113,6 +113,8 @@ references.onContentStart = (pos) =>
   engine.setContentStart(pos).then(() => references.reannotateRendered());
 references.onBodyHeight = (h) =>
   engine.setBodyHeight(h).then(() => references.reannotateRendered());
+references.onFurniture = (boxes) =>
+  engine.setFurniture(boxes).then(() => references.reannotateRendered());
 
 // PDF.js runs an idle cleanup 30s after the last render activity
 // (CLEANUP_TIMEOUT in pdf_rendering_queue.js) whose handler calls

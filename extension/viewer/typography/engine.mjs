@@ -130,6 +130,7 @@ export class TypographyEngine {
   #wordStart = new WeakMap(); // span -> running word index it was emphasized from
   #pending = new Map(); // pageNumber -> cancel flag holder
   #refsBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — bibliography region
+  #furnitureBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — running heads/feet
   #contentStart = null; // { page, y, h } — the Abstract heading; front matter above it
   #bodyHeight = null; // document-wide body-text height (from the refs extractor)
   #ascentCache = new Map(); // fontFamily -> browser ascent ratio (baseline align)
@@ -174,6 +175,23 @@ export class TypographyEngine {
   setRefsRegion(boxesByPage) {
     this.#refsBoxes = boxesByPage;
     globalThis.__fxRefPages = boxesByPage ? [...boxesByPage.keys()] : []; // test introspection
+    if (!this.#enabled || !boxesByPage?.size) return Promise.resolve();
+    const promises = [];
+    this.#eachRenderedPage((pv) => {
+      if (boxesByPage.has(pv.id)) promises.push(this.#processPage(pv));
+    });
+    return Promise.all(promises);
+  }
+
+  /** Running heads and feet occupy exactly these line boxes (PDF coordinates) —
+   *  page furniture, never emphasized. The margin cut in the candidate filter
+   *  covers the common ONE-LINE head; a multi-line head (a title block repeated
+   *  at the top of every odd page) hangs below that band at body size or under,
+   *  and only a document-wide repetition pass can recognize it. Re-processes the
+   *  affected pages, as the refs region does. */
+  setFurniture(boxesByPage) {
+    this.#furnitureBoxes = boxesByPage;
+    globalThis.__fxFurniturePages = boxesByPage ? [...boxesByPage.keys()] : []; // test introspection
     if (!this.#enabled || !boxesByPage?.size) return Promise.resolve();
     const promises = [];
     this.#eachRenderedPage((pv) => {
@@ -2038,6 +2056,15 @@ export class TypographyEngine {
         (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2,
       );
     };
+    const furnitureBoxes = this.#furnitureBoxes?.get(pageNumber);
+    const inFurniture = (item) => {
+      if (!furnitureBoxes || !item?.transform) return false;
+      const x = item.transform[4];
+      const y = item.transform[5];
+      return furnitureBoxes.some(
+        (b) => y >= b.y0 && y <= b.y1 && x >= b.x0 - 2 && x <= b.x1 + 2,
+      );
+    };
     if (globalThis.__fxDebug) globalThis.__fxCurPage = pageNumber;
     const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath);
     for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
@@ -2177,6 +2204,15 @@ export class TypographyEngine {
           }
         }
         if (inRefsBox(item)) return false;
+        // Running head or foot (document-wide repetition, setFurniture). The
+        // margin cut above only reaches a one-line head: a three-line title
+        // block repeated at the top of every odd page sat below it at 7pt and
+        // was emphasized as body prose — and, being processed, showed a canvas
+        // glyph peeking past its mask: one word rendered with a doubled letter.
+        if (inFurniture(item)) {
+          if (globalThis.__fxDebug) div.dataset.fxWhy = "furniture";
+          return false;
+        }
         // Skip when a URL annotation covers most of the item (a long prose
         // item merely brushing a link keeps its emphasis — the regex-based
         // range exclusion handles the link part).
@@ -2595,14 +2631,29 @@ export class TypographyEngine {
               const gx1 = Math.max(...group.map((g) => g.r.right));
               const z = group[0].z;
               const prev = lastExempt.get(zi);
+              // A prose paragraph between two framed listings stands CLEAR of
+              // the rules that bracket it (frames carry padding, and there is
+              // paragraph leading besides). A table's header row hugs the rule
+              // above it — and a header is wordy and full-width, so it passed
+              // the prose test and its cells were emphasized on top of the
+              // document's own bold ("Star|tup me|thod" in a ruled table). Both
+              // ends must be clear by half a line height.
+              const gy0 = Math.min(...group.map((g) => g.r.top));
+              const gy1 = Math.max(...group.map((g) => g.r.bottom));
+              const lineH = gy1 - gy0;
+              const clearOfRules =
+                gy0 - z.yTop >= lineH * 0.5 && z.yBot - gy1 >= lineH * 0.5;
               const exemptLine =
-                (lw >= 4 && gx1 - gx0 >= (z.x1 - z.x0) * 0.55) ||
-                (lw >= 2 && prev != null && lineKey - prev <= 5);
+                clearOfRules &&
+                ((lw >= 4 && gx1 - gx0 >= (z.x1 - z.x0) * 0.55) ||
+                  (lw >= 2 && prev != null && lineKey - prev <= 5));
               if (exemptLine) lastExempt.set(zi, lineKey);
               if (globalThis.__fxDebug) {
                 (globalThis.__fxZoneLines ??= []).push({
                   page: pageNumber, zi, lineKey, lw, exempt: exemptLine, prev: prev ?? null,
                   w: Math.round(gx1 - gx0), zw: Math.round(z.x1 - z.x0),
+                  clear: clearOfRules,
+                  gapTop: Math.round(gy0 - z.yTop), gapBot: Math.round(z.yBot - gy1), lineH: Math.round(lineH),
                   t: text.slice(0, 40),
                 }); // test introspection
               }
