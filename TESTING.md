@@ -118,13 +118,23 @@ node test/skipline.mjs "<paper>"        # unprocessed PROSE lines — only front
 | `node test/citeaudit.mjs <url> [--pages=A-B]` | citation BEHAVIOR: per numeric citation (incl. locator forms `[9, §5.2.2.1]`), (a) no ACTIVE native link overlaps it (a click must open our card, never scroll to the bibliography), (b) a hit-target covers it, (c) every cited number resolves against `__fxRefNums`. UNRESOLVED > 0 with contiguous refCount ⇒ suspect a truncated reference-body extraction (watermark/gutter) — or a paper genuinely citing beyond its own bibliography (stub cards handle it) | `TOTAL jumpCites=0` and no `NO-HIT` lines |
 | `node test/highlights.mjs [url] [page]` | PDF.js highlight editor works with the overlay: a text highlight is created (drag retried — synthetic drags are flaky), the fx mask sits BELOW the highlight draw layer in `.canvasWrapper` (highlights show over PROCESSED text), the highlight saves (`/Highlight`+`/QuadPoints`) and survives save+reload (so it stores with the file and mirrors onto the original text when fx toggles off), and citation hit-targets are `pointer-events:none` while editing so a selection can start over a citation | `HIGHLIGHTS: PASS` (exit 0) |
 | `node test/native-button.mjs <pdf-url>` | the viewer's “native” button end-to-end: navigate → intercepted → fx-bypass-once → the tab lands on the original URL and STAYS (file:// uses a storage.session one-shot the webNavigation handler consumes; http(s) a DNR allow rule) | `PASS — stayed in the native viewer` |
-| `node test/stylemodes.mjs <url> <page>` | settings surface: dynamic+bundled font bolds AND preserves italic originals; emphasisMode “none” renders zero .fx-b with spans in the bundled face; none+original leaves the page pristine | `dynOk=true italicPreserved=true fontOnlyOk=true inertOk=true` |
+| `node test/stylemodes.mjs [url\|template] [page]` | settings surface: dynamic+bundled font bolds AND preserves italic originals; emphasisMode “none” renders zero .fx-b with spans in the bundled face; none+original leaves the page pristine. Defaults to a body page of a template when given no args | `dynOk=true fontOnlyOk=true inertOk=true`, and `italicPreserved` either `true` or `n/a`. `n/a` means the page has NO italic-faced processed spans, so that check could not run — it is not a pass. No corpus paper has an italic TEXT face, so `n/a` is the normal result |
+| `node test/diag-drag.mjs <paper> [--tag=] [--trace]` | REAL mouse-drag selection (R16 guard): the drag selects something; PDF.js's `.endOfContent` stays in the `.textLayer` MID-DRAG (its pointerup reset hides the bug, so it is sampled during the drag); every fully-covered span's text is in the selection (non-bold tails not lost); the copy event carries it; emphasis uses a property `::selection` honors. `--trace` prints the selection after each mouse step | `<paper>: PASS` (exit 1 otherwise). Dispatches at INTEGER viewport coords — fractional ones do not register as a drag at all (caret placed, never extended), which mimics a product bug |
 | `node test/dump-stream.mjs <paper> <page> <left\|right\|full> [filter]` | the engine's-eye line/stream geometry (debug `#classifyBlocks`) | inspection |
 | `node test/shot-region2.mjs <paper> <page> [--zoom=] [--find=]` | fx-on vs fx-off matched captures of one region | images should differ only by emphasis |
 
 Every harness with a PAPERS map also accepts `--url=<any PDF URL>` (e.g. a
 local file:// path) for ad-hoc documents — used to verify against private
 local corpora without naming them anywhere in the repo.
+
+Two gotchas when sweeping a local corpus:
+
+- A `file://` URL needs the extension's "Allow access to file URLs" toggle,
+  which a freshly-created automation profile does NOT have. Serving the
+  documents over `http://127.0.0.1` avoids the toggle entirely.
+- Anything derived from a filename can leak it — `diag-drag.mjs` names its
+  screenshot after the paper, so pass a neutral `--label=`. Serving the corpus
+  under positional aliases keeps real names out of URLs and output alike.
 
 Paper templates (the `<paper>` arg): the full 12-paper corpus —
 `"Two-column A"`..`"Two-column F"`, `"arXiv"`, `"5GCVerif"`, `"5GShield"`,

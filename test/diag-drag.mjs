@@ -15,8 +15,18 @@
 //   3. Emphasis is painted with something ::selection honors (text-shadow), so
 //      it doesn't vanish inside the selection band the way -webkit-text-stroke
 //      did.
+//   0. (checked first) the drag selected anything at all — an empty selection
+//      makes 1-2 fail for the wrong reason, which is slow to diagnose.
 //
-// Usage: node test/diag-drag.mjs [template] [--tag=post]
+// Dispatch the mouse at INTEGER viewport coordinates. Fractional ones reached
+// Chromium's synthetic input path as sub-pixel positions and the press/move pair
+// never registered as a drag: the caret was placed and then sat at the origin
+// through every move, so the selection came back empty. It looked like a
+// product bug on one paper for exactly as long as it took to trace.
+//
+// Usage: node test/diag-drag.mjs [template] [--tag=post] [--trace]
+//        node test/diag-drag.mjs --url=<pdf url|file://> --label=<name>
+// --trace prints the selection after every mouse step (Caret vs Range, length).
 
 import { spawn } from "node:child_process";
 import { writeFileSync, rmSync, mkdirSync } from "node:fs";
@@ -26,12 +36,45 @@ import { fileURLToPath } from "node:url";
 
 import { browserPath } from "./lib/env.mjs";
 
-const FILTER = process.argv.slice(2).find((a) => !a.toLowerCase().endsWith(".exe")) ?? "arXiv";
-const TAG = process.argv.slice(2).find((a) => a.startsWith("--tag="))?.slice(6) ?? "pre";
+// Full 12-paper corpus (same map as diagnose.mjs / audit.mjs). `--url=` runs any
+// PDF the viewer can fetch, which is how private corpora are verified without
+// naming them in the repo (see TESTING.md); `--label=` names the screenshot, so
+// use a neutral one. NOTE a file:// url needs the extension's "Allow access to
+// file URLs" toggle, which a fresh automation profile does NOT have — serving
+// the documents over http://127.0.0.1 works without it, and keeps real
+// filenames out of urls and screenshot names too. One paper per run, like the
+// other sweeps: loop from the shell so each gets a fresh browser.
 const PAPERS = {
+  "Two-column A": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
   "Two-column B": "https://yilud.me/usenixsecurity24-tu.pdf",
+  "Two-column C": "https://yilud.me/AFC_Attacks_NSDI.pdf",
+  "Two-column D": "https://yilud.me/Proteus-ccs24.pdf",
+  "Two-column E": "https://yilud.me/SIB-Auth.pdf",
+  "Two-column F": "https://yilud.me/a33-dong%20stamped.pdf",
   "arXiv": "https://arxiv.org/pdf/1706.03762",
+  "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
+  "5GShield": "https://yilud.me/5GShield.pdf",
+  "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",
+  "ACL": "https://yilud.me/2026.acl-long.2136.pdf",
+  "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
 };
+const ARGV = process.argv.slice(2);
+const URL_ARG = ARGV.find((a) => a.startsWith("--url="))?.slice(6);
+// --trace logs the selection after every mouse step. Worth keeping: when a
+// synthetic drag yields nothing, the only way to tell "never started" from
+// "started then collapsed" is to watch it grow.
+const TRACE = ARGV.includes("--trace");
+const TAG = ARGV.find((a) => a.startsWith("--tag="))?.slice(6) ?? "pre";
+const FILTER = URL_ARG
+  ? (ARGV.find((a) => a.startsWith("--label="))?.slice(8) ?? "url")
+  : (ARGV.find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe")) ?? "arXiv");
+const TARGET = URL_ARG ?? PAPERS[FILTER];
+if (!TARGET) {
+  console.error(`diag-drag: unknown template ${JSON.stringify(FILTER)}`);
+  console.error(`  templates: ${Object.keys(PAPERS).join(", ")}`);
+  console.error(`  or: --url=<pdf url|file:// path> [--label=name]`);
+  process.exit(2);
+}
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });
 const EXT = join(root, "extension");
@@ -69,7 +112,7 @@ try {
   let extId = null;
   for (let i = 0; i < 40 && !extId; i++) { const t = await http("/json/list"); const sw = t.find((x) => x.url.includes("service-worker")); if (sw) extId = new URL(sw.url).hostname; else await sleep(250); }
   console.log(`Browser: ${version.Browser}  paper: ${FILTER}  tag: ${TAG}\n`);
-  const viewerUrl = `chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(PAPERS[FILTER])}`;
+  const viewerUrl = `chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(TARGET)}`;
   const tab = await http(`/json/new?${viewerUrl}`, "PUT");
   ws = new WebSocket(tab.webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
@@ -77,7 +120,16 @@ try {
   await sleep(2500);
   await ev(`globalThis.__fxDebug = true`);
   await ev(`chrome.storage.sync.set({ enabled: true })`);
-  for (let i = 0; i < 40; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 100) break; }
+  // Wait for emphasis to appear AND for the count to stop moving: the engine
+  // works in idle chunks, so a bare threshold can let the drag run while spans
+  // are still being added and re-measured. Measure a settled page.
+  let prevB = -1;
+  for (let i = 0; i < 40; i++) {
+    await sleep(800);
+    const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0);
+    if (b > 100 && b === prevB) break;
+    prevB = b;
+  }
   // Scroll a multi-word processed body line near the top of some page into the
   // viewport center, so two-column papers (page-1 top is title/authors) have a
   // clean line to drag. Records which page for the selection coords below.
@@ -118,11 +170,36 @@ try {
     // their full text MUST show up in the selection. (The first and last are
     // clipped by the 2px inset, so they're excluded.)
     const covered = done.slice(3, endIdx).map((s) => s.textContent.trim()).filter((t) => t.length > 3);
-    return { x0: a.left + 2, y0: a.top + a.height / 2, x1: b.right - 2, y1: b.top + b.height / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), left: a.left, right: b.right, covered };
+    // Integer viewport coordinates: fractional ones reach Chromium's synthetic
+    // input path as sub-pixel positions and the press/move pair did not register
+    // as a drag at all (caret placed, never extended).
+    return { x0: Math.round(a.left + 2), y0: Math.round(a.top + a.height / 2), x1: Math.round(b.right - 2), y1: Math.round(b.top + b.height / 2), top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), left: a.left, right: b.right, covered };
   })()`);
   if (!drag) { fail("no draggable processed line found — nothing was verified"); }
   else {
+    // Precondition: the drag origin must actually resolve to a text caret in a
+    // text-layer span, so "selected nothing" can be told apart from "aimed at
+    // nothing".
+    const origin = await ev(`(() => {
+      const el = document.elementFromPoint(${drag.x0}, ${drag.y0});
+      const cp = document.caretPositionFromPoint(${drag.x0}, ${drag.y0});
+      return {
+        el: el ? el.nodeName + (el.className ? "." + String(el.className).split(" ")[0] : "") : null,
+        caret: cp ? cp.offsetNode.nodeName + "/" + (cp.offsetNode.parentNode?.nodeName ?? "-") : null,
+      };
+    })()`);
+    console.log("drag origin:", JSON.stringify(origin));
     await mouse("mousePressed", drag.x0, drag.y0);
+    await sleep(120);
+    // Assert the press landed: a Caret inside a text-layer span. If this says
+    // Caret but the moves below never reach Range, the press was fine and the
+    // MOVES were rejected (that is how the fractional-coordinate bug looked).
+    const pressed = await ev(`(() => {
+      const s = document.getSelection();
+      const a = s.anchorNode;
+      return { type: s.type, inTextLayer: !!a?.parentElement?.closest(".textLayer") };
+    })()`);
+    console.log("after press:", JSON.stringify(pressed));
     const steps = 8;
     // Sample endOfContent placement after every move: the misplacement only
     // exists WHILE dragging (pointerup resets it), and only on the moves whose
@@ -130,6 +207,20 @@ try {
     let stray = null;
     for (let s = 1; s <= steps; s++) {
       await mouse("mouseMoved", drag.x0 + (drag.x1 - drag.x0) * s / steps, drag.y0 + (drag.y1 - drag.y0) * s / steps);
+      // A real drag is not instantaneous; pace the moves so this measures the
+      // product rather than input coalescing.
+      await sleep(80);
+      if (TRACE) {
+        const t = await ev(`(() => {
+          const s = document.getSelection();
+          const a = s.anchorNode;
+          return s.rangeCount + "/" + s.type + "/" + s.toString().length
+            + " anchorConnected=" + (a ? a.isConnected : "-")
+            + " inTextLayer=" + (a ? !!a.parentElement?.closest(".textLayer") : "-")
+            + " layers=" + document.querySelectorAll(".textLayer").length;
+        })()`);
+        console.log(`  move ${s}: ${t}`);
+      }
       stray = stray ?? await ev(`(() => {
         for (const e of document.querySelectorAll(".endOfContent")) {
           const p = e.parentElement;
@@ -180,18 +271,25 @@ try {
     console.log("emphasis paint:", JSON.stringify(emph));
 
     // ---- verdicts ----
-    if (stray) {
-      fail(`endOfContent was moved INSIDE a text span mid-drag: ${JSON.stringify(stray)}`);
-    }
-    const norm = (s) => s.replace(/\s+/g, " ").trim();
-    const selNorm = norm(selText);
-    for (const c of drag.covered ?? []) {
-      if (!selNorm.includes(norm(c))) {
-        fail(`fully-covered span missing from the selection: ${JSON.stringify(c.slice(0, 60))}`);
+    // Check this FIRST and bail: an empty selection makes every check below
+    // fail for the wrong reason (it reads as "the tails are missing" when in
+    // fact the drag never took), which is a slow thing to diagnose.
+    if (!selText.trim()) {
+      fail(`the drag selected NOTHING — dragged (${drag.x0},${drag.y0}) → (${drag.x1},${drag.y1}). Re-run with --trace: a Caret that never becomes a Range means the MOVES were rejected (coordinates), an absent Caret means the press missed or was swallowed`);
+    } else {
+      if (stray) {
+        fail(`endOfContent was moved INSIDE a text span mid-drag: ${JSON.stringify(stray)}`);
       }
-    }
-    if (!copyInfo || norm(copyInfo.sel) !== selNorm) {
-      fail(`copy event did not carry the selection: ${JSON.stringify(copyInfo)}`);
+      const norm = (s) => s.replace(/\s+/g, " ").trim();
+      const selNorm = norm(selText);
+      for (const c of drag.covered ?? []) {
+        if (!selNorm.includes(norm(c))) {
+          fail(`fully-covered span missing from the selection: ${JSON.stringify(c.slice(0, 60))}`);
+        }
+      }
+      if (!copyInfo || norm(copyInfo.sel) !== selNorm) {
+        fail(`copy event did not carry the selection: ${JSON.stringify(copyInfo)}`);
+      }
     }
     if (!emph) fail("no .fx-b found — reading mode did not process the page");
     else {
