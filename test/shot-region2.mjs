@@ -71,7 +71,7 @@ try {
     const found = await ev(`(() => {
       const pv = window.PDFViewerApplication.pdfViewer.getPageView(${PAGE - 1});
       const div = pv.textLayer && pv.textLayer.div;
-      const hit = div && [...div.querySelectorAll("span")].find((s) => !s.querySelector("span") && s.textContent.includes(${JSON.stringify(FIND)}));
+      const hit = div && [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.includes(${JSON.stringify(FIND)}));
       if (!hit) return false;
       hit.scrollIntoView({ block: "center" });
       return true;
@@ -87,7 +87,7 @@ try {
     const find = ${JSON.stringify(FIND ?? null)};
     if (find) {
       const div = pv.textLayer && pv.textLayer.div;
-      const hit = [...div.querySelectorAll("span")].find((s) => !s.querySelector("span") && s.textContent.includes(find));
+      const hit = [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.includes(find));
       if (!hit) return { error: "text not found post-scroll" };
       const r = hit.getBoundingClientRect();
       return { y0: Math.max(0, Math.round((r.top - cr.top - 12) * syb)), y1: Math.round((r.bottom - cr.top + 16) * syb), x0: Math.max(0, Math.round((r.left - cr.left - 24) * syb)), x1: Math.round((r.right - cr.left + 60) * syb) };

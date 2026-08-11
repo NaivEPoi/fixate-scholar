@@ -69,7 +69,7 @@ const CHECK = (p) => `(() => {
   // different tops than their line and would split the group).
   const lineMap = new Map();
   for (const s of layer.querySelectorAll("span")) {
-    if (!s.textContent.trim() || s.querySelector("span")) continue;
+    if (!s.textContent.trim() || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)")) continue;
     const r = s.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) continue;
     const col = r.left < mid - 20 && r.right > mid + 20 ? "f" : (r.left + r.right) / 2 < mid ? "l" : "r";

@@ -22,6 +22,8 @@ import { browserPath, extensionDir } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const FILTER = POS[0] ?? "5GShield";
+const WHY = process.argv.slice(2).includes("--why"); // dump the prose-exemption inputs per offender
+const NOEXEMPT = process.argv.slice(2).includes("--noexempt"); // control: disable the prose exemption
 const URL_OVERRIDE = process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6); // any PDF URL, e.g. a local test server
 const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const PAPERS = {
@@ -32,6 +34,8 @@ const PAPERS = {
   "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
   "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
   "IEEE journal": "https://arxiv.org/pdf/2502.04915",
+  "NeurIPS": "https://arxiv.org/pdf/1706.03762",
+  "LaTeX article (CM)": "https://arxiv.org/pdf/quant-ph/9508027",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",
@@ -120,9 +124,17 @@ const CHECK = (p) => `(() => {
   const cr = canvas.getBoundingClientRect();
   const sx = W / cr.width, sy = H / cr.height;
   // Group ALL text-layer spans into baseline lines (for the prose exemption).
+  // The leaf test must ignore OUR OWN inline wrappers: the citation and
+  // in-paper-reference coloring inserts <span class="fx-cite-c|fx-ref-c"> inside
+  // a processed span, so a plain "has a nested span" test dropped exactly the
+  // prose lines that mention a Figure/Table/Listing — the lines most likely to
+  // sit beside a ruled block — out of the prose map, and every one of them then
+  // reported as an offender (all four false positives were of this shape:
+  // "Listing 2 provides…", "…shown in Figure 8a", "as shown in Figure 8b.",
+  // "Figure 11 shows…"). Only PDF.js's markedContent wrappers should be skipped.
   const lineMap = new Map();
   for (const s of layer.querySelectorAll("span")) {
-    if (!s.textContent.trim() || s.querySelector("span")) continue;
+    if (!s.textContent.trim() || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)")) continue;
     const r = s.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) continue;
     const key = Math.round((r.top - cr.top) / 5);
@@ -144,6 +156,14 @@ const CHECK = (p) => `(() => {
     const contPrev = lw >= 2 && (proseKeys.has(key - 3) || proseKeys.has(key - 4) || proseKeys.has(key - 5));
     if (wideProse || contPrev) proseKeys.add(key);
   }
+  // --noexempt: drop the prose exemption entirely. A control for the exemption
+  // itself — with it off, every processed span inside a zone is reported, which
+  // shows the zone/offender machinery is alive and that a change in offender
+  // count came from the EXEMPTION and nothing else. (Neutering the engine's
+  // table skipping does not work as a control: table text is typically set
+  // smaller than body, so those spans are not processing candidates at all and
+  // no amount of un-skipping makes them offenders.)
+  if (${JSON.stringify(false)} || ${NOEXEMPT}) proseKeys.clear();
   const offenders = [];
   for (const s of layer.querySelectorAll("span[data-fx-done]")) {
     const r = s.getBoundingClientRect();
@@ -161,7 +181,25 @@ const CHECK = (p) => `(() => {
         const slw = (t.match(/[a-zà-ÿ]{2,}/g) || []).length;
         if (slw >= 2 || t.length >= 12) break; // part of the prose flow
       }
-      offenders.push({ t: s.textContent.trim().slice(0, 44), zone: [Math.round(z.yTop / sy), Math.round(z.yBot / sy)] });
+      // --why: the inputs the prose exemption above judged, so a FALSE POSITIVE
+      // can be diagnosed instead of guessed at. lineW/zoneW are canvas px; the
+      // exemption needs lineW >= zoneW * 0.55 on a line of >= 4 lowercase words.
+      const key = Math.round((r.top - cr.top) / 5);
+      const line = lineMap.get(key) ?? [];
+      const lxs = line.map((el) => el.getBoundingClientRect());
+      const lineW = lxs.length ? (Math.max(...lxs.map((q) => q.right)) - Math.min(...lxs.map((q) => q.left))) * sx : 0;
+      const lineText = line.map((el) => el.textContent).join(" ");
+      offenders.push({
+        t: s.textContent.trim().slice(0, 44),
+        zone: [Math.round(z.yTop / sy), Math.round(z.yBot / sy)],
+        why: {
+          key, spansOnLine: line.length,
+          lineWords: (lineText.match(/[a-zà-ÿ]{2,}/g) || []).length,
+          lineW: Math.round(lineW), zoneW: Math.round(z.x1 - z.x0),
+          ratio: +(lineW / Math.max(1, z.x1 - z.x0)).toFixed(2),
+          inProseKeys: proseKeys.has(key),
+        },
+      });
       break;
     }
   }
@@ -197,7 +235,10 @@ try {
     total += res.offenders.length;
     const tag = res.offenders.length ? "  <<< PROCESSED IN TABLE" : "";
     console.log(`p${p}: zones=${res.zones} offenders=${res.offenders.length}${tag}`);
-    for (const o of res.offenders) console.log(`   y${o.zone[0]}-${o.zone[1]}: "${o.t}"`);
+    for (const o of res.offenders) {
+      console.log(`   y${o.zone[0]}-${o.zone[1]}: "${o.t}"`);
+      if (WHY && o.why) console.log(`      why: ${JSON.stringify(o.why)}`);
+    }
   }
   console.log(`\nTOTAL offenders: ${total}`);
   if (total > 0) process.exitCode = 1;

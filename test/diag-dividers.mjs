@@ -29,6 +29,7 @@ const PAPERS = {
   "ACM acmart (short)": "https://yilud.me/SIB-Auth.pdf",
   "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
   "NeurIPS": "https://arxiv.org/pdf/1706.03762",
+  "LaTeX article (CM)": "https://arxiv.org/pdf/quant-ph/9508027",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",

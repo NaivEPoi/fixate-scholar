@@ -75,7 +75,7 @@ const PAGE_JSON = (p) => `(() => {
   const pv = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});
   const div = pv && pv.textLayer && pv.textLayer.div;
   if (!div) return { page: ${p}, error: "no text layer" };
-  const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span") && s.textContent.trim());
+  const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.trim());
   const done = [], skip = {}, keep = [], other = [];
   for (const s of leaves) {
     const t = s.textContent.trim();

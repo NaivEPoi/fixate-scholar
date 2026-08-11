@@ -29,6 +29,7 @@ const PAPERS = {
   "IEEE conference (stamped)": "https://yilud.me/a33-dong%20stamped.pdf",
   "IEEE journal": "https://arxiv.org/pdf/2502.04915",
   "NeurIPS": "https://arxiv.org/pdf/1706.03762",
+  "LaTeX article (CM)": "https://arxiv.org/pdf/quant-ph/9508027",
   "5GCVerif": "https://yilud.me/5GCVerif-ccs23.pdf",
   "5GShield": "https://yilud.me/5GShield.pdf",
   "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",
@@ -74,7 +75,7 @@ const PROBE = `(() => {
     if (!div || !div.childElementCount) continue;
     const page = pv.id;
     const fxRect = pv.div.getBoundingClientRect();
-    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span") && s.textContent.trim());
+    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.trim());
 
     // keepFont: keep spans whose first font-family isn't an embedded g_* face.
     const keepBad = [];

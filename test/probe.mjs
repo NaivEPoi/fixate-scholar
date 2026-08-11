@@ -83,7 +83,7 @@ try {
     const q = ${JSON.stringify(QUERY)};
     const pv = window.PDFViewerApplication.pdfViewer.getPageView(${PAGE - 1});
     const div = pv.textLayer.div;
-    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span"));
+    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)"));
     const masks = [...pv.div.querySelectorAll(".fx-mask > div")].map((m, i) => ({ i, r: m.getBoundingClientRect() }));
     const flags = (s) => (s.dataset.fxDone ? "DONE" : s.dataset.fxKeep ? "KEEP" : s.dataset.fxTable ? "TABLE" : "canvas");
     const rr = (r) => ({ l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });
@@ -130,7 +130,7 @@ try {
     // viewport after navigation.
     const clip = await ev(`(() => {
       const pv = window.PDFViewerApplication.pdfViewer.getPageView(${PAGE - 1});
-      const leaves = [...pv.textLayer.div.querySelectorAll("span")].filter((s) => !s.querySelector("span"));
+      const leaves = [...pv.textLayer.div.querySelectorAll("span")].filter((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)"));
       const hit = leaves.find((s) => s.textContent.includes(${JSON.stringify(QUERY)}) && !s.dataset.fxDone && !s.dataset.fxKeep);
       if (!hit) return null;
       const r = hit.getBoundingClientRect();
