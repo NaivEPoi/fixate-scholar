@@ -1462,7 +1462,13 @@ each word of a ruled table's header.
   per-page lines are NOT, and a short head carrying its page number still is).
 - papers.mjs 8/8; refs and cites counts unchanged.
 - Public corpus, all 14 papers, every page: audit hard criteria 0, tables 0
-  offenders. Private corpus, all 28: the same. refbold unchanged (14/14, 28/28).
+  offenders. Private corpus, all 28: audit 28/28 with the four hard criteria 0 and
+  skipBody identical to the pre-R23 baselines, tables 28/28 with 0 offenders.
+  refbold unchanged (14/14, 28/28).
+- The only measurable movement anywhere in either corpus is the CM paper's bolded
+  count (1291 -> 1275, its running heads) and one span on IEEE conference
+  (skipBody 17 -> 18, a table header cell now left on the canvas). Both are the
+  fixes doing their job.
 - 42 documents seen, one matched pair each (two pages for six of them). The two
   defects above are the only ones found.
 
