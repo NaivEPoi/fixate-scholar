@@ -260,7 +260,13 @@ try {
   if (!extId) throw new Error("extension did not load");
   console.log(`Browser: ${version.Browser}  paper: ${FILTER}\n`);
 
-  const url = PAPERS[FILTER];
+  // --url= lets this sweep run against any PDF the viewer can fetch — the private
+// corpus is served on localhost under neutral aliases, so it never needs a
+// filename here (TESTING.md documented this for "every harness with a PAPERS
+// map", but diagnose/audit/diag-dividers had never implemented it, leaving the
+// private corpus unsweepable for exactly the fidelity checks that matter most).
+const URL_OVERRIDE = process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6);
+const url = URL_OVERRIDE ?? PAPERS[FILTER];
   if (!url) throw new Error(`unknown paper ${FILTER}`);
   const viewerUrl = `chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(url)}`;
   const tab = await http(`/json/new?${viewerUrl}`, "PUT");
