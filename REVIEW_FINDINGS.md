@@ -1397,7 +1397,12 @@ box.
   emphasized with the heading's own terminal period left alone; the ACL
   bibliography region is pixel-identical between fx-on and fx-off, and its
   pre-fix control is not.
-- Private sweeps of tables and audit were still running when this landed; the
-  numbers above are public plus the private refbold sweep and the two private
-  documents the defects came from (offenders 1 -> 0, capProse 1 -> 0, skipBody
-  unchanged). NOT tagged: step 4 of the gate is still targeted, not a fan-out.
+- Private corpus, all 28 documents, every page: tables 28/28 with 0 offenders
+  (R21 was 27/28 - the failure was R22-4's listing cell); audit 28/28 with
+  keepFallback/tableLeak/capProse/skipPara all 0 on every document (R21 was 27/28
+  - the failure was R22-3's capProse); refbold 28/28.
+- Console gate (viewer page AND extension service worker, every page): 5 public
+  papers, `PROBLEMS=0`, allowlist unused.
+- NOT tagged. Step 4 of the gate (look at every document) is still TARGETED - 5
+  regions across 3 documents, chosen where these changes act - not the 42-document
+  fan-out the gate asks for.
