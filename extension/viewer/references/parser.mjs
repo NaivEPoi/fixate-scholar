@@ -67,22 +67,60 @@ const normHead = (t) =>
   t.replace(/\d+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
 /**
+ * Per page: the y of the topmost and bottommost line. A running head or foot is
+ * always the FIRST or LAST line on its page, and that is what separates it from
+ * content that merely repeats.
+ */
+function pageEdges(lines) {
+  const edges = new Map();
+  for (const l of lines) {
+    let e = edges.get(l.page);
+    if (!e) edges.set(l.page, (e = { top: l.y, bot: l.y }));
+    if (l.y > e.top) e.top = l.y;
+    if (l.y < e.bot) e.bot = l.y;
+  }
+  return edges;
+}
+
+/**
+ * Is this line the topmost or bottommost on its page? The tolerance is half a
+ * line height — enough for a head and its page number to sit on baselines that
+ * differ by a hair, and NOT enough to admit the next line in (at a full line
+ * height the last entry line of a reference page counted as a foot, which is
+ * the very thing this is meant to distinguish).
+ */
+function atPageEdge(l, edges) {
+  const e = edges.get(l.page);
+  if (!e) return false;
+  const slack = (l.h || 9) * 0.5;
+  return l.y >= e.top - slack || l.y <= e.bot + slack;
+}
+
+/**
  * Running heads and feet — page furniture, not content.
  *
- * A bare page number, or a short line whose text (page number aside) repeats on
- * three or more pages: "P. W. SHOR", "FACTORING WITH A QUANTUM COMPUTER", a
- * journal's volume line. Conference templates print none, which is why this
- * never came up on the corpus; a journal/preprint template prints them on EVERY
- * page, including the bibliography's continuation pages, and sets them at BODY
- * size while the bibliography itself is set smaller. findReferencesBody's
+ * A bare page number, or a short MARGIN line whose text (page number aside)
+ * repeats on three or more pages: "P. W. SHOR", "FACTORING WITH A QUANTUM
+ * COMPUTER", a journal's volume line. Conference templates print none, which is
+ * why this never came up on the corpus; a journal/preprint template prints them
+ * on EVERY page, including the bibliography's continuation pages, and sets them
+ * at BODY size while the bibliography itself is set smaller. findReferencesBody's
  * heading-size test then read the next page's running head as the start of a new
  * section and cut the bibliography off at the page break (Shor quant-ph/9508027:
  * 26 body lines and 9 entries instead of ~60, and the reference pages after the
  * first were emphasized as body prose).
  */
-function runningHeadTexts(lines) {
+function runningHeadTexts(lines, edges) {
   const pages = new Map();
   for (const l of lines) {
+    // Only MARGIN lines can establish a running head. Without this, a phrase
+    // that recurs in the bibliography itself qualified: on ACL's five-page
+    // reference list, "Software Engineering" (an italic journal name at the end
+    // of an entry) and "pages 1251–1263. IEEE." (digits stripped → "pages .
+    // IEEE.") each appear on three or more pages, so those lines were skipped
+    // as furniture, got no box in the region the engine leaves alone, and were
+    // emphasized inside the reference list.
+    if (!atPageEdge(l, edges)) continue;
     const t = normHead(l.text ?? "");
     if (t.length < 3 || t.length > 60) continue;
     if (!pages.has(t)) pages.set(t, new Set());
@@ -97,9 +135,11 @@ export function findReferencesBody(lines) {
   const start = findHeadingIndex(lines);
   if (start === -1) return { heading: null, body: [] };
   const heading = lines[start];
-  const heads = runningHeadTexts(lines);
+  const edges = pageEdges(lines);
+  const heads = runningHeadTexts(lines, edges);
   const isFurniture = (l) => {
     const t = (l.text ?? "").trim();
+    if (!atPageEdge(l, edges)) return false; // furniture lives in the margins
     return /^\d{1,4}$/.test(t) || heads.has(normHead(t));
   };
   // A following section may not say "appendix" (some templates use bare

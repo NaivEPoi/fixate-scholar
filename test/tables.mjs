@@ -144,12 +144,18 @@ const CHECK = (p) => `(() => {
   // Prose lines (≥4 lowercase words spanning ≥55% of some zone's width) and
   // their PARAGRAPH CONTINUATIONS: a short last line ("as shown in Figure
   // 8b.") directly under a prose line is the same paragraph, not a cell.
+  // Whole lowercase words, not letter runs inside identifiers — mirrors the
+  // engine's proseWordCount. Counting runs made a code line of the shape
+  // "RETURN x.name AS label, ..." look as wordy as a sentence, which is how a
+  // framed listing's interior came to be treated as prose between frames on
+  // both sides. (No backticks in here - this whole block is a template literal.)
+  const words = (s) => (s.match(/(?:^|[\\s(“"'])[a-zà-ÿ]{2,}(?=[\\s.,;:)\\]”"']|$)/g) || []).length;
   const proseKeys = new Set();
   const keys = [...lineMap.keys()].sort((a, b) => a - b);
   for (const key of keys) {
     const line = lineMap.get(key);
     const text = line.map((el) => el.textContent).join(" ");
-    const lw = (text.match(/[a-zà-ÿ]{2,}/g) || []).length;
+    const lw = words(text);
     const xs = line.map((el) => el.getBoundingClientRect());
     const w = (Math.max(...xs.map((q) => q.right)) - Math.min(...xs.map((q) => q.left))) * sx;
     const wideProse = lw >= 4 && zones.some((z) => w >= (z.x1 - z.x0) * 0.55);
@@ -178,8 +184,8 @@ const CHECK = (p) => `(() => {
       // baseline with a wordy cell is still an offender if processed.
       if (proseKeys.has(Math.round((r.top - cr.top) / 5))) {
         const t = s.textContent.trim();
-        const slw = (t.match(/[a-zà-ÿ]{2,}/g) || []).length;
-        if (slw >= 2 || t.length >= 12) break; // part of the prose flow
+        const slw = words(t);
+        if (slw >= 2 || (slw >= 1 && t.length >= 12)) break; // part of the prose flow
       }
       // --why: the inputs the prose exemption above judged, so a FALSE POSITIVE
       // can be diagnosed instead of guessed at. lineW/zoneW are canvas px; the
@@ -194,7 +200,7 @@ const CHECK = (p) => `(() => {
         zone: [Math.round(z.yTop / sy), Math.round(z.yBot / sy)],
         why: {
           key, spansOnLine: line.length,
-          lineWords: (lineText.match(/[a-zà-ÿ]{2,}/g) || []).length,
+          lineWords: words(lineText),
           lineW: Math.round(lineW), zoneW: Math.round(z.x1 - z.x0),
           ratio: +(lineW / Math.max(1, z.x1 - z.x0)).toFixed(2),
           inProseKeys: proseKeys.has(key),
