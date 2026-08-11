@@ -1189,6 +1189,70 @@ this way got no cards, no coloring and no hit-targets at all.
   [1936]", "see Table [1990]", "in Section [2020]" and "[1936, and beyond]"
   must not match, while "as Shor [12]" stays a NUMERIC citation.
 
+## Round 21 (R21) - running the release gate: the instruments were the problem
+
+Running CLAUDE.md's release gate over R17-R20 produced 13 corpus sweeps, 6
+negative controls and 4 visual inspections. NO defect in any of it was
+attributable to R17-R20; R19 measurably IMPROVED prose coverage (skipRun 15 -> 4
+on the math paper, skipBody 34 -> 32 on a private document). What the gate
+actually found was six defects in the checking apparatus, several of which made
+"clean" results meaningless:
+
+1. The leaf-span test in EIGHT harnesses excluded any span containing a nested
+   span - intended for PDF.js markedContent wrappers, but it also caught our own
+   .fx-cite-c / .fx-ref-c, so every processed prose span mentioning a citation or
+   a Figure/Table was invisible. It produced 4 false "processed span in a table
+   zone" reports, and left audit's capProse structurally blind to the very spans
+   it exists to check.
+2. FOUR sweeps could not fail: diagnose only exited non-zero when it CRASHED;
+   skipline, diag-dividers and audit had no exit-code logic at all. A private
+   sweep of diagnose reported "28/28 PASS" while incapable of reporting a defect.
+   Two retracted results came from this.
+3. diagnose's selBad counted a document's own hyperref link annotations - painted
+   above the text layer by PDF.js - as failures, so it read non-zero forever on
+   citation-dense papers (ACL: 7, identical pre-R20).
+4. There was no console harness at all. The existing probes filter to errors, so
+   warnings were captured nowhere and neither sweep checked the console.
+5. shot-region2's PAPERS map was missing half the corpus after the rename, so it
+   opened file=undefined and failed 30s later as "cannot read ... 'canvas'".
+6. shot-region2 captured the fx-OFF half 2.5s after toggling; restoring is
+   idle-chunked, so the pair came back as two identical images - a matched pair
+   that shows no difference no matter what is wrong.
+
+Standing defects surfaced, all confirmed PRE-EXISTING by engine.mjs pre-R19
+controls, all in the prose-vs-structure boundary family - each deserves its own
+round rather than a fix inside a release being verified:
+- table-region sweeps 6 spans of real prose (public, one page).
+- a table cell is processed inside a 16-zone ruled region (private, one page).
+- a line-start in-text reference is left unprocessed (private, one page) - the
+  first capProse hit in either corpus, visible only after fix 1.
+
+Behaviour change worth knowing (NOT a regression): wrapRange splits a processed
+span at its emphasis boundaries when coloring a citation, so text inside a
+citation range is colored but not emphasized. Verified as the product's existing
+convention - ACL's parenthetical citations behave identically (260 cite spans,
+every one boldInside=0). R20 extends that convention to the narrative form, so
+author surnames in narrative-citing papers are now colored rather than
+emphasized. The improvement (re-apply emphasis inside the range, as the Find path
+already does) would fix both forms and belongs in its own round.
+
+### Gate results
+- Step 1: npm test 49/49 + naming guard.
+- Step 2 (public, 14 papers): tables/diag-dividers/diagnose/audit/skipline all
+  clean. 1026 rules detected, masked=0.
+- Step 3 (private, 28 documents): console 28/28; diag-drag 28/28 with sel
+  171-304, EXACTLY the v1.0.3 baseline band; tables 27/28; diagnose 28/28 on real
+  criteria; diag-dividers 28/28 with 2000+ rules masked=0; audit 27/28.
+- Step 4 (look at the renders): TARGETED, not full coverage - 4 pages chosen
+  where these changes act. R19 prose/math boundary verified by a working matched
+  pair; bibliography page verified untouched with small caps and italics intact.
+  A full 42-document fan-out was NOT done.
+- Step 5 (console): public 14/14 every page, private 28/28. Allowlist earned one
+  entry (upstream TrueType hinting, verified with --fxoff); the other ten
+  candidates excused nothing and were deleted.
+- Step 6: NOT tagged. Step 4 is partial by choice, and three standing defects are
+  open.
+
 ### Also fixed here: refsOk could silently pass (guard weakness)
 `__fxRefCount` is set when the bibliography is PARSED, but the refs REGION (what
 protects it from processing, and what papers.mjs's refsOk reads) is applied a few
