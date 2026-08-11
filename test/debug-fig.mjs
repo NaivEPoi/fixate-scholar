@@ -105,7 +105,11 @@ try {
       const divs = pv.textLayer.highlighter?.textDivs ?? [];
       const strItems = content.items.filter(it => it.str !== undefined);
       const fontSpecial = {};
-      const SPECIAL = ${JSON.stringify("CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|Math|Symbol|cmmi|cmsy|cmex|stmary|rsfs|eufm|eusm|wasy|esint|MnSymbol|AMSa|AMSb|cmtt|Typewriter|Courier|Consol|Menlo|LMTT")};
+      // Copy of engine.mjs SPECIAL_FONT — keep in sync, or this dump's
+      // "special" column reports a classification the engine does not make
+      // (it was missing the bold and small-caps lines, and the monospace
+      // Mon[oL]/TT entries, until R18).
+      const SPECIAL = ${JSON.stringify("CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|Math|Symbol|cmmi|cmsy|cmex|cmbsy|msam|msbm|stmary|rsfs|eufm|eusm|wasy|esint|MnSymbol|AMSa|AMSb|cmtt|Typewriter|Mon[oL](?![a-z])|Courier|Consol|Menlo|LMTT|TT(?=[0-9-])|CMCSC|cmcsc|SmallCaps|[-+]SC(?![a-z])|Caps(?![a-z])|Bold|bold|CMBX|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])")};
       const re = new RegExp(SPECIAL);
       const out = [];
       strItems.forEach((it, i) => {

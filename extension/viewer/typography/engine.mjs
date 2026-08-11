@@ -37,25 +37,54 @@ function evictEndOfContent(span, layerDiv) {
 // Faces that are never emphasized — they mark intentional special typography:
 // TeX/Type1 math and symbol fonts, monospace/typewriter (code, URLs), small
 // caps (system names), and bold display variants.
-const SPECIAL_FONT = new RegExp(
+//
+// Every Computer Modern alternative is listed in BOTH cases: LaTeX Type1 subset
+// names are conventionally UPPERCASE ("ABCDEF+CMBX12"), and a lowercase-only
+// alternative silently misses that whole family (see R17 — the same hazard hid
+// `CMTI` from ITALIC_FONT). `CMTT` needs no entry of its own; `TT(?=[0-9-])`
+// already reaches it.
+// The math/symbol faces alone. TeX sets DISPLAYED equations in these, and a
+// displayed equation is never table structure — see isDisplayMathRow in
+// #classifyBlocks, which uses this to keep the table passes off math-broken
+// paragraphs.
+export const MATH_FONT =
+  /CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|Math|Symbol|cmmi|cmsy|cmex|cmbsy|msam|msbm|stmary|rsfs|eufm|eusm|wasy|esint|MnSymbol|AMSa|AMSb/;
+export const SPECIAL_FONT = new RegExp(
   [
-    "CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|Math|Symbol|cmmi|cmsy|cmex|stmary|rsfs|eufm|eusm|wasy|esint|MnSymbol|AMSa|AMSb", // math
-    "cmtt|Typewriter|Mono(?![a-z])|Courier|Consol|Menlo|LMTT|TT(?=[0-9-])", // monospace
-    "cmcsc|SmallCaps|[-+]SC(?![a-z])|Caps(?![a-z])", // small caps
-    "Bold|bold|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])", // bold display variants
+    MATH_FONT.source, // math
+    // `Mon[oL]` also covers URW Nimbus Mono ("NimbusMonL-Regu"), the standard
+    // LaTeX Courier clone — its name has no "Mono" in it, so code and URLs set
+    // in it used to be treated as body text and emphasized.
+    "cmtt|Typewriter|Mon[oL](?![a-z])|Courier|Consol|Menlo|LMTT|TT(?=[0-9-])", // monospace
+    "CMCSC|cmcsc|SmallCaps|[-+]SC(?![a-z])|Caps(?![a-z])", // small caps
+    "Bold|bold|CMBX|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])", // bold display variants
   ].join("|"),
 );
 // Bold/medium display faces only — the subset of SPECIAL_FONT used to spot
 // unlabelled run-in headings (a bold paragraph lead-in like "Minimizing
 // duplicate states."). Kept (masked + redrawn) bold text renders lighter than
-// the canvas, so such headings are skipped to the canvas instead.
-const BOLD_FONT = /Bold|bold|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])/;
-// Italic faces — used ONLY for styled run-in paragraph leads ("Establishing
-// privacy-preserving mutual authentication …:" set in underlined italics):
-// processing such a lead erases its UNDERLINE (canvas art hugging the glyphs)
-// with the mask. Ordinary inline italic emphasis is untouched (the rule below
-// requires the italic run to open the line and end with a colon).
-const ITALIC_FONT = /Italic|italic|Oblique|Slanted|cmti|cmmi|-It(?![a-z])|Libertine\w*I(?![a-zA-Z])/;
+// the canvas, so such headings are skipped to the canvas instead. Keep the
+// bold alternatives here identical to SPECIAL_FONT's bold line above.
+export const BOLD_FONT = /Bold|bold|CMBX|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])/;
+// Italic faces. Two consumers: styled run-in paragraph leads ("Establishing
+// privacy-preserving mutual authentication …:" set in underlined italics) are
+// kept on the canvas, because processing such a lead erases its UNDERLINE
+// (canvas art hugging the glyphs) with the mask — ordinary inline italic
+// emphasis is untouched, since that rule requires the italic run to open the
+// line and end with a colon; and a PROCESSED span in a bundled reading font
+// gets fontStyle:italic re-applied, because swapping the face would otherwise
+// flatten the document's italics to roman.
+//
+// Both name cases are listed for the Computer Modern faces, as in SPECIAL_FONT:
+// LaTeX Type1 subsets are conventionally UPPERCASE ("ABCDEF+CMTI10"), and only
+// matching `cmti` left italic body prose rendering UPRIGHT. `Ital(?![a-z])`
+// covers URW Nimbus (the standard LaTeX Times clone), whose italics are named
+// `NimbusRomNo9L-ReguItal` / `-MediItal` — no hyphen before `Ital`, so neither
+// `Italic` nor `-It(?![a-z])` reached them.
+// SPECIAL_FONT / BOLD_FONT / ITALIC_FONT are exported for fontclass.test.mjs —
+// the face-name tables there are the guard against a whole CLASS of face going
+// unrecognized (a case variant, a name spelled without the expected hyphen).
+export const ITALIC_FONT = /Italic|italic|Oblique|Slanted|Ital(?![a-z])|CMTI|CMMI|cmti|cmmi|-It(?![a-z])|Libertine\w*I(?![a-zA-Z])/;
 
 // Bundled reading fonts (SIL OFL, vendored by scripts/fetch-pdfjs.mjs);
 // @font-face rules live in overlay.css. These ship real 700 weights, so
@@ -440,7 +469,7 @@ export class TypographyEngine {
    *   4. classify each block; everything that is not body text is skipped.
    * Captions are skipped whole — treated as part of their figure/table.
    */
-  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0 = 0) {
+  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0 = 0, isMath = () => false) {
     const skip = new Set();
     // Divs whose SURROUNDINGS carry structural canvas art hugging the text (a
     // displayed formula's box frame): masks of neighbouring lines must clamp a
@@ -550,6 +579,51 @@ export class TypographyEngine {
       }
       return m;
     };
+    // A DISPLAYED-EQUATION row. TeX sets display math in math faces, cuts it
+    // into many small items, and leaves wide gaps around its relation and
+    // operator symbols; a multi-line derivation additionally aligns those
+    // symbols at one x, row after row. That is precisely the signature all
+    // three table passes look for (a cell gap, a shared gap-x, aligned interior
+    // starts), so a paragraph broken by displayed equations was read as a table
+    // and its PROSE lines were swept onto the canvas with it (Shor
+    // quant-ph/9508027 p17/p18/p20-p22: "It would be sufficient to observe
+    // solely the value…" skipped as blk-table / table-starts / table-region).
+    // Such rows are therefore invisible to the table passes — no cell tally, no
+    // band seeds — exactly as off-size figure-label rows already are.
+    //
+    // A row only qualifies with NO prose word of its own: a body line with an
+    // inline formula keeps its lowercase words and stays ordinary evidence, and
+    // a real table's cells (numerals in the body face, or a math cell sitting
+    // among rows that carry the structure themselves) are unaffected.
+    // \exp, \log, \cos … are the exception — TeX sets them as upright lowercase
+    // words INSIDE the equation, so they must not read as prose here: on Shor
+    // p21 the "exp" in (6.7) kept three equation rows out of this test, and the
+    // gap before their (6.7)/(6.8)/(6.9) TAGS — the same x on all three — then
+    // formed an aligned run that swept the prose between them.
+    // Juxtaposed math variables are the other trap: LOWER_WORD accepts 2-letter
+    // tokens, so "rc", "br", "bT" in "T = rc + d − r{c(p−1)}q, (6.8)" counted as
+    // prose and kept THAT row out of the test too. A word of 3+ letters is the
+    // prose signal here; a real prose line always has several.
+    const MATH_OP = /^(?:exp|log|ln|lg|cos|sin|tan|cot|sec|csc|sinh|cosh|tanh|arg|max|min|sup|inf|lim|det|dim|deg|gcd|mod|ker|hom)$/;
+    const PROSE_WORD = /^[a-zà-ÿ]{3,}$/;
+    const proseWords = (r) => {
+      let n = 0;
+      for (const p of r.items)
+        for (const w of p.item.str.trim().split(/\s+/))
+          if (PROSE_WORD.test(w) && !MATH_OP.test(w)) n++;
+      return n;
+    };
+    const isDisplayMathRow = (r) => {
+      if (!r.items.length || proseWords(r) > 0) return false;
+      let math = 0;
+      let tot = 0;
+      for (const p of r.items) {
+        const n = p.item.str.trim().length;
+        tot += n;
+        if (isMath(p)) math += n;
+      }
+      return tot > 0 && math / tot >= 0.25;
+    };
     const specialRatio = (its) => {
       let s = 0;
       let t = 0;
@@ -582,6 +656,7 @@ export class TypographyEngine {
       if (rows.length < 3) return;
       const sorted = rows.slice().sort((a, b) => b.y - a.y); // top → bottom
       const gapsOf = (r) => {
+        if (isDisplayMathRow(r)) return []; // an equation's operator gaps are not cells
         const g = [];
         for (let k = 1; k < r.items.length; k++) {
           const prev = r.items[k - 1].item;
@@ -654,7 +729,20 @@ export class TypographyEngine {
             const oneSide =
               sorted[j].items.every((p) => p.item.transform[4] + (p.item.width ?? 0) <= band[0] + 1) ||
               sorted[j].items.every((p) => p.item.transform[4] >= band[1] - 1);
-            if ((!smallHit && !oneSide) || j - last > 2) break;
+            // Running prose reaching across the band ENDS the run, even when a
+            // word gap happens to land inside it. The coverage test above was
+            // meant to catch this, but smallHit took priority: a justified line
+            // leaves a word gap wherever it likes, and one landing in the band
+            // read as a cell boundary — so prose lines between the inline
+            // fraction fragments of a math paragraph were swept into the run
+            // (Shor p22 "…so the error term is O(…)"). A prose-cell table is
+            // unaffected: its wordy cell sits INSIDE a column (oneSide), it
+            // does not straddle the boundary.
+            const straddlesBand =
+              lowerWords(sorted[j].items) >= 4 &&
+              sorted[j].items.some((p) => p.item.transform[4] < band[0]) &&
+              sorted[j].items.some((p) => p.item.transform[4] + (p.item.width ?? 0) > band[1]);
+            if (straddlesBand || (!smallHit && !oneSide) || j - last > 2) break;
             ext = j;
           }
           if (withGap >= 3 && ext > bestLast) { bestLast = ext; bestBand = band; }
@@ -792,7 +880,9 @@ export class TypographyEngine {
         // paragraph is skipped as a table (B p10 §7.3). Off-size rows are
         // figure labels / sub- superscript fragments, never table cells — a
         // real table's rows share the block's height.
-        const cells = maxCells(b.rows.filter((r) => r.h >= b.h * 0.8));
+        const cells = maxCells(
+          b.rows.filter((r) => r.h >= b.h * 0.8 && !isDisplayMathRow(r)),
+        );
         const spc = specialRatio(b.items);
         const offSize = b.h < dominant * 0.82 || b.h > dominant * 1.18;
 
@@ -870,9 +960,17 @@ export class TypographyEngine {
         // wide enough to read as column gaps, but it averages ≥4 lowercase words
         // per line (a table cell has few). Without this, dense body paragraphs
         // and bulleted prose lists are wrongly skipped as tables.
-        const proseDense = lc >= b.rows.length * 4;
+        // …and count that average over the rows that CAN carry prose. A
+        // paragraph broken by displayed equations spends whole rows on math
+        // (relation symbols, big delimiters, sum limits, the equation tag),
+        // which drove the per-row average below 4 and made the paragraph read
+        // as a table even though every prose row was full running text (Shor
+        // p17: 20 rows, lc=78, needed 80 — off by two words). Same rule as the
+        // cell tally above: a displayed equation is not table structure.
+        const proseRows = b.rows.filter((r) => !isDisplayMathRow(r)).length;
+        const proseDense = lc >= proseRows * 4;
         if ((cells >= 3 || (spc >= 0.5 && cells >= 2)) && !proseDense) {
-          if (globalThis.__fxDebug) (globalThis.__fxBlkStats ??= []).push({ lead: b.lead.slice(0, 48), rows: b.rows.length, cells, spc: +spc.toFixed(2), lc });
+          if (globalThis.__fxDebug) (globalThis.__fxBlkStats ??= []).push({ lead: b.lead.slice(0, 48), rows: b.rows.length, proseRows, cells, spc: +spc.toFixed(2), lc });
           skipBlock(b, "blk-table"); continue;
         }
         // Heading: short, not a sentence, label- / bold- / large-led.
@@ -924,6 +1022,9 @@ export class TypographyEngine {
       if (rows.length < 4) return;
       const sorted = rows.slice().sort((a, b) => b.y - a.y); // top → bottom
       const startsOf = (r) => {
+        // A multi-line derivation aligns its relation symbol at one x on row
+        // after row — an aligned interior start that is math, not a column.
+        if (isDisplayMathRow(r)) return [];
         const xs = [];
         for (let k = 1; k < r.items.length; k++) {
           const prev = r.items[k - 1].item;
@@ -959,6 +1060,7 @@ export class TypographyEngine {
         if (proseRows > matched.length * 0.34) continue;
         const markerRows = matched.filter((k) => MARKER.test(sorted[k].items[0].item.str.trim())).length;
         if (markerRows >= matched.length * 0.5) continue;
+        if (globalThis.__fxDebug) (globalThis.__fxStarts ??= []).push({ seed: sorted[i].items.map((p) => p.item.str).join(" ").slice(0, 48), starts: all[i].map((x) => Math.round(x)), n: matched.length, rows: matched.map((k) => sorted[k].items.map((p) => p.item.str).join("").slice(0, 40)) });
         for (const k of matched) {
           for (const p of sorted[k].items) { skip.add(p.div); dbg(p.div, "table-starts"); }
           tableLines.push(bandExtent(sorted[k].items, sorted[k]));
@@ -1695,6 +1797,23 @@ export class TypographyEngine {
     return bold;
   }
 
+  /** True when the item is set in a math/symbol face (a subset of the special
+   *  faces) — used to recognize DISPLAYED equations, which must not be read as
+   *  table structure (see MATH_FONT). */
+  #isMathFont(pageView, fontName, cache) {
+    if (!fontName) return false;
+    if (cache.has(fontName)) return cache.get(fontName);
+    let math = false;
+    try {
+      const font = pageView.pdfPage.commonObjs.get(fontName);
+      math = MATH_FONT.test(font?.name ?? "");
+    } catch {
+      /* font not resolved — assume regular text */
+    }
+    cache.set(fontName, math);
+    return math;
+  }
+
   /** True when the item is set in an italic/oblique face — used to spot
    *  underlined italic run-in leads (see ITALIC_FONT). */
   #isItalicFont(pageView, fontName, cache) {
@@ -1803,12 +1922,15 @@ export class TypographyEngine {
     const fontCache = new Map();
     const boldCache = new Map();
     const italicCache = new Map();
+    const mathCache = new Map();
     const isSpecial = (p) =>
       this.#isSpecialFont(pageView, p.item?.fontName, fontCache);
     const isBold = (p) =>
       this.#isBoldFont(pageView, p.item?.fontName, boldCache);
     const isItalic = (p) =>
       this.#isItalicFont(pageView, p.item?.fontName, italicCache);
+    const isMath = (p) =>
+      this.#isMathFont(pageView, p.item?.fontName, mathCache);
     const refsBoxes = this.#refsBoxes?.get(pageNumber);
     const inRefsBox = (item) => {
       if (!refsBoxes || !item?.transform) return false;
@@ -1819,7 +1941,7 @@ export class TypographyEngine {
       );
     };
     if (globalThis.__fxDebug) globalThis.__fxCurPage = pageNumber;
-    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0);
+    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath);
     for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
     // Tag bibliography-region spans so the references feature can skip annotating
     // the reference list's own "[N]" entry markers with citation cards (F1).
