@@ -1439,9 +1439,13 @@ through a gap between two mask rects, not a text bug.
   reference-body loop uses) makes two DIFFERENT body lines look identical when a
   number is all that separates them; the first unit test written for this failed
   in exactly that way.
-- Result: the head renders as the author set it. papers.mjs stays 8/8 with one
-  measurable change - the CM paper's bolded count 1291 -> 1275, which is its own
-  running heads no longer being emphasized.
+- Result: the head renders as the author set it, verified at 3x. papers.mjs stays
+  8/8 with every count unchanged, INCLUDING the CM paper's bolded count of 1291.
+  (The first version of the rule moved that count to 1275, and I first read the
+  drop as its running heads no longer being emphasized. It was not: those heads
+  are one line at the very top and the 6% margin cut already had them. 1275 was
+  the R23-1a false positives - a subscript digit's box swallowing the line beside
+  it - and the count returning to 1291 is the evidence they are gone.)
 
 ### R23-1a - and then furniture claimed a body line (caught by skipline)
 The first version of the rule treated ANY digits-only line inside the band as a
@@ -1481,12 +1485,21 @@ each word of a ruled table's header.
   offenders. Private corpus, all 28: audit 28/28 with the four hard criteria 0 and
   skipBody identical to the pre-R23 baselines, tables 28/28 with 0 offenders.
   refbold unchanged (14/14, 28/28).
-- The only measurable movement anywhere in either corpus is the CM paper's bolded
-  count (1291 -> 1275, its running heads) and one span on IEEE conference
-  (skipBody 17 -> 18, a table header cell now left on the canvas). Both are the
-  fixes doing their job.
+- After R23-1a the only measurable movement anywhere in either corpus is one span
+  on IEEE conference (skipBody 17 -> 18: a table header cell now left on the
+  canvas, which is R23-2 doing its job). Every papers.mjs count, including the CM
+  paper's 1291 bolded spans, is identical to the pre-R22 baseline.
 - 42 documents seen, one matched pair each (two pages for six of them). The two
-  defects above are the only ones found.
+  defects above are the only ones found by eye; R23-1a was found by skipline.
+- diag-dividers now covers all 14 public papers: 1135 rules, masked=0.
+- Console gate: public 5/5 and private 28/28, PROBLEMS=0 on every page of every
+  document, viewer page and service worker. The allowlist earned nothing new -
+  its one entry (upstream TrueType hinting) accounts for every "loud" line.
+- skipline over four papers with the widest table/figure/math surface: no line is
+  skipped as `furniture`, and every remaining unprocessed prose line is one of the
+  intended classes - bibliography pages, front-matter author/email lines, a URL
+  continuation, figure state labels, bullet-led table cells. IEEE journal matches
+  its pre-R22 control page for page.
 
 ### Harness repairs made while running it
 1. shot-region2 had no timeout on its CDP calls: one paper wedged and the corpus
