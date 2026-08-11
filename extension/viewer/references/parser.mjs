@@ -180,10 +180,20 @@ export function findFurniture(lines) {
   for (const l of lines) {
     if (!inBand(l)) continue;
     const raw = (l.text ?? "").trim();
+    // A digits-only line is a page number only when it is the EXTREME line on
+    // its page. Inside the band it is usually a math subscript: the extractor
+    // emits "1" and "2" as their own lines under a formula, and treating those
+    // as page numbers put a furniture box around a single character — the body
+    // line beside it then started inside the box's slack and lost its emphasis
+    // (IEEE journal p6, "…is not known to the PKG…").
+    const isPageNumber = /^\d{1,4}$/.test(raw) && atPageEdge(l, edges);
+    // Repeated text must be WORDS. A repeated symbol/digit fragment (a
+    // subscript pair, "(·)") is formula debris, not a running head.
+    const hasLetter = /\p{L}/u.test(raw);
     if (
-      !/^\d{1,4}$/.test(raw) &&
-      !repeats(exact, raw.toLowerCase()) &&
-      !(raw.length <= 40 && repeats(stripped, normHead(raw)))
+      !isPageNumber &&
+      !(hasLetter && repeats(exact, raw.toLowerCase())) &&
+      !(hasLetter && raw.length <= 40 && repeats(stripped, normHead(raw)))
     ) {
       continue;
     }

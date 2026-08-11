@@ -1443,6 +1443,22 @@ through a gap between two mask rects, not a text bug.
   measurable change - the CM paper's bolded count 1291 -> 1275, which is its own
   running heads no longer being emphasized.
 
+### R23-1a - and then furniture claimed a body line (caught by skipline)
+The first version of the rule treated ANY digits-only line inside the band as a
+page number. The extractor emits a formula's subscripts as their own lines - "1"
+and "2" under a hash-function definition - so each got a furniture box ONE
+CHARACTER wide, and the engine's box test carried a 2-unit slack on top of the 2
+units findFurniture already pads with. A body line starting 1 unit past such a box
+counted as inside it and lost its emphasis (IEEE journal p6). Fixes: a digits-only
+line is a page number only when it is the EXTREME line on its page; repeated text
+must contain a LETTER (a repeated subscript pair is formula debris); and the
+engine's test drops its extra slack. The refs region can afford slack because its
+boxes are whole reference lines - a head's box can be one word wide.
+
+This is what `skipline` is for, and it is the one oracle in the set with no
+exit-code criterion: the fan-out saw the page and read it as clean, because ONE
+missing hairline of emphasis in a paragraph is not visible to the eye at 2x.
+
 ### R23-2 - a ruled table's HEADER row was emphasized over the document's bold
 The rule-zone backstop exempts a full-width, wordy line inside a rule chain: the
 paragraph that legitimately sits between two stacked framed listings. A table
