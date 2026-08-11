@@ -36,10 +36,22 @@ import { browserPath, extensionDir } from "./lib/env.mjs";
 // warnings" rule would be — so they are gone.
 //
 // To add one: run the sweep, let it FAIL, then add the narrowest pattern that
-// matches the actual text, with a comment naming the document it came from and
-// why it is upstream rather than ours. Re-review the list every release; an entry
-// that stops matching should be deleted, not kept "just in case".
-const UPSTREAM_ALLOW = [];
+// matches the actual text, with a comment saying which document class it came
+// from and why it is upstream rather than ours. Re-review the list every release;
+// an entry that stops matching should be deleted, not kept "just in case".
+//
+// NOTE ON ANCHORING: Log.entryAdded messages arrive prefixed with their source
+// ("worker: Warning: ..."), so a pattern anchored at ^Warning never matches. The
+// first draft of this list was anchored that way and silently covered nothing
+// while looking like coverage.
+const UPSTREAM_ALLOW = [
+  // PDF.js's font parser interpreting a broken TrueType hinting program in the
+  // DOCUMENT's embedded font, reported from the worker thread — which our code
+  // never touches. Verified upstream by --fxoff: byte-identical with reading
+  // mode never enabled. Seen on private-corpus PDFs exported from a word
+  // processor rather than built by LaTeX (no public corpus paper triggers it).
+  /Warning: TT: (undefined function|invalid function id)/,
+];
 
 const ARGV = process.argv.slice(2);
 // --selftest: inject a warning and an error into BOTH targets and assert they
@@ -48,6 +60,10 @@ const ARGV = process.argv.slice(2);
 // (and a low `captured` count on a document is a reason to re-check, not to
 // celebrate).
 const SELFTEST = ARGV.includes("--selftest");
+// --fxoff: never enable reading mode. The control for "is this warning ours?" —
+// anything that still appears is the stock PDF.js viewer talking about the
+// document, not a consequence of our overlay.
+const FXOFF = ARGV.includes("--fxoff");
 const SELF = "fx-console-selftest";
 const URL_ARG = ARGV.find((a) => a.startsWith("--url="))?.slice(6);
 const PAGES = parseInt(ARGV.find((a) => a.startsWith("--pages="))?.slice(8) ?? "6", 10);
@@ -176,7 +192,7 @@ try {
     const r = await page.send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
     return r.result?.value;
   };
-  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
+  if (!FXOFF) await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
   await sleep(2000);
   const total = (await ev(`window.PDFViewerApplication?.pagesCount ?? 0`)) || 0;
   const last = ALL ? total : Math.min(PAGES, total);
@@ -185,10 +201,12 @@ try {
     await sleep(1200);
   }
   // Toggle off and on: restore + re-process is where late errors surface.
-  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: false }, r))`);
-  await sleep(1500);
-  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
-  await sleep(2500);
+  if (!FXOFF) {
+    await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: false }, r))`);
+    await sleep(1500);
+    await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
+    await sleep(2500);
+  }
 
   if (SELFTEST) {
     await ev(`console.warn("${SELF} page warning"); console.error("${SELF} page error"); 1`);
@@ -228,7 +246,7 @@ try {
   // line — so show what little WAS captured, at any level, rather than leaving
   // "captured=1" to be taken on trust. (--selftest proves the channels work.)
   if (real.length <= 2) {
-    for (const m of real) console.log(`  (only message) [${m.where}/${m.level}] ${m.text.slice(0, 180).replace(/\s+/g, " ")}`);
+    for (const m of real) console.log(`  (all captured) [${m.where}/${m.level}] ${m.text.slice(0, 180).replace(/\s+/g, " ")}`);
   }
   const seen = new Set();
   for (const m of bad) {
