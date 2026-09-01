@@ -5,6 +5,12 @@ const HEADING = /^(?:[ivxlcdm]+[.\s]+|\d+[.\s]+|[A-Z][.\s]+)?(references|bibliog
 const SECTION_AFTER = /^(?:[A-Z\d]+[.\s]+)?(appendix|acknowledg|supplementary|author contributions|funding|conflicts? of interest)/i;
 const NUMERIC_MARKER = /^\[(\d{1,3})\]\s*/;
 const DOTTED_MARKER = /^(\d{1,3})\.\s+(?=\D)/;
+// BibTeX "alpha" style: author-initials + 2-digit year, optionally a "+" for
+// many-author entries and a trailing disambiguator letter — "[WL92]",
+// "[SRC07]", "[GHI+21]", "[Bla09a]". Must start with a capital (so a genuine
+// numeric marker like "[7]" or a plain word in brackets doesn't match) and
+// end in exactly two digits (so it can't swallow an ordinary bracketed word).
+const ALPHA_MARKER = /^\[([A-Z][A-Za-z]{0,6}\+?\d{2}[a-z]?)\]\s*/;
 const YEAR = /\b(19|20)\d{2}[a-z]?\b/;
 
 /**
@@ -18,11 +24,13 @@ export function parseReferences(lines) {
 
   const numericStarts = body.filter((l) => NUMERIC_MARKER.test(l.text)).length;
   const dottedStarts = body.filter((l) => DOTTED_MARKER.test(l.text)).length;
+  const alphaStarts = body.filter((l) => ALPHA_MARKER.test(l.text)).length;
 
   let groups;
   let mode;
   if (numericStarts >= 3) { groups = splitByMarker(body, NUMERIC_MARKER); mode = "numeric"; }
   else if (dottedStarts >= 3) { groups = splitByMarker(body, DOTTED_MARKER); mode = "dotted"; }
+  else if (alphaStarts >= 3) { groups = splitByMarker(body, ALPHA_MARKER); mode = "alpha"; }
   else { groups = splitByIndent(body); mode = "indent"; }
 
   const entries = groups
@@ -39,10 +47,39 @@ export function parseReferences(lines) {
 
 function findHeadingIndex(lines) {
   // Search from the end — "References" may also appear in the TOC or body.
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (HEADING.test(lines[i].text)) return i;
+  // But in a two-sided book/report template the section title is ALSO set as
+  // a running head on every page of the section (top margin, alternating
+  // left/right), repeating right up to the section's own last page — a naive
+  // last-match search locks onto THAT copy, on the final page, and reads the
+  // whole bibliography before it as ordinary prose (only the handful of
+  // entries after the last running head got parsed).
+  //
+  // A running head is pinned to the SAME y on every page it appears on (it's
+  // set once in the page template); the true section heading is not — even
+  // when it also happens to sit near a page's top margin (a chapter-opening
+  // page with blank space above the title), its y is whatever the title's own
+  // layout put it at, distinct from the header's fixed slot. So: cluster
+  // HEADING matches by y, and treat a cluster spanning 3+ distinct pages as
+  // the running head, not the heading itself. (Can't reuse the page-edge
+  // text-repetition helpers below for this — those key on normalized TEXT
+  // only, so the once-per-document heading, which case-folds to the exact
+  // same string as the header, would false-positive as a repeat too.)
+  const matches = [];
+  for (let i = 0; i < lines.length; i++) if (HEADING.test(lines[i].text)) matches.push(i);
+  if (!matches.length) return -1;
+  const byY = new Map();
+  for (const i of matches) {
+    const y = Math.round(lines[i].y);
+    if (!byY.has(y)) byY.set(y, new Set());
+    byY.get(y).add(lines[i].page);
   }
-  return -1;
+  const runningY = new Set([...byY].filter(([, pages]) => pages.size >= 3).map(([y]) => y));
+  for (let k = matches.length - 1; k >= 0; k--) {
+    const i = matches[k];
+    if (runningY.has(Math.round(lines[i].y))) continue;
+    return i;
+  }
+  return matches.at(-1); // every match looks like a running head — fall back to the old behavior.
 }
 
 /**
@@ -322,9 +359,13 @@ function buildEntry(group) {
   // De-hyphenate line breaks: "infor- mation" -> "information".
   raw = raw.replace(/(\p{Ll})- (\p{Ll})/gu, "$1$2");
   let number = null;
+  let alphaKey = null;
   let m = NUMERIC_MARKER.exec(raw) || DOTTED_MARKER.exec(raw);
   if (m) {
     number = parseInt(m[1], 10);
+    raw = raw.slice(m[0].length).trim();
+  } else if ((m = ALPHA_MARKER.exec(raw))) {
+    alphaKey = m[1];
     raw = raw.slice(m[0].length).trim();
   }
   const surname = /\p{Lu}[\p{L}'’-]+/u.exec(raw)?.[0] ?? null;
@@ -333,7 +374,7 @@ function buildEntry(group) {
     /\b10\.\d{4,9}\/[^\s"',;]+/.exec(raw)?.[0].replace(/[).,;]+$/, "") ?? null;
   return {
     number,
-    label: number !== null ? String(number) : surname && year ? `${surname}-${year}` : null,
+    label: number !== null ? String(number) : alphaKey ?? (surname && year ? `${surname}-${year}` : null),
     surname,
     year,
     doi,
@@ -366,8 +407,16 @@ export function guessTitle(raw) {
 
 // In-paper references: pointers to the document's own figures, tables,
 // sections, equations, algorithms, and appendices.
+// The trailing letter only counts as a subsection suffix ("Section 2a") when
+// it is NOT itself followed by another letter. Text-layer spans correspond to
+// PDF-authored LINES, and a justified line's wrap point carries no space
+// character in either the outgoing or incoming span — "...Chapter 2" / "pro-
+// vides..." joins as "...Chapter 2provides...". Without this guard the bare
+// `[a-z]?` swallowed the next word's first letter as a fake suffix ("2p"),
+// leaving that single letter colored as part of the reference and the rest
+// of the word an abrupt, oddly-colored orphan.
 const INTERNAL_REF =
-  /\b(?:Figure|Fig\.|Figs?\.|Table|Tab\.|Algorithm|Alg\.|Listing|Section|Sec\.|§|Appendix|App\.|Equation|Eq\.|Chapter|Theorem|Lemma|Definition|Claim)\s*~?\s*(?:\d+(?:\.\d+)*[a-z]?|[A-Z]\b(?:\.\d+)?)/g;
+  /\b(?:Figure|Fig\.|Figs?\.|Table|Tab\.|Algorithm|Alg\.|Listing|Section|Sec\.|§|Appendix|App\.|Equation|Eq\.|Chapter|Theorem|Lemma|Definition|Claim)\s*~?\s*(?:\d+(?:\.\d+)*(?:[a-z](?![a-zA-Z]))?|[A-Z]\b(?:\.\d+)?)/g;
 
 /** Character ranges of in-paper references in a text string. */
 export function findInternalRefs(text) {
@@ -410,6 +459,16 @@ const NARRATIVE_CITE = new RegExp(
 // Words that look like a surname but introduce a NUMBER, not an author.
 const NOT_A_SURNAME = /^(Table|Figure|Fig|Section|Sec|Eq|Equation|Chapter|Appendix|Algorithm|Theorem|Lemma|Definition|Part|Step|Line|No|Vol|Ref)$/i;
 
+// BibTeX "alpha"-style citation keys in brackets, matching ALPHA_MARKER's
+// entry labels — "[WL92]", "[SRC07, SRK10]", "[GHI+21]". Ends in exactly two
+// digits (an optional disambiguator letter after) so it can't swallow an
+// ordinary bracketed word or a numeric list (NUMERIC_CITE already owns those).
+const ALPHA_CITE_KEY = "[A-Z][A-Za-z]{0,6}\\+?\\d{2}[a-z]?";
+const ALPHA_CITE = new RegExp(
+  `\\[(${ALPHA_CITE_KEY}(?:\\s*,\\s*${ALPHA_CITE_KEY})*)\\]`,
+  "g",
+);
+
 /**
  * Find citation-like substrings in a text-layer span's text.
  * @returns Array<{start, end, keys: string[]}> keys match entry labels.
@@ -432,6 +491,10 @@ export function findCitations(text) {
         keys.push(`${surname}-${year}`);
       }
     }
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
+  }
+  for (const m of text.matchAll(ALPHA_CITE)) {
+    const keys = m[1].split(/\s*,\s*/).map((k) => k.trim()).filter(Boolean);
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
   }
   for (const m of text.matchAll(NARRATIVE_CITE)) {
@@ -486,6 +549,10 @@ export function resolveCitation(keys, entries) {
     if (/^\d+$/.test(key)) {
       const e = entries.find((x) => x.number === parseInt(key, 10));
       if (e) found.push(e);
+    } else if (entries.some((x) => x.label === key)) {
+      // Alpha-style key ("WL92"): matches an ALPHA_MARKER entry's own label
+      // directly — it's not a synthesized surname-year pair to split apart.
+      found.push(entries.find((x) => x.label === key));
     } else {
       // Split on the LAST hyphen — a hyphenated surname ("Ben-Or-1994") would
       // otherwise yield surname "Ben", year "Or".

@@ -173,6 +173,79 @@ test("a running head at a page break does not end the bibliography", () => {
   assert.equal(entries.length, 3);
 });
 
+test("a repeated running head with the SAME title as the section is not mistaken for it", () => {
+  // Two-sided book/report templates set the chapter title as a running head
+  // on every page of the chapter, alternating left/right margins — including
+  // every page of a "Bibliography" chapter, right up to its last page. A
+  // naive last-match search for the heading text locks onto that final running
+  // head instead of the true (once-per-document) chapter title, so everything
+  // before it — most of the bibliography — reads as ordinary body prose.
+  // The distinguishing signal: the running head sits at the SAME y on every
+  // page it appears on; the true heading's y is wherever its own layout put
+  // it, not pinned to the header's slot (here, deliberately overlapping the
+  // running head's normalized text and even sitting near ITS OWN page's top).
+  const runningHead = (p) => ({ text: "BIBLIOGRAPHY", x: 300, y: 770, page: p, h: 10, column: 0 });
+  const page = (texts, p, startY) =>
+    texts.map((t, i) => ({
+      text: typeof t === "object" ? t.text : t,
+      x: typeof t === "object" ? 62 : 50,
+      y: startY - i * 12,
+      page: p,
+      h: 8,
+      column: 0,
+    }));
+  const doc = [
+    ...page(["Body prose on the chapter's last content page."], 5, 700),
+    // The true heading: near its own page's top (blank space above a chapter
+    // title is normal), but at a y distinct from the running head's fixed slot.
+    { text: "Bibliography", x: 72, y: 660, page: 6, h: 14, column: 0 },
+    ...page([
+      "[1] A. Author. First entry with a title long enough to pass the gate, 2020.",
+    ], 6, 630),
+    runningHead(7),
+    ...page([
+      "[2] B. Author. Second entry with a title long enough to pass the gate, 2021.",
+    ], 7, 700),
+    runningHead(8),
+    ...page([
+      "[3] C. Author. Third entry with a title long enough to pass the gate, 2022.",
+    ], 8, 700),
+    runningHead(9),
+    ...page([
+      "[4] D. Author. Fourth entry with a title long enough to pass the gate, 2023.",
+    ], 9, 700),
+  ];
+  const { heading, body } = findReferencesBody(doc);
+  assert.equal(heading.page, 6);
+  assert.equal(heading.text, "Bibliography");
+  const entries = parseReferences(doc);
+  assert.equal(entries.length, 4);
+  assert.ok(!body.some((l) => l.text === "BIBLIOGRAPHY"), "the running head stays out of the body");
+});
+
+test("alpha-style bibliography markers ([WL92], [SRC07]) are parsed and resolved", () => {
+  // BibTeX's "alpha" style keys entries with author-initials + 2-digit year
+  // ("[WL92]") instead of a running number or a dotted list. Neither the
+  // numeric nor the dotted marker matches, so this must fall into its own
+  // "alpha" split mode rather than the marker-less indent fallback.
+  const doc = lines([
+    "Bibliography",
+    "[WL92] Thomas Woo and Simon Lam. Authentication for distributed systems.",
+    { text: "Computer, 25(1):39–52, 1992." },
+    "[SRC07] Ben Smyth, Mark Ryan, and Liqun Chen. Certificate management using",
+    { text: "distributed trust in a wireless network. In WOSIS, 2007." },
+    "[Yub10] Yubico AB. The YubiKey manual (Version 2.2), 2010.",
+  ]);
+  const entries = parseReferences(doc);
+  assert.deepEqual(
+    entries.map((e) => e.label),
+    ["WL92", "SRC07", "Yub10"],
+  );
+  const resolved = resolveCitation(["SRC07"], entries);
+  assert.equal(resolved.length, 1);
+  assert.match(resolved[0].raw, /distributed trust/);
+});
+
 test("a phrase repeated inside the bibliography is not furniture", () => {
   // Furniture is recognized by repetition, so a line that recurs in the
   // reference list itself qualified — an italic journal name ending an entry, or
@@ -385,6 +458,22 @@ test("findInternalRefs matches in-paper pointers, not prose", () => {
   const found = findInternalRefs(text).map(({ start, end }) => text.slice(start, end));
   assert.deepEqual(found, ["Figure 3", "Table 9", "Algorithm 2", "Section 5.1", "Appendix B"]);
   assert.equal(findInternalRefs("the figure shows a table of results").length, 0);
+});
+
+test("findInternalRefs: a line-wrap with no space after the number is not swallowed", () => {
+  // Text-layer spans correspond to PDF-authored lines. A justified line that
+  // wraps right after "Chapter 2" carries no trailing space, and the next
+  // span starts immediately with the next word — "...Chapter 2" + "provides
+  // an introduction..." concatenates to "...Chapter 2provides...". The
+  // optional subsection-suffix letter must not treat that "p" as part of the
+  // reference.
+  const text = "Chapter 2 concludes. Chapter 2provides an introduction to the topic.";
+  const found = findInternalRefs(text).map(({ start, end }) => text.slice(start, end));
+  assert.deepEqual(found, ["Chapter 2", "Chapter 2"]);
+  // A genuine subsection suffix (not followed by another letter) still works.
+  const suffixText = "See Section 3a, then Section 3b.";
+  const suffixed = findInternalRefs(suffixText).map(({ start, end }) => suffixText.slice(start, end));
+  assert.deepEqual(suffixed, ["Section 3a", "Section 3b"]);
 });
 
 test("guessTitle falls back to raw prefix", () => {
