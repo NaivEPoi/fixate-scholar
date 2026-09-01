@@ -138,10 +138,38 @@ export class TypographyEngine {
   #snapCtx = null; // offscreen willReadFrequently context for canvas pixel reads
   #pageFonts = new Map(); // pageNumber -> Set<famKey> used by processed spans
   #inkRetryPages = new Set(); // pages whose ink decisions used a capped-resolution canvas
+  #batching = false; // document-wide setters record only; endBatch re-processes once
 
   constructor(app, settings) {
     this.#app = app;
     this.#settings = settings;
+  }
+
+  /**
+   * Open a batch: the four document-wide setters below record their values but
+   * skip re-processing until endBatch().
+   *
+   * They all arrive together, once, when the reference extractor finishes —
+   * and each one used to restore and re-process the rendered pages on its own,
+   * so a document load paid up to FOUR full passes over every rendered page
+   * (plus a re-annotation after each) to reach a single final state. The
+   * values, the globals they publish, and the conditions under which they are
+   * applied are untouched; only the redundant intermediate passes are gone.
+   */
+  beginBatch() {
+    this.#batching = true;
+  }
+
+  /** Close the batch and re-process once, from a clean state. This is the
+   *  superset of what the individual setters would each have re-processed:
+   *  setBodyHeight already restores + processes EVERY rendered page, and the
+   *  other three process a subset of those pages. */
+  endBatch() {
+    if (!this.#batching) return Promise.resolve();
+    this.#batching = false;
+    if (!this.#enabled) return Promise.resolve();
+    this.#restoreAll();
+    return this.#processAll();
   }
 
   /** Document-wide body-text height (char-weighted height mode over every
@@ -151,7 +179,7 @@ export class TypographyEngine {
   setBodyHeight(h) {
     if (!h || h === this.#bodyHeight) return Promise.resolve();
     this.#bodyHeight = h;
-    if (!this.#enabled) return Promise.resolve();
+    if (!this.#enabled || this.#batching) return Promise.resolve();
     this.#restoreAll();
     return this.#processAll();
   }
@@ -161,7 +189,7 @@ export class TypographyEngine {
   setContentStart(pos) {
     this.#contentStart = pos;
     globalThis.__fxContentStart = pos; // test introspection
-    if (!this.#enabled || !pos) return Promise.resolve();
+    if (!this.#enabled || !pos || this.#batching) return Promise.resolve();
     const promises = [];
     this.#eachRenderedPage((pv) => {
       if (pv.id <= pos.page) promises.push(this.#processPage(pv));
@@ -175,7 +203,7 @@ export class TypographyEngine {
   setRefsRegion(boxesByPage) {
     this.#refsBoxes = boxesByPage;
     globalThis.__fxRefPages = boxesByPage ? [...boxesByPage.keys()] : []; // test introspection
-    if (!this.#enabled || !boxesByPage?.size) return Promise.resolve();
+    if (!this.#enabled || !boxesByPage?.size || this.#batching) return Promise.resolve();
     const promises = [];
     this.#eachRenderedPage((pv) => {
       if (boxesByPage.has(pv.id)) promises.push(this.#processPage(pv));
@@ -192,7 +220,7 @@ export class TypographyEngine {
   setFurniture(boxesByPage) {
     this.#furnitureBoxes = boxesByPage;
     globalThis.__fxFurniturePages = boxesByPage ? [...boxesByPage.keys()] : []; // test introspection
-    if (!this.#enabled || !boxesByPage?.size) return Promise.resolve();
+    if (!this.#enabled || !boxesByPage?.size || this.#batching) return Promise.resolve();
     const promises = [];
     this.#eachRenderedPage((pv) => {
       if (boxesByPage.has(pv.id)) promises.push(this.#processPage(pv));
@@ -1777,6 +1805,36 @@ export class TypographyEngine {
   }
 
   /**
+   * #readCanvasPixels, memoized for the duration of ONE processing pass.
+   *
+   * A pass read the same base canvas back three separate times — once for the
+   * canvas-rule detection, once for the ink checks, once for the baseline
+   * calibration — and each read is a full-page drawImage plus a synchronous
+   * GPU readback (tens of MB on a high-DPI page), with the shared scratch
+   * canvas reallocated whenever the dimensions alternate between the base and
+   * detail reads. The pixels are identical across the three: the pass does not
+   * start until the canvas has finished painting (the renderingState gate in
+   * #processPage), and nothing it does afterwards draws on the canvas — it
+   * only rewrites text-layer spans and inserts mask divs.
+   *
+   * The memo is created per pass and dropped at the end of it, so a later
+   * re-render is always read afresh. The returned ImageData is a copy taken
+   * out of the scratch canvas, so a subsequent read of a DIFFERENT canvas
+   * (the detail view) cannot invalidate a memoized snapshot.
+   */
+  #snapshotFor(canvas, memo) {
+    if (!canvas || !memo) return this.#readCanvasPixels(canvas);
+    const cached = memo.get(canvas);
+    // Re-read if the canvas was resized under us (a re-render at a new zoom).
+    if (cached && cached.w === canvas.width && cached.h === canvas.height) {
+      return cached.snap;
+    }
+    const snap = this.#readCanvasPixels(canvas);
+    memo.set(canvas, { w: canvas.width, h: canvas.height, snap });
+    return snap;
+  }
+
+  /**
    * Long, thin dark runs on the PAINTED page canvas — table rules, box frames,
    * underlines, footnote separators — returned as viewport-CSS rects. This is
    * canvas ART the text layer knows nothing about, so masks must clamp around
@@ -1790,23 +1848,41 @@ export class TypographyEngine {
    * and below the band are mostly light within its x-extent — an in-glyph row
    * fails because the glyphs continue above/below).
    */
-  #detectCanvasRules(pageView) {
+  #detectCanvasRules(pageView, snapMemo) {
     const out = [];
     try {
       const canvas = pageView.canvas || pageView.div.querySelector("canvas");
       if (!canvas || !canvas.width) return out;
-      const cr = canvas.getBoundingClientRect();
-      if (!(cr.width > 0) || !(cr.height > 0)) return out;
-      const snap = this.#readCanvasPixels(canvas);
+      // The snapshot already measured the canvas (and refuses a zero-width
+      // one), so take cr from it rather than reading the box a second time.
+      const snap = this.#snapshotFor(canvas, snapMemo);
       if (!snap) return out;
+      const cr = snap.cr;
+      if (!(cr.width > 0) || !(cr.height > 0)) return out;
       const data = snap.d;
       const W = snap.W, H = snap.H;
       const sx = cr.width / W, sy = cr.height / H;
-      const isDark = (x, y) => { const i = (y * W + x) * 4; return data[i + 3] > 40 && 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] < 140; };
+      // One dark/light byte per pixel, resolved in a single row-major sweep.
+      // The two band scans and the two isolation checks below each used to
+      // re-evaluate the luminance predicate through a closure, per pixel — and
+      // the VERTICAL scan walked column-major over the RGBA buffer, so
+      // consecutive reads sat W*4 bytes apart and missed cache on essentially
+      // every pixel. One byte per pixel cuts that stride to W and the whole
+      // page is classified once instead of up to three times. Same predicate,
+      // same bands.
+      const dark = new Uint8Array(W * H);
+      for (let p = 0, i = 0; p < dark.length; p++, i += 4) {
+        dark[p] =
+          data[i + 3] > 40 &&
+          0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] < 140
+            ? 1
+            : 0;
+      }
       const darkFrac = (x0, x1, y) => {
         if (y < 0 || y >= H) return 0;
         let n = 0, d = 0;
-        for (let x = x0; x < x1; x += 2) { n++; if (isDark(x, y)) d++; }
+        const row = y * W;
+        for (let x = x0; x < x1; x += 2) { n++; if (dark[row + x]) d++; }
         return n ? d / n : 0;
       };
       const minLen = Math.max(24, Math.round(60 / sx)); // ≥60 CSS px
@@ -1815,12 +1891,16 @@ export class TypographyEngine {
       const bands = []; // {y0,y1,x0,x1}
       for (let y = 0; y < H; y++) {
         let run = 0, x0 = 0;
+        const row = y * W;
         for (let x = 0; x <= W; x++) {
-          if (x < W && isDark(x, y)) { if (!run) x0 = x; run++; continue; }
+          if (x < W && dark[row + x]) { if (!run) x0 = x; run++; continue; }
           if (run >= minLen) {
             const x1 = x;
-            const prev = bands.findLast?.((b) => b.y1 === y - 1 && x0 < b.x1 + 4 && x1 > b.x0 - 4) ??
-              bands.slice().reverse().find((b) => b.y1 === y - 1 && x0 < b.x1 + 4 && x1 > b.x0 - 4);
+            // findLast and slice().reverse().find() return the same element,
+            // but `??` fell through to the copy whenever findLast found
+            // NOTHING — the common case — so the O(n) copy of an up-to-800
+            // entry list ran on nearly every completed run.
+            const prev = bands.findLast((b) => b.y1 === y - 1 && x0 < b.x1 + 4 && x1 > b.x0 - 4);
             if (prev) { prev.y1 = y; prev.x0 = Math.min(prev.x0, x0); prev.x1 = Math.max(prev.x1, x1); }
             else if (bands.length < 800) bands.push({ y0: y, y1: y, x0, x1 });
           }
@@ -1844,7 +1924,7 @@ export class TypographyEngine {
       const darkFracV = (y0, y1, x) => {
         if (x < 0 || x >= W) return 0;
         let n = 0, d = 0;
-        for (let y = y0; y < y1; y += 2) { n++; if (isDark(x, y)) d++; }
+        for (let y = y0; y < y1; y += 2) { n++; if (dark[y * W + x]) d++; }
         return n ? d / n : 0;
       };
       const minLenV = Math.max(24, Math.round(60 / sy));
@@ -1853,10 +1933,11 @@ export class TypographyEngine {
       for (let x = 0; x < W; x++) {
         let run = 0, y0 = 0;
         for (let y = 0; y <= H; y++) {
-          if (y < H && isDark(x, y)) { if (!run) y0 = y; run++; continue; }
+          if (y < H && dark[y * W + x]) { if (!run) y0 = y; run++; continue; }
           if (run >= minLenV) {
             const y1 = y;
-            const prev = vbands.slice().reverse().find((b) => b.x1 === x - 1 && y0 < b.y1 + 4 && y1 > b.y0 - 4);
+            // Same element as the reverse-copy scan, without copying the list.
+            const prev = vbands.findLast((b) => b.x1 === x - 1 && y0 < b.y1 + 4 && y1 > b.y0 - 4);
             if (prev) { prev.x1 = x; prev.y0 = Math.min(prev.y0, y0); prev.y1 = Math.max(prev.y1, y1); }
             else if (vbands.length < 400) vbands.push({ x0: x, x1: x, y0, y1 });
           }
@@ -2320,10 +2401,15 @@ export class TypographyEngine {
       const layerRect = textLayerDiv.getBoundingClientRect();
       if (!obstacleRects) {
         obstacleRects = [];
+        // One snapshot per canvas for this whole block: the rule detection, the
+        // ink checks and the baseline calibration all read the same painted
+        // base canvas, and a readback is the most expensive thing here.
+        // Dropped at the end of the block, so a re-render never reuses pixels.
+        const snapMemo = new Map();
         // Canvas line-art (table rules, box frames, underlines, separators)
         // becomes obstacles too, so masks clamp around it exactly like skipped
         // text — the text layer alone can't see these.
-        const canvasRules = this.#detectCanvasRules(pageView);
+        const canvasRules = this.#detectCanvasRules(pageView, snapMemo);
         for (const r of canvasRules) obstacleRects.push(r);
         // HIDDEN-TEXT guard. A PDF's text layer can carry items the canvas
         // never painted (invisible render mode / OCR overlays / hidden
@@ -2340,7 +2426,7 @@ export class TypographyEngine {
           // metrics below need the sharpest pixels covering each rect: at a
           // capped base resolution, tight leading bleeds the neighbours'
           // ink into a line's edge rows and the fit scores turn to noise.
-          const readCanvas = (canvas) => this.#readCanvasPixels(canvas);
+          const readCanvas = (canvas) => this.#snapshotFor(canvas, snapMemo);
           const base = readCanvas(pageView.canvas);
           const inkedIn = (s, i) => s.d[i + 3] > 40 && 0.299 * s.d[i] + 0.587 * s.d[i + 1] + 0.114 * s.d[i + 2] < 200;
           if (base) {
@@ -2354,8 +2440,13 @@ export class TypographyEngine {
               return base;
             };
             // page-level sanity: an unpainted canvas must not veto everything
+            // Stops at the threshold: the count is only ever compared against
+            // it, and a painted page crosses it within the first fraction of
+            // the scan (a blank one still pays the full sweep, as it must).
             let pageInk = 0;
-            for (let i = 0; i < base.d.length; i += 16 * 4) if (inkedIn(base, i)) pageInk++;
+            for (let i = 0; i < base.d.length; i += 16 * 4) {
+              if (inkedIn(base, i) && ++pageInk > 200) break;
+            }
             if (pageInk > 200) {
               // Sample only the CORE band (middle 40% of the height): a
               // hidden line sitting in the leading GAP between two printed
@@ -2724,14 +2815,18 @@ export class TypographyEngine {
         baselineCal = new Map();
         try {
           const canvas = pageView.canvas;
-          const cr = canvas?.getBoundingClientRect();
+          // Same painted canvas the ink checks above already snapshotted, so
+          // this reuses those pixels (and the box they were measured with)
+          // instead of paying a third full-page readback for the page.
+          const memoized = this.#snapshotFor(canvas, snapMemo);
+          const cr = memoized?.cr ?? canvas?.getBoundingClientRect();
           const csx = cr && cr.width > 0 ? canvas.width / cr.width : 0;
           const csy = cr && cr.height > 0 ? canvas.height / cr.height : 0;
           const dpr = window.devicePixelRatio || 1;
           // ONE snapshot for up to 150 sampled lines: a getImageData per line
           // was 150 separate GPU readbacks off PDF.js's canvas (see
           // #readCanvasPixels) — slow, and what made the browser warn.
-          const snap = csx > 0 && csy > dpr * 0.85 ? this.#readCanvasPixels(canvas) : null;
+          const snap = csx > 0 && csy > dpr * 0.85 ? memoized : null;
           if (snap) {
             this.#measureCtx ??= document.createElement("canvas").getContext("2d");
             const samples = new Map();
@@ -2959,8 +3054,18 @@ export class TypographyEngine {
           span.dataset.fxDone = "1";
         }
         // Re-measure pass: one layout flush. The post-change rect is the bolded
-        // text in the new face at the corrected baseline.
-        for (const entry of batch) entry.rect2 = entry.pair.div.getBoundingClientRect();
+        // text in the new face at the corrected baseline. The computed font
+        // size is taken in the SAME flush: the width pass below needs it, and
+        // reading it there — after that loop has already written word-spacing
+        // and --scale-x on earlier spans — forced a fresh style resolution over
+        // the dirtied text layer for every processed span. Neither property it
+        // writes affects font-size, and the face/weight/style changes this pass
+        // reads are already applied here, so the value is the same one the
+        // per-span read returned.
+        for (const entry of batch) {
+          entry.rect2 = entry.pair.div.getBoundingClientRect();
+          entry.fontPx = parseFloat(getComputedStyle(entry.pair.div).fontSize);
+        }
 
         // Mask pass: one white box PER RENDERED SPAN, covering its canvas
         // duplicate plus ink overshoot (italics, descenders, accents): ±28%
@@ -3060,7 +3165,7 @@ export class TypographyEngine {
         // word-spacing against targetW erases the stale scale: glyphs render
         // at their natural advances (matching the canvas letters) and the
         // spaces absorb the justification surplus, exactly like the canvas.
-        for (const { pair, rect, rect2, targetW } of batch) {
+        for (const { pair, rect, rect2, targetW, fontPx: measuredFontPx } of batch) {
           const span = pair.div;
           const newWidth = (rect2 || span.getBoundingClientRect()).width;
           if (!(newWidth > 0)) continue;
@@ -3085,7 +3190,7 @@ export class TypographyEngine {
           if (spaces >= 1) {
             const raw = (targetW - natural) / spaces;
             const perSpace = Math.min(rect.height * 0.45, Math.max(rect.height * -0.1, raw));
-            const fontPx = parseFloat(getComputedStyle(span).fontSize) || rect.height;
+            const fontPx = measuredFontPx || rect.height;
             span.style.wordSpacing = `${perSpace / fontPx}em`;
             const carried = natural + perSpace * spaces;
             span.style.setProperty(

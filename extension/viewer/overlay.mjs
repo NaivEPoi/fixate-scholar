@@ -66,6 +66,48 @@ function addToolbarToggle(app, initialOn, onToggle) {
   return (on) => button.classList.toggle("toggled", on);
 }
 
+const FONT_MODES = [
+  { value: "original", label: "Aa", title: "Original — the document's embedded font" },
+  { value: "atkinson", label: "Atkinson", title: "Atkinson Hyperlegible — designed for low-vision readability" },
+  { value: "inter", label: "Inter", title: "Inter — clean screen sans-serif" },
+  { value: "literata", label: "Literata", title: "Literata — book-style reading serif" },
+];
+
+// Cycles fontMode through FONT_MODES on click, without a trip to the options
+// page. Mirrors addToolbarToggle: same slot, same returned sync function so
+// the button can be kept in step with changes made elsewhere (options page,
+// popup, another tab on the same document via chrome.storage.sync).
+function addFontButton(initialMode, onChange) {
+  const right = document.getElementById("toolbarViewerRight");
+  if (!right) return () => {};
+  const button = document.createElement("button");
+  button.id = "fxFontButton";
+  button.className = "toolbarButton";
+  button.type = "button";
+  button.style.cssText = "font-weight:600;width:auto;padding:0 8px;";
+  let index = Math.max(0, FONT_MODES.findIndex((m) => m.value === initialMode));
+  const reflect = () => {
+    const mode = FONT_MODES[index];
+    button.textContent = mode.label;
+    button.title = `Font: ${mode.title} — click to switch`;
+    button.classList.toggle("toggled", mode.value !== "original");
+  };
+  reflect();
+  button.addEventListener("click", () => {
+    index = (index + 1) % FONT_MODES.length;
+    reflect();
+    onChange(FONT_MODES[index].value);
+  });
+  right.prepend(button);
+  return (mode) => {
+    const next = FONT_MODES.findIndex((m) => m.value === mode);
+    if (next !== -1 && next !== index) {
+      index = next;
+      reflect();
+    }
+  };
+}
+
 // Escape hatch: re-open the current document in Chrome's native PDF viewer
 // (the service worker installs a one-shot allow rule before re-navigating).
 function addNativeViewerButton() {
@@ -107,14 +149,29 @@ const references = new ReferencesFeature(app);
 // coloring wraps along with the rest of the span DOM), so the citation
 // annotations must be rebuilt afterwards — without this, pages annotated
 // before the async extraction finished lost their citation colors for good.
-references.onRefsRegion = (boxes) =>
-  engine.setRefsRegion(boxes).then(() => references.reannotateRendered());
-references.onContentStart = (pos) =>
-  engine.setContentStart(pos).then(() => references.reannotateRendered());
-references.onBodyHeight = (h) =>
-  engine.setBodyHeight(h).then(() => references.reannotateRendered());
-references.onFurniture = (boxes) =>
-  engine.setFurniture(boxes).then(() => references.reannotateRendered());
+// All four land together when extraction finishes, and each used to restore
+// and re-process the rendered pages and then rebuild every page's citation
+// annotations — four near-identical passes over the whole rendered document
+// for one final state, which is a large part of the lag right after a document
+// loads. Inside the batch the engine only records them; it re-processes once at
+// onAnalysisEnd, and citations.mjs re-annotates once after that. Outside a
+// batch each setter still re-annotates, so a lone call keeps its guarantee.
+let batchingAnalysis = false;
+const afterEngineChange = () => {
+  if (!batchingAnalysis) references.reannotateRendered();
+};
+references.onAnalysisStart = () => {
+  batchingAnalysis = true;
+  engine.beginBatch();
+};
+references.onAnalysisEnd = () => {
+  batchingAnalysis = false;
+  return engine.endBatch();
+};
+references.onRefsRegion = (boxes) => engine.setRefsRegion(boxes).then(afterEngineChange);
+references.onContentStart = (pos) => engine.setContentStart(pos).then(afterEngineChange);
+references.onBodyHeight = (h) => engine.setBodyHeight(h).then(afterEngineChange);
+references.onFurniture = (boxes) => engine.setFurniture(boxes).then(afterEngineChange);
 
 // PDF.js runs an idle cleanup 30s after the last render activity
 // (CLEANUP_TIMEOUT in pdf_rendering_queue.js) whose handler calls
@@ -195,6 +252,9 @@ const syncButton = addToolbarToggle(app, settings.enabled, (on) => {
   applyEnabled(on);
   setSettings({ enabled: on });
 });
+const syncFontButton = addFontButton(settings.fontMode, (mode) => {
+  setSettings({ fontMode: mode });
+});
 addNativeViewerButton();
 
 applyStyleVars(settings);
@@ -203,6 +263,7 @@ applyEnabled(settings.enabled);
 onSettingsChange(async (next) => {
   applyStyleVars(next);
   syncButton(next.enabled);
+  syncFontButton(next.fontMode);
   await engine.updateSettings(next);
   await applyEnabled(next.enabled);
 });

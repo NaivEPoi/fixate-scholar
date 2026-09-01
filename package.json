@@ -1,6 +1,6 @@
 {
   "name": "fixate-scholar",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "description": "Chrome extension: academic PDF viewer with fixation-guided typography and reference lookup",
   "type": "module",
