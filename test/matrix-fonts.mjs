@@ -148,12 +148,30 @@ try {
       else widthOf.set(it.str, it.width * scale);
     }
     const res = [];
+    // A JAM is a RENDERED word gap too narrow to read as a word break. The old
+    // test for it (word-spacing more negative than -0.11em) could not fire: the
+    // engine clamps word-spacing at its own cap, so the metric only ever saw
+    // the cap, never the gap the cap produced -- and it reported 0 on pages
+    // whose words were visibly running together in a bundled reading face.
+    // Measure the space itself, after word-spacing AND --scale-x.
     let jams = 0;
+    let narrowest = null;
     const rows = new Map();
     for (const s of div.querySelectorAll('span[data-fx-done]')) {
       const r = s.getBoundingClientRect();
-      const ws = parseFloat(s.style.wordSpacing || "0");
-      if (s.style.wordSpacing.endsWith("em") && ws < -0.11) jams++;
+      const fpx = parseFloat(getComputedStyle(s).fontSize) || 0;
+      const walk = document.createTreeWalker(s, NodeFilter.SHOW_TEXT);
+      for (let n = walk.nextNode(); n && fpx > 0; n = walk.nextNode()) {
+        for (let i = n.data.indexOf(' '); i >= 0; i = n.data.indexOf(' ', i + 1)) {
+          const range = document.createRange();
+          range.setStart(n, i);
+          range.setEnd(n, i + 1);
+          const gap = range.getBoundingClientRect().width / fpx;
+          if (!(gap > 0)) continue;
+          if (narrowest === null || gap < narrowest) narrowest = gap;
+          if (gap < 0.12) jams++;
+        }
+      }
       const w = widthOf.get(s.textContent);
       if (w) res.push(Math.abs(r.width - w));
       const key = Math.round(r.top / 4);
@@ -167,10 +185,11 @@ try {
     }
     res.sort((a, b) => a - b);
     const q = (f) => res.length ? Math.round(res[Math.min(res.length - 1, Math.floor(res.length * f))] * 100) / 100 : null;
-    return { n: res.length, med: q(0.5), p90: q(0.9), max: q(1), jams, overlaps };
+    return { n: res.length, med: q(0.5), p90: q(0.9), max: q(1), jams,
+             gapMin: narrowest === null ? null : Math.round(narrowest * 1000) / 1000, overlaps };
   })()`;
 
-  console.log("mode      weight  n   med    p90    max   jams overlaps done");
+  console.log("mode      weight  n   med    p90    max   jams gapMin overlaps done");
   const setCombo = async (combo) => {
     const expr = `new Promise((r) => chrome.storage.sync.set({ enabled: true, fontMode: ${JSON.stringify(combo.fontMode)}, boldWeight: ${combo.boldWeight} }, () => r("ok")))`;
     for (let i = 0; i < 20; i++) {
@@ -201,6 +220,7 @@ try {
       String(m.p90).padEnd(6),
       String(m.max).padEnd(5),
       String(m.jams).padEnd(4),
+      String(m.gapMin).padEnd(6),
       String(m.overlaps).padEnd(8),
       String(done).padEnd(5),
       m.fxb,

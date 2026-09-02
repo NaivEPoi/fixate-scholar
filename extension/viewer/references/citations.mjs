@@ -129,10 +129,17 @@ export class ReferencesFeature {
   }
 
   /** Ordered, de-duplicated card list for a citation's keys: each resolved
-   *  entry, plus a stub for any NUMERIC key the extractor didn't parse (so the
-   *  pager reflects every cited reference and the native link is neutralised).
-   *  Returns [] for an unresolved author-year citation. */
-  #buildCards(keys, numeric) {
+   *  entry, plus a stub for any key of a BRACKETED citation the extractor
+   *  didn't parse (so the pager reflects every cited reference and the native
+   *  link is neutralised). Returns [] for an unresolved author-year citation.
+   *
+   *  "Bracketed" covers alpha keys ("[ABB+04]") as well as numeric ones: both
+   *  are entry MARKERS, and a marker the bibliography parse missed is exactly
+   *  the case the stub exists for. Restricting the stub to /^\d+$/ left an
+   *  alpha-keyed paper's unparsed citations with no hit-target at all, so
+   *  reconcileLinks never saw them and a click fell through to the PDF's own
+   *  link — scrolling away to the bibliography, the one thing this must not do. */
+  #buildCards(keys, bracketed) {
     const cards = [];
     const seen = new Set();
     for (const key of keys) {
@@ -145,11 +152,17 @@ export class ReferencesFeature {
             cards.push(e);
           }
         }
-      } else if (numeric && /^\d+$/.test(key)) {
+      } else if (bracketed) {
         const id = "s:" + key;
         if (!seen.has(id)) {
           seen.add(id);
-          cards.push({ number: parseInt(key, 10), label: key, unresolved: true, raw: "", title: "" });
+          cards.push({
+            number: /^\d+$/.test(key) ? parseInt(key, 10) : null,
+            label: key,
+            unresolved: true,
+            raw: "",
+            title: "",
+          });
         }
       }
     }
@@ -199,15 +212,15 @@ export class ReferencesFeature {
     const wraps = []; // { span, start, end, className } — applied in push order
 
     for (const cite of findCitations(joined)) {
-      const numeric = joined[cite.start] === "[";
+      const bracketed = joined[cite.start] === "[";
       // One card per CITED key, in reading order: the resolved entry, or — for
-      // a numeric key the extractor missed — a stub. So (1) a multi-citation's
+      // a bracketed marker the extractor missed — a stub. So (1) a multi-citation's
       // pager shows EVERY cited reference, not only the ones that resolved, and
-      // (2) every numeric citation gets a hit-target, which lets reconcileLinks
+      // (2) every bracketed citation gets a hit-target, which lets reconcileLinks
       // neutralise the PDF's own link so a click opens our card instead of
       // scrolling to the bibliography. Unresolved AUTHOR-YEAR parentheticals
       // get no card (that pattern false-positives on ordinary parens).
-      const cards = this.#buildCards(cite.keys, numeric);
+      const cards = this.#buildCards(cite.keys, bracketed);
       if (!cards.length) continue;
       for (const seg of intersecting(segments, cite.start, cite.end)) {
         // Don't annotate the bibliography's own entry "[N]" markers (the engine

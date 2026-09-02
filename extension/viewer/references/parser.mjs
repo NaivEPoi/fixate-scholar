@@ -368,7 +368,17 @@ function buildEntry(group) {
     alphaKey = m[1];
     raw = raw.slice(m[0].length).trim();
   }
-  const surname = /\p{Lu}[\p{L}'’-]+/u.exec(raw)?.[0] ?? null;
+  // The first author's SURNAME. In an APA-style list ("Doe, J. (2019)") that is
+  // the first capitalized word, which is all the old one-regex heuristic could
+  // ever return — but a numeric/alpha bibliography sets the given name first
+  // ("Martín Abadi and Cédric Fournet"), where the same regex returns the GIVEN
+  // name ("Martín", or "Mart" once the PDF's accent composition splits it).
+  // That name is what disambiguates a reference lookup, so it has to be right.
+  const authors = guessAuthors(raw);
+  const surname =
+    firstAuthorSurname(authors) ??
+    /\p{Lu}[\p{L}'’-]+/u.exec(raw)?.[0] ??
+    null;
   const year = YEAR.exec(raw)?.[0] ?? null;
   const doi =
     /\b10\.\d{4,9}\/[^\s"',;]+/.exec(raw)?.[0].replace(/[).,;]+$/, "") ?? null;
@@ -379,30 +389,139 @@ function buildEntry(group) {
     year,
     doi,
     raw,
+    authors,
     title: guessTitle(raw),
     page: first.page,
     y: first.y + first.h,
   };
 }
 
+// Where one entry's AUTHOR BLOCK ends and its TITLE begins. Five shapes, each
+// with its own delimiter, tried in order; the last is a generic sentence split.
+//
+// Quoted title: `A. Author, “Title,” in Proc. …`
+const QUOTED_TITLE = /[“"]([^”"]{8,200})[”"]/;
+// LNCS/Springer: `Surname, I., Surname, I.: Title. In: Venue`. The author list
+// is surname+initials pairs (or "et al.") and ends at a COLON, which no other
+// shape here does — so this guard cannot swallow a numeric entry whose TITLE
+// happens to contain a colon ("BERT: Pre-training of …"). Tried before APA
+// because an LNCS entry ending in a DOI ("… (2005). https://doi.org/10.1007/x")
+// satisfies the APA pattern, whose answer was the title "https://doi".
+const LNCS =
+  /^(?:(?:\p{Ll}{2,4}\s+)?\p{Lu}[\p{L}'’-]+,\s*(?:\p{Lu}\.\s*)+(?:,\s*)?|et\s+al\.\s*,?\s*)+:\s*(.{8,220}?)(?=\.\s|$)/u;
+// APA: `… (2020). Title. Venue …`
+const APA_PERIOD = /\(\s*(?:19|20)\d{2}[a-z]?\s*\)\.\s*([^.]{8,200})\./;
+// The same author-year form punctuated with COMMAS — "L. M. Adleman (1994),
+// Algorithmic number theory, in Proceedings of …" (older LaTeX article
+// bibliographies). It has no sentence period anywhere, so the generic split
+// cannot see a title at all and the whole entry became the Scholar query. The
+// title runs to the venue, which announces itself as ", in …", ", pp. …",
+// ", preprint", or an abbreviated journal name (", Phys. Rev. Lett.").
+const APA_COMMA =
+  /\(\s*(?:19|20)\d{2}[a-z]?\s*\)\s*,\s*(.{8,220}?)(?=,\s+(?:in|In|pp?\.|preprint|vol\.|volume)\b|,\s+\p{Lu}[\p{L}]{0,9}\.|\.\s|$)/u;
+// A parenthesised year is not always the author-year delimiter: the ACM
+// Reference Format ends with one ("… Applications 32, 2 (2009), 315–323."), and
+// what follows it there is the PAGE RANGE. A title contains a word; a page range
+// does not, and the sentence split reads the ACM form correctly.
+const TITLE_SHAPED = /\p{L}{4}/u;
+// Numeric style: `Authors. Title. Venue, year.` The author block is the
+// comma/initial-heavy first sentence and the title is the next one. The
+// lookbehind requires two word chars, so "A. Vaswani" initials don't split a
+// sentence while "et al." does.
+const SENTENCE_SPLIT = /(?<=\w{2}[.?!])\s+(?=[A-Z“"])/u;
+
+const trimEdge = (s) => s.replace(/[,.;]\s*$/, "").trim();
+
+/** {authors, title} for one entry — ONE decision, so guessAuthors and
+ *  guessTitle can never disagree about where the author block ends. `authors`
+ *  is null when no shape matched (there is nothing to separate). */
+function splitEntry(raw) {
+  const quoted = QUOTED_TITLE.exec(raw);
+  if (quoted) {
+    const head = trimEdge(raw.slice(0, quoted.index));
+    return { authors: head.length >= 2 ? head : null, title: trimEdge(quoted[1]) };
+  }
+  const lncs = LNCS.exec(raw);
+  if (lncs) {
+    return { authors: raw.slice(0, raw.indexOf(":")).trim(), title: trimEdge(lncs[1]) };
+  }
+  const apa = APA_PERIOD.exec(raw);
+  if (apa) {
+    // The year parenthesis is the delimiter, so a trailing period belongs to
+    // the last initial ("Doe, J.") and is kept.
+    return {
+      authors: raw.slice(0, apa.index).trim().replace(/[,;]\s*$/, ""),
+      title: apa[1],
+    };
+  }
+  const apaComma = APA_COMMA.exec(raw);
+  if (apaComma && TITLE_SHAPED.test(apaComma[1])) {
+    return {
+      authors: raw.slice(0, apaComma.index).trim().replace(/[,;]\s*$/, ""),
+      title: trimEdge(apaComma[1]),
+    };
+  }
+  const sentences = raw.split(SENTENCE_SPLIT);
+  if (sentences.length >= 2) {
+    const candidate = trimEdge(sentences[1]);
+    if (candidate.length >= 8 && candidate.length <= 250) {
+      return { authors: trimEdge(sentences[0]), title: candidate };
+    }
+  }
+  return { authors: null, title: raw.slice(0, 150) };
+}
+
 /** Best-effort title for the Scholar query; falls back to the raw entry. */
 export function guessTitle(raw) {
-  // Quoted titles: “Title,” or "Title."
-  const quoted = /[“"]([^”"]{8,200})[”"]/.exec(raw);
-  if (quoted) return quoted[1].replace(/[,.;]\s*$/, "");
-  // APA: ... (2020). Title. Venue ...
-  const apa = /\(\s*(?:19|20)\d{2}[a-z]?\s*\)\.\s*([^.]{8,200})\./.exec(raw);
-  if (apa) return apa[1];
-  // Numeric style: Authors. Title. Venue, year. — authors block is the
-  // comma/initial-heavy first sentence; title is the next sentence. The
-  // lookbehind requires two word chars so "A. Vaswani" initials don't split,
-  // while "et al." does.
-  const sentences = raw.split(/(?<=\w{2}[.?!])\s+(?=[A-Z“"])/u);
-  if (sentences.length >= 2) {
-    const candidate = sentences[1].replace(/[.;,]\s*$/, "");
-    if (candidate.length >= 8 && candidate.length <= 250) return candidate;
-  }
-  return raw.slice(0, 150);
+  return splitEntry(raw).title;
+}
+
+/** The run of names before the title, or null when no shape matched. */
+export function guessAuthors(raw) {
+  return splitEntry(raw).authors;
+}
+
+/**
+ * The first author's surname, for either convention:
+ *   "Doe, J., & Smith, A."        → Doe   (surname first, initials after it)
+ *   "Martín Abadi and C. Fournet" → Abadi (given name first, surname last)
+ * One rule covers both: cut at the first " and "/"&"/";"/"," — whatever that
+ * leaves is a single name, surname-only in the first form and given-name-first
+ * in the second — then take its last multi-letter capitalized token. Initials
+ * ("A.") are one letter and never win; a lowercase nobiliary particle ("van
+ * Emde Boas" → Boas) is skipped exactly as findCitations skips it, so the
+ * entry and the citation key agree.
+ */
+export function firstAuthorSurname(authors) {
+  if (!authors) return null;
+  const head = authors.split(/\s+(?:and|&)\s+|[,;]/)[0];
+  return head.match(/\p{Lu}[\p{L}'’-]+/gu)?.at(-1) ?? null;
+}
+
+/**
+ * The parsed entry's author block as BibTeX's " and "-separated list.
+ *
+ * Two conventions, and the separator differs: a SURNAME-FIRST list puts a comma
+ * inside each name ("Doe, J., & Smith, A."), so only "and"/"&"/";" may split it
+ * — splitting on commas would cut every name in half. A given-name-first list
+ * ("Syed Rafiul Hussain, Imtiaz Karim, and Elisa Bertino") separates names WITH
+ * commas. The test for the first form is a comma followed by initials that END
+ * the name; "A. Vaswani, N. Shazeer" has its initials at the START of the next
+ * name and is correctly read as the second form.
+ */
+export function bibAuthors(authors) {
+  if (!authors) return null;
+  const surnameFirst = /,\s*(?:\p{Lu}\.\s*)+(?=,|;|&|$)/u.test(authors);
+  // In the surname-first form the ONLY comma that separates two names is the
+  // one right after a run of initials; every other comma is inside a name.
+  const sep = surnameFirst
+    ? /\s*(?:;|&|\band\b)\s*|(?<=\p{Lu}\.)\s*,\s*/u
+    : /\s*(?:,|;|&|\band\b)\s*/;
+  const names = authors
+    .split(sep)
+    .map((n) => (n ?? "").trim().replace(/[,;]+$/, "").replace(/(\p{Ll})\.$/u, "$1"))
+    .filter((n) => n && !/^et\s+al$/i.test(n));
+  return names.length ? names.join(" and ") : null;
 }
 
 // In-paper references: pointers to the document's own figures, tables,

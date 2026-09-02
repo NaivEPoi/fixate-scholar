@@ -5,6 +5,7 @@ Produced by the per-page audit (`test/review-capture.mjs` overlays +
 screenshot before listing. Rules: `TESTING.md` Section 3.
 
 Status: **review complete; F1-F5 all FIXED & validated. Round 3 (F6/F7) below.**
+Latest: **Round 24 (R24) — seven user reports on the ProVerif manual, all fixed.**
 
 ### Round 3 (2026-07-09) — divider-line masking + "upper-left shift" (user report)
 Built `test/diag-dividers.mjs`: per page, finds long thin dark runs on the
@@ -1511,6 +1512,243 @@ each word of a ruled table's header.
 3. Its PAPERS map was missing AFC-Diss - the same incomplete-map defect R21 fixed
    for the other entries. The guard added then did its job: exit 2 with the list.
 4. shot-region2 gained `--pad`, so a capture can frame a paragraph.
+
+## Round 24 (R24) - the ProVerif manual: seven user reports, one document
+
+Test document: the ProVerif 2.05 manual
+(https://bblanche.gitlabpages.inria.fr/proverif/manual.pdf). It is not in the
+corpus, and it is unlike everything in it: a 160-page single-column LaTeX book
+in Computer Modern, an ALPHA-KEY bibliography ("[AF01]", "[ABB+04]"), TeX accent
+composition throughout, and inline math italics inside ordinary words. Every
+defect below is pre-existing; each was reproduced with a measurement before it
+was touched.
+
+### R24-1 - three citations in one bracket, one wrong card for all three
+User: "the thumbnails for all citations here are the same, and the found
+reference does not match" - on "[AF01, RS11, ABF17]", whose pager showed the
+same unrelated paper on every page.
+
+The three entries parse correctly and distinctly (verified: "Mobile values, new
+names, and secure communication" / "Applied pi calculus" / "The applied pi
+calculus: Mobile values, new names, and secure communication"). The lookup was
+the problem, in two ways:
+
+1. The Scholar query was the TITLE ALONE. "Applied pi calculus" is three words
+   that hundreds of papers contain, and Scholar ranks by citations, so the
+   book chapter actually cited loses to "Simulation based security in the
+   applied pi calculus". Neighbouring citations in the same bracket are about
+   the same subject, so they land on that same paper - which is what "all the
+   same" was.
+2. Whatever came back FIRST was shown, with no check that it was the cited work.
+
+Fix (`references/scholar.mjs`):
+- `referenceQuery()` - title + first-author surname + year (each appended only
+  when the title does not already carry it). Two extra terms is the difference
+  between "a paper about this" and "this paper".
+- `bestMatch()` - parse the first 5 results and score each against the
+  reference: Dice similarity over title words, +0.25 if the author appears in
+  the byline, +0.15 if the year matches within one (Scholar dates a cluster by
+  its earliest version). Accept the best only at >= 0.85 with title >= 0.45.
+  Dice is used because it is SYMMETRIC: containment scores a SUPERSET title
+  ("Simulation based security in the applied pi calculus" over "Applied pi
+  calculus") a perfect 1.0, which is exactly how the wrong paper got through.
+- No convincing match -> return null, and the card shows the document's own
+  bibliography entry under a "From this document's bibliography" label
+  (`popup.mjs`, `.fx-cite-source`). An honest local entry beats a confident
+  wrong one, and the "Google Scholar" pill now carries the enriched query so
+  one click gets the user to the right search.
+
+`parser.mjs` had to supply the author: `surname` was the first capitalized word
+of the entry, which is the surname only in APA ("Doe, J. (2019)"). A numeric or
+alpha bibliography sets the given name first, so it returned "Martín" - or
+"Mart", once the PDF's accent composition splits the name. `guessAuthors()` cuts
+the author block exactly where `guessTitle()` cuts the title, and
+`firstAuthorSurname()` reads either convention with one rule.
+
+### R24-2 - a bundled reading font fused the words
+User: "for some fonts, there are not enough spaces between the words."
+Reproduced on p10 in Literata and Inter: "Thismanual providesan introductory".
+
+The width pass spends any width correction on word-spacing first and gives only
+the residual to `--scale-x`. That is right for a POSITIVE correction (it is
+justification surplus, and opening the spaces is what the canvas itself did),
+and wrong for a NEGATIVE one, which is the systematic case for a bundled reading
+face: Inter and Literata run 5-8% wider than Computer Modern at the same size.
+At the -0.1x-height cap a typical space fell from ~0.26em to ~0.15em.
+
+Measured on p10, median word-spacing / median `--scale-x` / narrowest rendered
+gap:
+
+| mode      | before          | after           |
+|---|---|---|
+| original  | +0.058 / 1.000 / -      | +0.051 / 1.000 / 0.296em |
+| atkinson  | +0.060 / 1.000 / -      | +0.026 / 1.000 / 0.260em |
+| inter     | -0.100 / 0.961 / ~0.10em | -0.020 / 0.951 / 0.243em |
+| literata  | -0.100 / 0.973 / ~0.10em | -0.020 / 0.949 / 0.173em |
+
+Fix (`engine.mjs`): `MAX_SPACE_TRIM` = 0.02x height (was 0.1). The negative side
+is now a sub-pixel trim and the real shrink goes to `--scale-x`, which
+compresses glyphs and spaces ALIKE and so preserves the face's own word gap.
+Width residual is unchanged (median 0.02px, p90 0.04px) and overlaps stay 0.
+
+The `jams` metric in `matrix-fonts.mjs` reported 0 throughout, because it tested
+whether word-spacing was more negative than -0.11em - a value the engine's own
+clamp made unreachable. It now measures the RENDERED gap, after word-spacing and
+`--scale-x`, and also reports `gapMin`.
+
+### R24-3 - an alpha marker whose "+" is a superscript was never a marker
+"[ABB+04]" sets the "+" as a raised, smaller glyph. The extractor splits a line
+at every font-size change, so the marker arrived as three fragments - "[ABB",
+"+", "04] William Aiello..." - and the "+" sorted FIRST (higher baseline).
+`ALPHA_MARKER` matched none of them: entry [ABB+04] never existed, the previous
+entry [Aba00] swallowed its text (its title became "+ [ABB 04] William Aiello,
+Steven M"), and every "[ABB+04]" in the body resolved to no card at all.
+
+Fix (`extractor.mjs`): a size change set FLUSH against its neighbour (gap under
+0.15x height - no room for even a word space) is a superscript INSIDE a word,
+not a separate block, and joins the line. ProVerif entries 73 -> 75.
+
+Also `citations.mjs`: the stub card for an unparsed entry was restricted to
+`/^\d+$/` keys, so an alpha-keyed citation the parse missed got no hit-target,
+`reconcileLinks` never saw it, and a click fell through to the PDF's own link -
+scrolling to the bibliography, which REQUIREMENTS forbids. Any BRACKETED key
+gets a stub now.
+
+### R24-4 - two bibliography styles whose titles were never found
+The generic sentence split reads these WRONG rather than merely failing, so both
+sent Scholar a query for the whole entry:
+
+- Comma-punctuated author-year, older LaTeX article style: "L. M. Adleman
+  (1994), Algorithmic number theory, in Proceedings of..." - no sentence period
+  anywhere. Shor quant-ph/9508027: 54 of 64 entries.
+- LNCS: "Surname, I., Surname, I.: Title. In: Venue" - the period before "In:"
+  is read as the title boundary, so the VENUE came back as the title. And an
+  entry ending in a DOI ("... (2005). https://doi.org/10.1007/x") satisfies the
+  APA pattern, whose answer was the title "https://doi".
+
+Fix (`parser.mjs`): `APA_COMMA` and `LNCS` branches, LNCS tried before APA. Two
+guards found by running the corpus sweep against them:
+
+- A parenthesised year is not always the author-year delimiter. The ACM
+  Reference Format ends with one ("... Applications 32, 2 (2009), 315-323."), so
+  `APA_COMMA` returned the PAGE RANGE as the title of an entry the sentence split
+  had been reading correctly. `TITLE_SHAPED` (the capture must contain a word)
+  hands that form back to the split.
+- An LNCS author list may end in "et al.", which the surname+initials guard
+  rejected; those entries fell to the split and returned the venue.
+
+`guessTitle` and `guessAuthors` had begun to duplicate this decision, and drifted
+on the ACM case (the title was right and the author block was not), so both are
+now views on one `splitEntry(raw)`.
+
+Suspicious-title counts on the corpus: LaTeX-CM 54 -> 1, UC-Scheme 31 -> 7
+(the remainder are entries with no title at all: URLs, standards, tools),
+ProVerif 1 -> 0. Every other paper unchanged.
+
+### R24-5 - the vendored PDF.js was missing patch 5, and nothing said so
+User: "when I start drag over the word, the shadow stops on the bolded part. i
+thought this have been fixed previously." It was - in R16-1. Reproduced with a
+real mouse drag: dragging across "Processes" selected "Proc", and the selection
+focus was (SPAN, 1), i.e. immediately after the `</b>`.
+
+`extension/vendor/` is git-ignored. The working tree's vendored viewer had
+patches 1-4 and NOT 5, so PDF.js was again parking its layer-sized
+`.endOfContent` inside a text span, exactly as R16-1 describes. Every automated
+check was green: nothing verifies a vendored tree.
+
+Fix:
+- `scripts/pdfjs-patches.mjs` - the five edits, extracted from
+  `fetch-pdfjs.mjs`, which now loops over them.
+- `scripts/check-vendor.mjs` - verifies every marker is present; `--fix`
+  re-applies the missing ones IN PLACE, no download. Wired into `npm test`.
+- Applied patch 5. The same drag now selects "Processes are equipped", and the
+  emphasis survives inside the selection band.
+
+R16-1's own note said "editing the vendored copy alone is NOT enough". The
+reverse turned out to be just as true: shipping the script alone is not enough
+either, because nothing checked the result.
+
+### R24-6 - a one-glyph math span got no obstacle, and the mask above clipped it
+User: "the i in ith is partially masked" (p19, "compute the ith element").
+
+`inkCheck` decides whether there is canvas ink under a rect, and a skipped span
+with no ink gets NO obstacle rect (there would be nothing to protect). It
+sampled every other pixel and required at least 6 hits. The canvas snapshot is
+capped in resolution (csx ~0.63 here), so the italic i's rect is 7 canvas pixels
+wide holding one antialiased stem: 2 hits, verdict "no ink". Without an obstacle,
+the mask of the line ABOVE - padded 28% of its height - reached 3.9px into the
+i's box and whited out its dot. Measured coverage of the i, by zoom: 1.0 full,
+1.25 none, 1.5 none, 2.0 full, 3.0 full. The same drop hit every single-glyph
+math span on the page ("n", "t", ".", ":", ",").
+
+Fix (`engine.mjs`): step 1 instead of 2 on a small rect, the 6-hit floor scales
+with the sample count below ~40 samples, and a rect under 10 CANVAS pixels wide
+is not judged at all - the veto this gate feeds (hidden OCR/invisible text
+layers) is a line-wide phenomenon, so declining to judge one glyph gives nothing
+up. Coverage of the i is now 0 at every zoom.
+
+### R24-7 - a word split across spans got one bold prefix per piece
+User: "special words like naive here is not processed correctly" (p20, "A naïve
+handshake protocol").
+
+PDF.js opens a new span at every font change, and TeX composes an accented
+letter from two glyphs, so "naïve" arrives as "A na¨" + "ıve handshake...".
+Each span is emphasized independently, so the markup was
+`<b>A</b> <b>n</b>a¨` + `<b>ıv</b>e` - two bold runs inside one word. The same
+thing happens around an inline math italic: "ith" is math "i" + "th", and "th"
+was emphasized as a word of its own.
+
+Fix, in two parts:
+- `segmenter.mjs` welds an accent-only token back into its word (so "na", "¨",
+  "ıve" is one word), extends the plain-word test to accept accent glyphs, and
+  never ends a bold prefix ON an accent (the accent paints over the next letter,
+  which is not bolded).
+- `engine.mjs` `joinRuns()` finds span pairs that carry one word between them -
+  same baseline, no room for a space, word characters facing each other across
+  the break - and `emphasizeParts(text, opts, wordIndex, join)` uses it: the
+  piece that STARTS the word sizes its prefix against the whole word, the pieces
+  that continue it get none and do not advance the saccade counter. Computed over
+  allPairs, not candidates, because the piece next door is often the math glyph
+  deliberately left on the canvas.
+
+Verified in the viewer: `<b>A</b> <b>na</b>¨` + `ıve <b>han</b>dshake`, and
+"th <b>elem</b>ent".
+
+### Also fixed here
+- The "Cite" BibTeX for a card was Scholar's, keyed by the cluster id of the
+  result shown - so a wrong match produced a wrong BibTeX. With R24-1 the id
+  belongs to a verified result, and the LOCAL fallback (now the normal answer
+  whenever Scholar has nothing convincing) carries a real author list:
+  `parser.mjs bibAuthors()` splits either convention without cutting a
+  surname-first name in half.
+- `readResult()` reads the cite-cluster id and the [PDF] link from the OUTER
+  `.gs_r`, so they survive when the page selector matches `.gs_ri`.
+
+### Verification
+- `npm test`: naming guard + vendored patch check (5/5) + 79 unit tests
+  (was 45; new coverage for `referenceQuery`/`titleScore`/`bestMatch`,
+  `guessAuthors`/`firstAuthorSurname`/`bibAuthors`, and the two new title
+  styles).
+- The "Reference ↓" jump was measured, not assumed: it lands the cited entry's
+  own baseline 31px below the container top on both a single-column (ProVerif)
+  and a two-column (USENIX code+algorithms) bibliography, on the entry the card
+  names. It was NOT a defect.
+- Reference-parse sweep over the 15-document corpus, before and after: entry
+  counts identical everywhere except ProVerif (73 -> 75, R24-3). One ACL
+  citation key moved from resolved to unresolved - "Since-2021", a
+  false-positive narrative citation that used to match an entry by accident
+  through the old surname heuristic.
+- `papers.mjs`: ALL 8 PAPERS PASSED (bolded/masks/refs/cites counts unchanged
+  from the R23 baseline, e.g. LaTeX article CM still 1291 bolded / 64 refs).
+- `diag-drag.mjs` on the ProVerif manual: PASS - the drag selects a full
+  multi-line run, `.endOfContent` stays in the `.textLayer` mid-drag, and the
+  emphasis is painted with a `::selection`-honoured property.
+- `matrix-fonts.mjs`'s own measurement, run over USENIX (code + algorithms) p14
+  in all four font modes: 0 jams, 0 overlaps, width residual median 0.02-0.05px
+  / p90 <= 0.11px, narrowest rendered word gap 0.212em (inter) and 0.147em
+  (literata). Negative control - restore `MAX_SPACE_TRIM` to 0.1 and the same
+  metric reports 450 jams and a 0.083em gap on literata, where the OLD metric
+  reported 0. The measurement can fail now.
 
 ### A note for whoever edits this file next
 Do NOT round-trip it through PowerShell (`Get-Content -Raw` + `Set-Content`, or

@@ -71,7 +71,8 @@ this be processed?" — review everything against them.
 
 ```bash
 cd /c/misc/Claude_Workspace/fixate-scholar
-npm test                 # naming guard + 45 unit tests (segmenter/parser/fontclass). MUST be 45/45.
+npm test                 # naming guard + vendored-PDF.js patch check + 79 unit tests
+                         # (segmenter/parser/scholar/fontclass). MUST be 79/79.
 node test/papers.mjs     # 8-paper corpus smoke test. MUST be 8/8 PASS, all checks true.
 ```
 
@@ -108,7 +109,8 @@ never received all pass it.
 
 | Command | What it verifies | Pass criteria |
 |---|---|---|
-| `npm test` | naming guard (trademarked 2-word brand absent) + unit tests | `Naming guard passed`, 45/45 |
+| `npm test` | naming guard (trademarked 2-word brand absent) + vendored-PDF.js patch check + unit tests | `Naming guard passed`, `patch check passed (5/5)`, 79/79 |
+| `node scripts/check-vendor.mjs [--fix]` | every source edit in `scripts/pdfjs-patches.mjs` is present in `extension/vendor/pdfjs`. `extension/vendor/` is git-ignored, so a tree can arrive with only SOME patches applied and every other check stays green — that is how patch 5 went missing and drag-selection regressed to "I can only select the bolded part of a word" (R24-5). `--fix` re-applies the missing ones in place, no download | `patch check passed (5/5)`; exit 1 naming the missing markers |
 | `node test/papers.mjs` | full corpus classification + color + links | 8/8 PASS |
 | `node test/verify-links.mjs` | hyperref borders suppressed in fx-on, links still clickable, masks track glyphs | `ALL LINK CHECKS PASSED` |
 | `node test/diagnose.mjs <paper>` | rendering fidelity: true whiteout, mask peek, font fallback, skipped paragraphs, citation alignment, selectability | whiteout 0; peek low; fontBad 0; selBad 0 |
@@ -116,7 +118,7 @@ never received all pass it.
 
 | `node test/diag-dividers.mjs <paper>` | table rules / box frames / underlines / separators vs masks (canvas dark-run scan + composite whiteness) | `masked=0` on every page |
 | `node test/chrome-xray.mjs <paper> <page> [--browser=chrome\|edge] [--preset] [--zoom=N] [--find="text"] [--idle=S] [--shotonly] [--outline]` | REAL-Chrome/Edge captures: normal + x-ray + micro-marker shots, per-span width forensics, idle drift | visual; forensic `sx≈1`, `live == item.width×scale` |
-| `node test/matrix-fonts.mjs <paper> <page> [--browser=…]` | every fontMode × boldWeight combo live: width residual vs PDF item widths, jams, overlaps, computed `.fx-b` style | residual ≤ ~0.2px; jams 0; overlaps 0; weight/stroke ramps monotonically |
+| `node test/matrix-fonts.mjs <paper> <page> [--browser=…]` | every fontMode × boldWeight combo live: width residual vs PDF item widths, jams and the narrowest rendered word gap, overlaps, computed `.fx-b` style | residual ≤ ~0.2px; jams 0 and `gapMin` ≥ ~0.15em (measured on the RENDERED space, after word-spacing and `--scale-x` — the old metric read the engine's own clamp and could not fire); overlaps 0; weight/stroke ramps monotonically |
 | `node test/tables.mjs <paper> [--pages=A-B]` | no processed text inside tables: horizontal canvas rules chained (≥3 rules, ≥70% overlap, gap ≤15% page height) bound table interiors; flags `span[data-fx-done]` centered inside | `TOTAL offenders: 0` (exit 1 otherwise). Isolated rule PAIRS (underlined run-in leads) form no zone; full-width prose lines + their paragraph continuations are exempt. The former KNOWN NOISE (UC-Scheme p17, 3 prose lines around side-by-side screenshot frames) no longer reproduces — p17 forms 52 zones and reports 0 offenders both before and after the R22 word-count change, and `skipline` reports 0 unprocessed prose lines there. Confirm any NEW flag with a capture before touching the engine |
 | `node test/refbold.mjs [paper] [--url= --label=]` | no emphasis ANYWHERE in the reference list. Recomputes the bibliography's extent from the parser — heading + body lines grouped per page and COLUMN, x bounds from the 5th/95th percentile of the column's line extents — and flags every `span[data-fx-done]` whose baseline falls inside. Checks the outcome, not the box mechanism: a reference line the box list never received still falls inside its column's box | `TOTAL emphasized bibliography spans: 0` (exit 1 otherwise). A document with no bibliography prints "no bibliography found" and exits 0 — that is a SKIP, not a pass, so read the line. Per-column grouping is essential: a per-page y band reads the prose beside a mid-column References heading as bibliography (82/31/100/45/47 false hits on five papers before it was fixed) |
 | `node test/skipline.mjs <paper> [--pages=A-B]` | per column, prose lines (≥4 lowercase words) with no processed/kept span — catches single skipped lines that diagnose's ≥3-line runs miss (contentStart cut, script-window bleed) | only intentional skips: title-page front matter, bibliography pages, heading wrap lines |

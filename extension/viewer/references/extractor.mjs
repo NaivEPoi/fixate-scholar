@@ -77,7 +77,17 @@ export async function extractLines(pdfDocument) {
         const joinMax = Math.min(cur ? cur.h : it.h, it.h) * (crossesCenter ? 0.8 : 2);
         const differentFont =
           cur && Math.abs(cur.h - it.h) > Math.max(cur.h, it.h) * 0.25;
-        if (cur && !differentFont && gap < joinMax) {
+        // …unless the size change is set FLUSH against its neighbour, with no
+        // room for even a word space. That is a superscript/subscript inside a
+        // word, not a separate block: a bibliography's own "[ABB+04]" marker
+        // sets the "+" as a raised, smaller glyph, and splitting there left
+        // three fragments ("[ABB", "+", "04] William Aiello…") — the marker
+        // matched nothing, so that entry was swallowed by the previous one and
+        // every "[ABB+04]" in the text resolved to no card at all. A genuinely
+        // separate run of differently-sized text is always at least a word
+        // space away.
+        const tight = cur && Math.abs(gap) < Math.min(cur.h, it.h) * 0.15;
+        if (cur && (!differentFont || tight) && gap < joinMax) {
           cur.text += (gap > Math.max(cur.h, it.h) * 0.15 ? " " : "") + it.str;
           cur.endX = Math.max(cur.endX, it.x + it.w);
         } else {
