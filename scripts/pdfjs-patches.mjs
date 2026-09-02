@@ -1,0 +1,114 @@
+// The exact source edits made to the vendored PDF.js build, in ONE place so
+// that fetch-pdfjs.mjs can apply them and check-vendor.mjs can verify them.
+//
+// extension/vendor/ is git-ignored, so a vendored tree can arrive on a machine
+// with only SOME of these applied — a re-extract, an interrupted fetch, a
+// restored backup — and until now nothing said so. Patch 5 went missing exactly
+// that way and drag-selection silently regressed to "I can only select the
+// bolded part of a word", the very bug it exists to fix. `npm test` verifies
+// every marker now, and `node scripts/check-vendor.mjs --fix` re-applies what
+// is missing without re-downloading.
+//
+// Each entry: the vendored file, an exact anchor, its replacement, and a MARKER
+// present once applied — used both to skip an already-patched file and to
+// verify one. Anchors fail loudly, so a version bump can never silently produce
+// a broken viewer.
+
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+export const PATCHES = [
+  {
+    // Don't reject cross-origin ?file= URLs (we run on chrome-extension://).
+    // The generic build only whitelists the hosted-viewer origins;
+    // host_permissions <all_urls> makes this safe.
+    file: "web/viewer.mjs",
+    anchor: `if (HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {`,
+    replacement: `if (viewerOrigin.startsWith("chrome-extension:") /* fixate-scholar-patch-1: extension pages may load cross-origin PDFs */ || HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {`,
+    marker: "fixate-scholar-patch-1",
+  },
+  {
+    // Load the overlay (typography engine, references, toolbar buttons).
+    file: "web/viewer.html",
+    anchor: `</head>`,
+    replacement: `  <link rel="stylesheet" href="../../../viewer/overlay.css"><!-- fixate-scholar-patch-2 -->\n  <script src="../../../viewer/overlay.mjs" type="module"></script>\n</head>`,
+    marker: "fixate-scholar-patch-2",
+  },
+  {
+    // Allow the viewer to fetch local file:// PDFs (when the user has enabled
+    // "Allow access to file URLs"). The stock connect-src uses `*`, which
+    // covers network schemes but NOT file:, so a file:// fetch is otherwise
+    // blocked by CSP and the document fails to load.
+    file: "web/viewer.html",
+    anchor: `connect-src * blob: data:;`,
+    replacement: `connect-src * blob: data: file:;`,
+    marker: `connect-src * blob: data: file:`,
+  },
+  {
+    // Allow inline style="…" ATTRIBUTES on the viewer page. The stock CSP only
+    // allows inline <style> ELEMENTS (style-src-elem) and leaves style-src-attr
+    // to fall back to `style-src 'self'`, which blocks inline style attributes —
+    // some Chromium builds apply one during page layout (annotation / print code
+    // paths), logging "Applying inline style violates … style-src 'self'". Safe
+    // on this trusted page: it renders only the user's own PDF (text → canvas
+    // and textContent, never innerHTML, so a PDF can't inject DOM/styles) and
+    // script-src 'self' already blocks injected scripts.
+    file: "web/viewer.html",
+    anchor: `style-src-elem 'self' 'unsafe-inline';`,
+    replacement: `style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline';`,
+    marker: `style-src-attr 'unsafe-inline'`,
+  },
+  {
+    // Don't let the drag-selection helper move `.endOfContent` INSIDE a text
+    // span. On every selectionchange TextLayerBuilder walks the selection edge
+    // up from its text node and relocates the full-size, user-select:text
+    // `.endOfContent` div next to it — assuming the result is a direct child of
+    // the .textLayer. It normalizes exactly one level, plus one more for its OWN
+    // <span class="highlight"> wrapper: proof the assumption breaks on nesting.
+    // Reading mode nests too (<b class="fx-b"> emphasis, .fx-cite-c/.fx-ref-c
+    // citation wrappers), so a drag whose edge lands inside a bold prefix
+    // splices that layer-sized div into the middle of a word. It then wins every
+    // hit-test over the span, the drag can't reach the rest of the line, and the
+    // copy loses the non-bold tails. Climb out of ANY wrapper instead — a
+    // superset of the stock .highlight hop, so PDF.js's own find-match case
+    // keeps working. Upstream bug; report it.
+    file: "web/viewer.mjs",
+    anchor: `      if (anchor.classList?.contains("highlight")) {
+        anchor = anchor.parentNode;
+      }`,
+    replacement: `      /* fixate-scholar-patch-5: climb out of every nested wrapper (PDF.js's
+         own .highlight, our <b class="fx-b"> emphasis and .fx-cite-c/.fx-ref-c
+         citation spans) so endDiv is never inserted inside a text span. */
+      while (
+        anchor.parentElement &&
+        !anchor.parentElement.classList.contains("textLayer")
+      ) {
+        anchor = anchor.parentElement;
+      }`,
+    marker: "fixate-scholar-patch-5",
+  },
+];
+
+/** Apply one patch in `vendorDir`. Idempotent; throws if the anchor is gone. */
+export function applyPatch(vendorDir, { file, anchor, replacement, marker }, version = "") {
+  const path = join(vendorDir, file);
+  const text = readFileSync(path, "utf8");
+  if (text.includes(marker)) return "already-applied";
+  if (!text.includes(anchor)) {
+    throw new Error(
+      `PATCH ANCHOR NOT FOUND in ${file}.\n` +
+        `PDF.js ${version} changed; update the anchor in scripts/pdfjs-patches.mjs.\n` +
+        `Anchor: ${anchor}`,
+    );
+  }
+  writeFileSync(path, text.replace(anchor, replacement));
+  return "patched";
+}
+
+/** The patches whose marker is absent from `vendorDir`. */
+export function missingPatches(vendorDir) {
+  return PATCHES.filter((p) => {
+    const text = readFileSync(join(vendorDir, p.file), "utf8");
+    return !text.includes(p.marker);
+  });
+}

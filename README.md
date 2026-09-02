@@ -121,8 +121,11 @@ font-load races, canvas readability windows), x-ray interpretation, and the
 per-change verification gates.
 
 The PDF.js generic viewer is vendored (not committed) by `scripts/fetch-pdfjs.mjs`, which
-pins the release version and sha256 and applies a few loud-failure string patches (see the
-script header). Everything else is plain ES modules — no bundler.
+pins the release version and sha256 and applies the loud-failure string patches listed in
+`scripts/pdfjs-patches.mjs`. Because `extension/vendor/` is not committed, `npm test` also
+runs `scripts/check-vendor.mjs`, which fails if a vendored tree is missing any of those
+patches (`--fix` re-applies them in place, without re-downloading). Everything else is plain
+ES modules — no bundler.
 
 ## How it works
 

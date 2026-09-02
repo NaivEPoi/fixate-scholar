@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "fetch-pdfjs": "node scripts/fetch-pdfjs.mjs",
-    "test": "node scripts/check-naming.mjs && node --test \"test/unit/*.test.mjs\"",
+    "test": "node scripts/check-naming.mjs && node scripts/check-vendor.mjs && node --test \"test/unit/*.test.mjs\"",
+    "check-vendor": "node scripts/check-vendor.mjs",
     "package": "node scripts/package.mjs"
   },
   "license": "Apache-2.0"

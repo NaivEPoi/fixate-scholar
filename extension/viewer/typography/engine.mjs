@@ -112,6 +112,50 @@ const FONT_STACKS = {
   literata: '"FX Literata", serif',
 };
 
+// Characters that can sit either side of a mid-word span break: Latin letters,
+// the accent glyphs TeX sets separately, and intra-word punctuation.
+const WORD_EDGE = /[A-Za-z\u00c0-\u024f'\u2019\u00a8\u00b4\u0060\u00af\u00b8\u02c6\u02c7\u02d8\u02d9\u02da\u02db\u02dc\u02dd]/;
+const HEAD_FRAG = new RegExp(WORD_EDGE.source + "+$");
+const TAIL_FRAG = new RegExp("^" + WORD_EDGE.source + "+");
+
+/**
+ * Pairs of text-layer spans that carry one word between them.
+ *
+ * Two spans continue the same word when they sit on the SAME baseline with no
+ * room for a space between them (PDF.js would have emitted the space
+ * character) and the characters facing each other across the break are both
+ * word characters. Returns div -> {head, tail}: `head` is the fragment the
+ * previous span ended with, `tail` the fragment the next span starts with.
+ */
+function joinRuns(allPairs) {
+  const out = new Map();
+  for (let k = 1; k < allPairs.length; k++) {
+    const a = allPairs[k - 1];
+    const b = allPairs[k];
+    const ia = a?.item;
+    const ib = b?.item;
+    if (!a?.div || !b?.div || !ia?.transform || !ib?.transform) continue;
+    const h = Math.min(ia.height || 0, ib.height || 0);
+    if (!(h > 0)) continue;
+    if (Math.abs(ia.transform[5] - ib.transform[5]) > h * 0.3) continue; // different lines
+    if (ib.transform[4] - (ia.transform[4] + (ia.width ?? 0)) >= h * 0.15) continue; // a space fits
+    const head = HEAD_FRAG.exec(a.div.textContent ?? "")?.[0];
+    const tail = TAIL_FRAG.exec(b.div.textContent ?? "")?.[0];
+    if (!head || !tail) continue;
+    out.set(a.div, { ...(out.get(a.div) ?? {}), tail });
+    out.set(b.div, { ...(out.get(b.div) ?? {}), head });
+  }
+  return out;
+}
+
+// Bounds on the width correction a processed span may take out of its spaces,
+// as a fraction of the span's line height. Both are consumed in the width pass
+// at the end of #processPage, where the asymmetry is explained: opening spaces
+// is what justification itself does, closing them is what destroys word
+// separation.
+const MAX_SPACE_STRETCH = 0.45;
+const MAX_SPACE_TRIM = 0.02;
+
 // Key a font by its bare leading family name: the same face reaches spans as
 // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12, sans-serif'
 // (PDF.js's own), and both must hit the same entry. Module scope because
@@ -128,6 +172,7 @@ export class TypographyEngine {
   #enabled = false;
   #pristine = new WeakMap(); // span -> { html, scaleX, fontFamily }
   #wordStart = new WeakMap(); // span -> running word index it was emphasized from
+  #joinCtx = new WeakMap(); // span -> {head, tail} of a word split across spans
   #pending = new Map(); // pageNumber -> cancel flag holder
   #refsBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — bibliography region
   #furnitureBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — running heads/feet
@@ -353,7 +398,7 @@ export class TypographyEngine {
     // (normalized) item string, which can differ from the string we measured,
     // and re-deriving stays correct either way. Same call as the first pass, so
     // identical text yields identical parts — including the saccade phase.
-    const result = emphasizeParts(span.textContent, this.#settings, wordStart);
+    const result = emphasizeParts(span.textContent, this.#settings, wordStart, this.#joinCtx.get(span));
     if (!result) return false;
     // One bold flag per character, then split the span's text nodes on the
     // flag boundaries. Walking TEXT NODES (not innerHTML) is what preserves
@@ -2316,6 +2361,17 @@ export class TypographyEngine {
     });
 
     const settings = this.#settings;
+    // WORDS SPLIT ACROSS SPANS. PDF.js opens a new span at every font change,
+    // so one word can arrive in pieces: TeX composes an accented letter from
+    // two glyphs ("naïve" = "na" + "¨" + "ıve"), and an italic math letter
+    // inside a word does the same ("ith" = math "i" + "th"). Emphasized
+    // piece by piece, that bolds a prefix of EACH piece — two bold runs inside
+    // one word. Stitch them: the piece that starts the word sizes its prefix
+    // against the whole word; the pieces that continue it get none. Computed
+    // over allPairs, not candidates, because the piece next door is often the
+    // math glyph that is deliberately left on the canvas.
+    const joins = joinRuns(allPairs);
+
     // Obstacles: every inked text-layer span we are NOT rendering on top (skip
     // set, headings, captions, tables, refs, size-filtered). Masks cover only
     // the canvas duplicate of spans we redraw — they must never white out an
@@ -2461,17 +2517,38 @@ export class TypographyEngine {
                 const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
                 const y0 = Math.max(0, Math.floor((bandT - s.cr.top) * s.csy));
                 const y1 = Math.min(s.H, Math.ceil((bandB - s.cr.top) * s.csy));
-                if (x1 - x0 < 2 || y1 - y0 < 1) return true; // degenerate — don't judge
+                // Too small to judge. The snapshot is capped in resolution
+                // (csx here is often well under 1), so a rect only a few
+                // CANVAS pixels wide holds one antialiased glyph stem and no
+                // sampling of it distinguishes "blank" from "an italic i".
+                // Answering "no ink" there costs the span its obstacle rect,
+                // and the neighbouring line's mask padding then whites out
+                // part of a glyph that exists ONLY on the canvas (the dot of
+                // the i in "ith", ProVerif manual p19). The veto this gate
+                // feeds — hidden OCR/invisible text layers — is a line-wide
+                // phenomenon, so declining to judge one glyph gives nothing up.
+                if (x1 - x0 < 10 || y1 - y0 < 1) return true;
                 let hits = 0;
                 let n = 0;
-                const step = 2;
+                // Every other pixel is plenty on a line of text; on a SINGLE
+                // GLYPH it is not — an italic "i" is a stem one or two pixels
+                // wide, and stepping past it reads as blank canvas.
+                const step = x1 - x0 < 12 || y1 - y0 < 12 ? 1 : 2;
                 for (let y = y0; y < y1; y += step) {
                   for (let x = x0; x < x1; x += step) {
                     n++;
                     if (inkedIn(s, (y * s.W + x) * 4)) hits++;
                   }
                 }
-                const hasInk = n > 0 && hits >= Math.max(6, n * 0.02);
+                // The 6-hit floor guards a LARGE rect against a few stray
+                // pixels reading as a line; on a rect with barely more than
+                // six samples it is unreachable, so a one-glyph math span
+                // ("i", "n", ".", ":") was judged INK-FREE. It then got no
+                // obstacle rect, and the neighbouring line's mask padding
+                // whited out part of it — the dot of the italic i in "ith"
+                // (ProVerif manual p19). Below ~40 samples the floor scales
+                // with the sample count instead; above it, nothing changes.
+                const hasInk = n > 0 && hits >= Math.max(Math.min(6, Math.ceil(n * 0.15)), n * 0.02);
                 // A no-ink VETO from a capped-resolution read may be dropping
                 // a real line — redo the page once sharp pixels arrive.
                 if (!hasInk && lowResSrc(s)) this.#inkRetryPages.add(pageView.id);
@@ -2960,7 +3037,8 @@ export class TypographyEngine {
           // emphasis can be re-derived later for this span alone (see
           // reapplyEmphasis, used after the find controller rewrites a div).
           const wordStart = wordIndex;
-          const result = emphasizeParts(pair.div.textContent, settings, wordIndex);
+          const join = joins.get(pair.div);
+          const result = emphasizeParts(pair.div.textContent, settings, wordIndex, join);
           if (!result) {
             // Math-heavy text or a wrapped URL/email continuation: leave it on
             // the canvas in its original face, and add it to the obstacles so
@@ -2973,7 +3051,7 @@ export class TypographyEngine {
             vpScale && pair.item?.width > 0
               ? pair.item.width * vpScale
               : rect.width;
-          batch.push({ pair, parts: result.parts, rect, targetW, wordStart });
+          batch.push({ pair, parts: result.parts, rect, targetW, wordStart, join });
         }
         // Content + font pass: rewrite each span as bold-prefix + rest, swap in
         // the chosen face, and RE-SEAT THE BASELINE. PDF.js set each span's top
@@ -3000,6 +3078,7 @@ export class TypographyEngine {
             marginTop: span.style.marginTop,
           });
           this.#wordStart.set(span, entry.wordStart);
+          if (entry.join) this.#joinCtx.set(span, entry.join);
           const frag = document.createDocumentFragment();
           for (const part of parts) {
             if (part.bold) {
@@ -3177,19 +3256,29 @@ export class TypographyEngine {
             continue;
           }
           const spaces = (span.textContent.match(/ /g) || []).length;
-          // Glyph size must stay CONSISTENT across the page: white space
-          // absorbs as much of the correction as it safely can, and only the
-          // RESIDUAL goes to --scale-x (fractions of a percent instead of
-          // the whole correction). Positive word-spacing (justification
-          // surplus) can stretch far; NEGATIVE word-spacing eats the
-          // inter-word gaps themselves — on a line LaTeX already squeezed to
-          // minimum glue, even −3px/space fuses the words
-          // ("securitypoliciesfromspecifications", B p14) — so the negative
-          // side is capped tightly and the leftover shrink scales glyphs
-          // (2-3% narrower is invisible, missing spaces are not).
+          // The two directions are NOT symmetric.
+          //
+          // A POSITIVE correction is justification surplus: the PDF set this
+          // line wider than the glyphs need, exactly as the canvas does it, by
+          // opening the spaces. Word-spacing reproduces that, glyph shapes
+          // untouched, and it may stretch far.
+          //
+          // A NEGATIVE correction means our text is WIDER than the original --
+          // which is what a bundled reading face is, systematically, at the
+          // same point size (Inter and Literata run ~5-8% wide of Computer
+          // Modern). Spending that on word-spacing eats the inter-word gaps
+          // themselves, and they are the one piece of horizontal space a
+          // reader actually reads: at the old -0.1em cap a typical space fell
+          // from ~0.26em to ~0.15em and whole lines set in a reading font ran
+          // together ("Thismanual providesan introductory", ProVerif manual
+          // p10 in Literata/Inter). So the negative side is held to a
+          // sub-pixel trim and the real shrink goes to --scale-x, which
+          // compresses glyphs and spaces ALIKE and so keeps the face's own
+          // word-gap proportion (5% narrower is invisible; fused words are
+          // not).
           if (spaces >= 1) {
             const raw = (targetW - natural) / spaces;
-            const perSpace = Math.min(rect.height * 0.45, Math.max(rect.height * -0.1, raw));
+            const perSpace = Math.min(rect.height * MAX_SPACE_STRETCH, Math.max(rect.height * -MAX_SPACE_TRIM, raw));
             const fontPx = measuredFontPx || rect.height;
             span.style.wordSpacing = `${perSpace / fontPx}em`;
             const carried = natural + perSpace * spaces;

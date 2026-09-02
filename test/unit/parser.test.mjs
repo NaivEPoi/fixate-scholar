@@ -5,6 +5,9 @@ import {
   findReferencesBody,
   findFurniture,
   guessTitle,
+  guessAuthors,
+  firstAuthorSurname,
+  bibAuthors,
   findCitations,
   findInternalRefs,
   resolveCitation,
@@ -434,6 +437,49 @@ test("findCitations: overlapping matches are dropped, earliest-longest wins", ()
   }
 });
 
+test("firstAuthorSurname reads either author convention", () => {
+  // Surname first (APA): the surname is the head of the name.
+  assert.equal(firstAuthorSurname("Doe, J., & Smith, A."), "Doe");
+  assert.equal(firstAuthorSurname("Smith, A., Jones, B., & Lee, C."), "Smith");
+  // Given name first (numeric / alpha bibliographies): the surname is last.
+  assert.equal(firstAuthorSurname("Mark D. Ryan and Ben Smyth"), "Ryan");
+  assert.equal(firstAuthorSurname("A. Vaswani, N. Shazeer, N. Parmar, et al."), "Vaswani");
+  // A PDF that splits TeX accent composition still yields the surname, which
+  // the given-name-first regex used to return as "Mart".
+  assert.equal(firstAuthorSurname("Mart´ın Abadi and C´edric Fournet"), "Abadi");
+  // A nobiliary particle keeps the same head word findCitations picks.
+  assert.equal(firstAuthorSurname("van Emde Boas"), "Boas");
+  assert.equal(firstAuthorSurname(null), null);
+});
+
+test("guessAuthors cuts the entry where guessTitle does", () => {
+  assert.equal(
+    guessAuthors("Mark D. Ryan and Ben Smyth. Applied pi calculus. In Formal Models, 2011."),
+    "Mark D. Ryan and Ben Smyth",
+  );
+  assert.equal(
+    guessAuthors("Doe, J. (2019). A study of reading behavior. Journal of Reading, 12(3)."),
+    "Doe, J.",
+  );
+  assert.equal(
+    guessAuthors('A. Author, “A quoted title,” in Proc. CHI, 2021.'),
+    "A. Author",
+  );
+  // Nothing separates authors from title here — guessTitle falls back too.
+  assert.equal(guessAuthors("short unparseable entry text"), null);
+});
+
+test("entry surname is the first author's, not their given name", () => {
+  const doc = lines([
+    "References",
+    "[1] Mart´ın Abadi and C´edric Fournet. Mobile values, new names. In POPL, 2001.",
+    "[2] Mark D. Ryan and Ben Smyth. Applied pi calculus. In Formal Models, 2011.",
+    "[3] Ross Anderson and Roger Needham. Programming computers. In CS Today, 1995.",
+  ]);
+  const entries = parseReferences(doc);
+  assert.deepEqual(entries.map((e) => e.surname), ["Abadi", "Ryan", "Anderson"]);
+});
+
 test("resolveCitation splits keys on the LAST hyphen (hyphenated surnames)", () => {
   const entries = [{ number: null, surname: "Ben-Or", year: "1994", raw: "M. Ben-Or (1994), A theorem." }];
   assert.equal(resolveCitation(["Ben-Or-1994"], entries).length, 1);
@@ -481,6 +527,73 @@ test("guessTitle falls back to raw prefix", () => {
   assert.equal(t, "short unparseable entry text");
 });
 
+test("guessTitle: author-year punctuated with commas (older LaTeX article style)", () => {
+  // No sentence period anywhere, so the generic split cannot see a title and
+  // the whole entry used to become the Scholar query (Shor quant-ph/9508027:
+  // 54 of 64 entries).
+  assert.equal(
+    guessTitle(
+      "L. M. Adleman (1994), Algorithmic number theory, in Proceedings of the 35th Annual Symposium, pp. 88-113.",
+    ),
+    "Algorithmic number theory",
+  );
+  // The venue may be an abbreviated journal name instead of ", in ...".
+  assert.equal(
+    guessTitle(
+      "A. Barenco, D. Deutsch, and R. Jozsa (1995b), Conditional quantum dynamics and logic gates, Phys. Rev. Lett., 74, pp. 4083-4086.",
+    ),
+    "Conditional quantum dynamics and logic gates",
+  );
+});
+
+test("guessTitle: LNCS \"Surname, I.: Title. In: Venue\"", () => {
+  assert.equal(
+    guessTitle("Abdolmaleki, B., Lipmaa, H., Zajac, M.: Dl-extractable commitment schemes. In: ACNS. pp. 385-405 (2019)"),
+    "Dl-extractable commitment schemes",
+  );
+  // A trailing DOI makes the entry look like APA ("(2005). https://doi.org/x"),
+  // which returned "https://doi" as the title until LNCS was tried first. A
+  // lowercase particle in the author list must not break the guard either.
+  assert.equal(
+    guessTitle("Ateniese, G., de Medeiros, B., Tsudik, G.: Sanitizable Signatures. In: Computer Security. pp. 159-177 (2005). https://doi.org/10.1007/x"),
+    "Sanitizable Signatures",
+  );
+});
+
+test("guessTitle: a trailing year parenthesis is not the author-year delimiter", () => {
+  // ACM Reference Format ends with one, and taking what follows returned the
+  // PAGE RANGE as the title. The generic sentence split reads this form right.
+  assert.equal(
+    guessTitle(
+      "A. Stulman. 2009. Searching for Optimal Homing Sequences. J. Network and Computer Applications 32, 2 (2009), 315-323.",
+    ),
+    "Searching for Optimal Homing Sequences",
+  );
+});
+
+test("guessTitle: an LNCS author list may end in \"et al.\"", () => {
+  assert.equal(
+    guessTitle("Ben-Sasson, E., et al.: Aurora: Transparent succinct arguments. In: EUROCRYPT 2019. pp. 103-128 (2019)"),
+    "Aurora: Transparent succinct arguments",
+  );
+});
+
+test("guessTitle: the new branches leave the established styles alone", () => {
+  assert.equal(
+    guessTitle("Doe, J. (2019). A study of reading behavior. Journal of Reading Research, 12(3), 45-67."),
+    "A study of reading behavior",
+  );
+  assert.equal(
+    guessTitle("A. Vaswani, N. Shazeer, et al. Attention is all you need. In Advances in NIPS, 2017."),
+    "Attention is all you need",
+  );
+  // A colon inside a numeric entry's TITLE is not an LNCS author separator.
+  assert.equal(
+    guessTitle("J. Devlin, M. Chang. BERT: Pre-training of deep bidirectional transformers. In NAACL, 2019."),
+    "BERT: Pre-training of deep bidirectional transformers",
+  );
+});
+
 test("extracts DOI from entry, stripping trailing punctuation", () => {
   const doc = lines([
     "References",
@@ -499,4 +612,21 @@ test("findCitations matches across reassembled line wraps", () => {
   const found = findCitations(joined);
   assert.equal(found.length, 2);
   assert.deepEqual(found.flatMap((f) => f.keys).sort(), ["12", "13", "Smith-2020"]);
+});
+
+test("bibAuthors splits a given-name-first list on its commas", () => {
+  assert.equal(
+    bibAuthors("Syed Rafiul Hussain, Imtiaz Karim, and Elisa Bertino"),
+    "Syed Rafiul Hussain and Imtiaz Karim and Elisa Bertino",
+  );
+  assert.equal(
+    bibAuthors("A. Vaswani, N. Shazeer, N. Parmar, et al."),
+    "A. Vaswani and N. Shazeer and N. Parmar",
+  );
+});
+
+test("bibAuthors never cuts a surname-first name in half", () => {
+  assert.equal(bibAuthors("Doe, J., & Smith, A."), "Doe, J. and Smith, A.");
+  assert.equal(bibAuthors("Smith, A., Jones, B., & Lee, C."), "Smith, A. and Jones, B. and Lee, C.");
+  assert.equal(bibAuthors(null), null);
 });

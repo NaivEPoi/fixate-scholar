@@ -325,6 +325,15 @@
   font-style: italic;
 }
 
+/* Says which of the two the card body is showing, so a fallback to the
+   document's own entry never reads as a (wrong) Scholar result. */
+.fx-cite-source {
+  color: light-dark(#5f6368, #9aa0a6);
+  font-size: 11px;
+  font-style: italic;
+  margin-bottom: 4px;
+}
+
 .fx-scholar-title {
   display: block;
   font-size: 14px;

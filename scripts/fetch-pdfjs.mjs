@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { PATCHES, applyPatch } from "./pdfjs-patches.mjs";
+
 const PDFJS_VERSION = "6.0.227";
 // sha256 of pdfjs-6.0.227-dist.zip; recomputed and printed on every run.
 // Set to null to accept any hash (first fetch of a new version), then pin it.
@@ -67,24 +69,6 @@ function extract() {
   console.log(`Extracted to ${vendorDir}`);
 }
 
-function patch(file, anchor, replacement, marker) {
-  const path = join(vendorDir, file);
-  let text = readFileSync(path, "utf8");
-  if (text.includes(marker)) {
-    console.log(`Patch already applied: ${file}`);
-    return;
-  }
-  if (!text.includes(anchor)) {
-    throw new Error(
-      `PATCH ANCHOR NOT FOUND in ${file}.\n` +
-      `PDF.js ${PDFJS_VERSION} changed; update the anchor in scripts/fetch-pdfjs.mjs.\n` +
-      `Anchor: ${anchor}`,
-    );
-  }
-  text = text.replace(anchor, replacement);
-  writeFileSync(path, text);
-  console.log(`Patched ${file}`);
-}
 
 // Reading-friendly free fonts (all SIL OFL) offered as alternatives to the
 // document's embedded fonts. Vendored from the @fontsource npm packages via
@@ -117,76 +101,12 @@ verify();
 extract();
 await fetchFonts();
 
-// Patch 1: don't reject cross-origin ?file= URLs (we run on chrome-extension://).
-patch(
-  "web/viewer.mjs",
-  `if (HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {`,
-  `if (viewerOrigin.startsWith("chrome-extension:") /* fixate-scholar-patch-1: extension pages may load cross-origin PDFs */ || HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {`,
-  "fixate-scholar-patch-1",
-);
-
-// Patch 2: load the overlay (typography engine, references, toolbar buttons).
-patch(
-  "web/viewer.html",
-  `</head>`,
-  `  <link rel="stylesheet" href="../../../viewer/overlay.css"><!-- fixate-scholar-patch-2 -->\n  <script src="../../../viewer/overlay.mjs" type="module"></script>\n</head>`,
-  "fixate-scholar-patch-2",
-);
-
-// Patch 3: allow the viewer to fetch local file:// PDFs (when the user has
-// enabled "Allow access to file URLs"). The stock connect-src uses `*`, which
-// covers network schemes but NOT file:, so a file:// fetch is otherwise
-// blocked by CSP and the document fails to load.
-patch(
-  "web/viewer.html",
-  `connect-src * blob: data:;`,
-  `connect-src * blob: data: file:;`,
-  `connect-src * blob: data: file:`,
-);
-
-// Patch 4: allow inline style="…" ATTRIBUTES on the viewer page. The stock CSP
-// only allows inline <style> ELEMENTS (style-src-elem) and leaves style-src-attr
-// to fall back to `style-src 'self'`, which blocks inline style attributes —
-// some Chromium builds apply one during page layout (annotation / print code
-// paths), logging "Applying inline style violates … style-src 'self'". Safe on
-// this trusted page: it renders only the user's own PDF (text → canvas and
-// textContent, never innerHTML, so a PDF can't inject DOM/styles) and
-// script-src 'self' already blocks injected scripts.
-patch(
-  "web/viewer.html",
-  `style-src-elem 'self' 'unsafe-inline';`,
-  `style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline';`,
-  `style-src-attr 'unsafe-inline'`,
-);
-
-// Patch 5: don't let the drag-selection helper move `.endOfContent` INSIDE a
-// text span. On every selectionchange TextLayerBuilder walks the selection edge
-// up from its text node and relocates the full-size, user-select:text
-// `.endOfContent` div next to it — assuming the result is a direct child of the
-// .textLayer. It normalizes exactly one level, plus one more for its OWN
-// <span class="highlight"> wrapper: proof the assumption breaks on nesting.
-// Reading mode nests too (<b class="fx-b"> emphasis, .fx-cite-c/.fx-ref-c
-// citation wrappers), so a drag whose edge lands inside a bold prefix splices
-// that layer-sized div into the middle of a word. It then wins every hit-test
-// over the span, the drag can't reach the rest of the line, and the copy loses
-// the non-bold tails ("can only select the bolded part of a word"). Climb out
-// of ANY wrapper instead — a superset of the stock .highlight hop, so PDF.js's
-// own find-match case keeps working. Upstream bug; report it.
-patch(
-  "web/viewer.mjs",
-  `      if (anchor.classList?.contains("highlight")) {
-        anchor = anchor.parentNode;
-      }`,
-  `      /* fixate-scholar-patch-5: climb out of every nested wrapper (PDF.js's
-         own .highlight, our <b class="fx-b"> emphasis and .fx-cite-c/.fx-ref-c
-         citation spans) so endDiv is never inserted inside a text span. */
-      while (
-        anchor.parentElement &&
-        !anchor.parentElement.classList.contains("textLayer")
-      ) {
-        anchor = anchor.parentElement;
-      }`,
-  "fixate-scholar-patch-5",
-);
+// The edits themselves live in pdfjs-patches.mjs, shared with
+// scripts/check-vendor.mjs so `npm test` can verify a vendored tree still has
+// them (extension/vendor/ is git-ignored, and a tree missing one looks fine
+// until a user reports the symptom).
+for (const p of PATCHES) {
+  console.log(`${applyPatch(vendorDir, p, PDFJS_VERSION)}: ${p.file} — ${p.marker}`);
+}
 
 console.log("Done. Load the ./extension directory as an unpacked extension.");

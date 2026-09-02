@@ -6,15 +6,26 @@
 //    citation resolves to several entries. Clicking a citation never scrolls
 //    the PDF to the bibliography. Dismissed by ✕, Escape, or clicking outside.
 
-import { fetchScholarPreview, fetchScholarBibtex, scholarSearchUrl } from "./scholar.mjs";
+import { bibAuthors } from "./parser.mjs";
+import {
+  fetchScholarPreview,
+  fetchScholarBibtex,
+  referenceQuery,
+  scholarSearchUrl,
+} from "./scholar.mjs";
 
-/** A minimal BibTeX entry from the locally parsed reference — the fallback
- *  when Scholar's own BibTeX can't be fetched. */
+/** A BibTeX entry built from the locally parsed reference — the fallback when
+ *  Scholar's own BibTeX can't be fetched, and (now that a lookup only returns a
+ *  VERIFIED match) the normal result whenever Scholar has nothing convincing to
+ *  offer. It has to stand on its own, so it carries the authors, title, year and
+ *  DOI as parsed, with the entry verbatim in `note` so nothing is lost. */
 function entryBibtex(entry, preview) {
   const surname = (entry.surname || "ref").replace(/[^A-Za-z]/g, "") || "ref";
   const key = (surname + (entry.year || "")).toLowerCase();
   const clean = (s) => String(s).replace(/[{}]/g, "").trim();
   const out = [`@misc{${key},`];
+  const authors = bibAuthors(entry.authors);
+  if (authors) out.push(`  author = {${clean(authors)}},`);
   const title = clean(entry.title || preview?.title || "");
   if (title) out.push(`  title = {${title}},`);
   if (entry.year) out.push(`  year = {${entry.year}},`);
@@ -110,9 +121,17 @@ export class CitationPopup {
     } else if (this.#pinned) {
       body.append(this.#loadingNode());
       const shownIndex = this.#index;
-      fetchScholarPreview(entry.title).then((preview) => {
+      fetchScholarPreview(entry).then((preview) => {
         if (this.#el.hidden || this.#index !== shownIndex || !body.isConnected) return;
-        body.replaceChildren(preview ? this.#scholarCard(preview) : this.#rawEntry(entry));
+        // No preview means Scholar was unreachable OR nothing on the result
+        // page was convincingly this reference. Either way the document's own
+        // entry is the truthful thing to show — labelled, so it is never
+        // mistaken for a lookup result.
+        body.replaceChildren(
+          ...(preview
+            ? [this.#scholarCard(preview)]
+            : [this.#sourceNote("From this document's bibliography"), this.#rawEntry(entry)]),
+        );
         this.#position();
       });
     } else {
@@ -174,6 +193,13 @@ export class CitationPopup {
     return d;
   }
 
+  #sourceNote(text) {
+    const d = document.createElement("div");
+    d.className = "fx-cite-source";
+    d.textContent = text;
+    return d;
+  }
+
   #rawEntry(entry) {
     const d = document.createElement("div");
     const raw = entry.raw || "";
@@ -184,7 +210,7 @@ export class CitationPopup {
   #unresolvedNode(entry) {
     const d = document.createElement("div");
     d.className = "fx-cite-unresolved";
-    d.textContent = `Reference [${entry.number}] could not be read from this document's bibliography.`;
+    d.textContent = `Reference [${entry.label ?? entry.number}] could not be read from this document's bibliography.`;
     return d;
   }
 
@@ -275,7 +301,7 @@ export class CitationPopup {
       }
 
       // [PDF] (prepended, primary) and Related fill in once the preview lands.
-      fetchScholarPreview(entry.title).then((preview) => {
+      fetchScholarPreview(entry).then((preview) => {
         if (!actions.isConnected) return;
         if (preview?.pdfUrl) {
           actions.prepend(this.#linkPill(`[PDF] ${preview.pdfHost}`, preview.pdfUrl, "fx-pill-primary"));
@@ -286,7 +312,7 @@ export class CitationPopup {
       });
     }
 
-    actions.append(this.#linkPill("Google Scholar", scholarSearchUrl(entry.title)));
+    actions.append(this.#linkPill("Google Scholar", scholarSearchUrl(referenceQuery(entry))));
 
     if (entry.doi) {
       actions.append(
@@ -329,7 +355,7 @@ export class CitationPopup {
     el.append(panel);
     this.#position();
 
-    fetchScholarPreview(entry.title).then((preview) =>
+    fetchScholarPreview(entry).then((preview) =>
       fetchScholarBibtex(preview?.cid).then((bib) => {
         if (!panel.isConnected) return;
         ta.value = bib || entryBibtex(entry, preview);
