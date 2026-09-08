@@ -5,7 +5,12 @@ Produced by the per-page audit (`test/review-capture.mjs` overlays +
 screenshot before listing. Rules: `TESTING.md` Section 3.
 
 Status: **review complete; F1-F5 all FIXED & validated. Round 3 (F6/F7) below.**
-Latest: **Round 24 (R24) — seven user reports on the ProVerif manual, all fixed.**
+Latest: **Round 27 (R27) — copy a paragraph, get a paragraph: the page's line
+breaks are rejoined and the hyphens they were broken with are repaired.**
+Before it: **Round 26 (R26) — a two-column paper whose citations were never
+linked at all: a small-caps heading lost to the next column's baseline, a float
+caption truncating the bibliography, and a fallback so a reference section that
+exists is always worth processing.**
 
 ### Round 3 (2026-07-09) — divider-line masking + "upper-left shift" (user report)
 Built `test/diag-dividers.mjs`: per page, finds long thin dark runs on the
@@ -1757,3 +1762,280 @@ a backtick in a here-string becomes a control character (`` `f `` really does em
 a form feed). This warning was already here for Set-Content, and it happened again
 anyway. Use an editor that writes UTF-8, and check with
 `node -e "..."` for control characters before committing.
+
+## Round 26 (R26) - a two-column paper whose citations were never linked at all
+
+User: "no reference in this paper have been processed. for the unlinked
+reference, still try to process, if the reference section exists." The report was
+on a private-corpus paper, so everything below is reproduced and verified on
+PUBLIC papers instead - a 20-paper arXiv sweep of the same family (two-column
+IEEEtran-style, numeric bibliography, no link annotations on the citations).
+
+The sweep ran the extractor and parser offline over each PDF and counted, per
+paper, parsed entries and in-text citations that resolve to one:
+
+| | before | after |
+|---|---|---|
+| papers with a bibliography but ZERO parsed entries | 3 | 1 |
+| papers with entries but resolving under 60% of their citations | 2 | 0 |
+| papers resolving EVERY citation | 12/20 | 16/20 |
+
+The ZERO left is a Chinese-language paper whose heading is "参考文献:" - the
+heading vocabulary is English-only, which is a separate (and much larger) piece
+of work, not this defect. The other three that are not at 100% miss ONE citation
+each (59/60, 42/43, 88/89) for reasons predating this round and unchanged by it.
+Reproduce the whole table with `node test/refparse.mjs <dir-of-pdfs>` (new here -
+see the harness table in TESTING.md).
+
+### R26-1 - the small-caps heading was eaten by the other column's baseline
+`extractor.mjs` bands text items into baseline rows before splitting each row at
+column-sized x gaps, and the band was `0.6 x the TALLER of the two items`.
+
+IEEEtran sets `\section*{References}` in small caps, which the text layer emits
+as TWO items: a 9.96pt "R" and a 7.97pt "EFERENCES". In a two-column paper the
+other column's lines sit a few points off this column's baselines - on
+arXiv:2603.06158 p13, the right column's previous entry line is 5.35pt above the
+heading. Banding by the taller item made the tolerance `0.6 x 9.96 = 5.98pt`, so
+the "R" joined THAT row, 250pt away in x; the column split then made it a line of
+its own and left the heading as "EFERENCES". `HEADING` matched neither,
+`findHeadingIndex` returned -1, `parseReferences` returned `[]`, and the document
+got no citation coloring, no cards and no link reconciliation - the exact report.
+The 7.97pt "EFERENCES" could not reach that row (`0.6 x 7.97 = 4.78pt`), which is
+why only the first letter went missing.
+
+Fix: band by the SHORTER of the two items. What legitimately sits off a shared
+baseline is small text - a subscript, a superscript, an inline fragment - and
+0.6x ITS height still admits it; a tall glyph's own height is no reason to reach
+a line away. The new band is strictly narrower, so it can only reduce
+cross-column bleed, never add it.
+
+Measured (offline entry/citation counts, before -> after):
+- arXiv:2510.27394 - 0 entries, 0/180 citations -> 47 entries, 180/180
+- arXiv:2603.06158 - 0 entries, 0/112 citations -> 40 entries, 112/112
+- arXiv:2511.09227 - the same bleed truncated the BODY rather than the heading:
+  20 entries, 44/178 -> 65 entries, 178/178
+
+### R26-2 - a float caption truncated a two-column bibliography
+`findReferencesBody` ends the body at the first heading-SIZED line (at least as
+large as the References heading, clearly larger than the entries), because an
+appendix heading may not say "appendix".
+
+A two-column reference list is routinely interrupted by a float: a figure or
+table pinned to the top of the next column, whose caption is set at BODY size -
+larger than the 8pt entries and as large as the 10pt heading. On
+arXiv:2511.00919 the bibliography starts at the foot of the left column, so the
+FIRST thing after two entry lines is "Fig. 9: Empirical CDFs of SNR ..." at the
+top of the right column: body = 2 lines, 1 entry, 3 of 104 citations resolved.
+
+Fix: a heading-sized line is only a boundary when the bibliography does not
+plainly resume after it. `resumesAfter()` scans up to 15 lines ahead for an entry
+MARKER at entry size, stopping at any real section heading; when it finds one the
+interrupting line is skipped instead of ending the body, which also skips the
+caption's continuation lines (they are body-sized too) rather than folding them
+into the previous entry. arXiv:2511.00919: 1 entry / 3 of 104 -> 39 entries /
+104 of 104.
+
+### R26-3 - zero parsed entries meant zero citation processing (the ask)
+This is the user's instruction taken literally, and it is the honest fallback for
+whatever else the parser may still fail on. `ReferencesFeature` gated the whole
+annotation pass on `#entries.length`, so a document whose bibliography could not
+be grouped into entries got nothing - and "nothing" is the worst of the three
+possible outcomes, because `reconcileLinks` only neutralises a native link that
+one of OUR hit-targets covers: on a paper that DOES carry link annotations, a
+click then scrolled the reader away to the bibliography, the one thing this
+feature exists to prevent.
+
+Fix (`citations.mjs`): `#shouldAnnotate()` - entries, OR the document has a
+reference section at all (`findReferencesBody` returned a heading and body
+lines). In the fallback every BRACKETED citation still gets its hit-target and a
+stub card that says plainly that the entry could not be read; author-year
+parentheticals are still skipped, because without entries to resolve against that
+pattern cannot be told from ordinary prose in parentheses (`#buildCards` already
+declines to stub them).
+
+Verified with a synthetic two-page PDF whose reference section parses to zero
+entries (`refCount=0`): `citeaudit` reports `noHit=4` before the change and
+`noHit=0, jumpCites=0` after, with all four citations honestly UNRESOLVED.
+
+### Verification
+- `npm test`: 84 unit tests, 84 pass (was 81 - three new: two in a new
+  `test/unit/extractor.test.mjs` covering the row band in both directions, one in
+  `parser.test.mjs` for the interrupting float).
+- `papers.mjs`: **ALL 8 PAPERS PASSED**, every count identical to the R24
+  baseline (LaTeX article CM still 1291 bolded / 64 refs; IEEE journal 1997 / 68;
+  ACM acmart full 2353 / 73).
+- `refbold.mjs` over the 14-paper sweep list: 0 emphasized bibliography spans
+  everywhere. `diag-dividers.mjs` over the 13-paper sweep list: 1026 canvas
+  rules seen, `masked=0` on every page of every paper. `diagnose.mjs` over the
+  same 14 papers, 222 pages: `whiteout=0`, `fontBad=0`, `selBad=0` throughout.
+  (All three matter here because the extractor feeds the boxes the engine leaves
+  alone - the row band changed what counts as a line.)
+- `citeaudit.mjs https://arxiv.org/pdf/2510.27394`: all 13 pages
+  `jumpCites=0 noHit=0 unresolved=0`, refCount=47 (before: no citation layer at
+  all). arXiv:2603.06158 the same on every page - its first pass showed noHit on
+  pages 1-3 only because that PDF is 45MB and the audit measured before extraction
+  finished; with a longer settle it is clean, and `reannotateRendered` covers
+  those pages in the product.
+- Offline reference-parse sweep over the 20-paper arXiv set, before and after: no
+  paper lost entries, four gained them (the table above).
+
+## Round 27 (R27) - copying a paragraph gave back the page's line breaks
+
+User: "When I copy the paragraph, it breaks into several lines as rendered in
+pdf. Instead of that, I want to copy a single line if within 1 paragraph. Also
+the '-' shouldn't be there, unless it is used between 2 words."
+
+Not a defect in anything we had written - it is PDF.js's behavior, and PDF.js is
+being faithful. A PDF has no paragraphs, only typeset lines; the text layer gets
+a `<br>` after every item that ends one, and `TextLayerBuilder`'s own `copy`
+listener puts `selection.toString()` on the clipboard. So a copied paragraph
+pastes as the shape of the PAGE:
+
+    Existing CSI-based indoor localization approaches fall
+    largely into three categories: channel charting, which
+    learns geometry-preserving latent representations sub-
+    sequently aligned to physical coordinates …
+
+Re-wrapped anywhere else that is ragged nonsense, and "sub- sequently" is not a
+word. New module `viewer/copytext.mjs` rebuilds the paragraph.
+
+### R27-1 - where one paragraph ends
+Only geometry can say, and no single signal covers every template, so five do,
+in order of how much they can be trusted:
+
+1. A line ending in a hyphen is NEVER a paragraph's last line - the word itself
+   continues. This one outranks the rest, and it is what carries a word across a
+   column or page break.
+2. A running head or foot (the outer 4.5%/5% band of the page) belongs to no
+   paragraph. Without this the page number welded itself onto the last line of a
+   right column whose paragraph happened to end at the margin.
+3. A list marker (bullet, enumerator, or a bibliography's `[12]`) opens a block.
+   Its continuation lines are INDENTED, which is the exact opposite of the
+   first-line-indent rule below - read the wrong way it shreds a contributions
+   list into one fragment per line, which is what the first version did.
+4. An indented first line, or a gap wider than 1.6x the usual leading.
+5. In JUSTIFIED text only, a line that stops short of the right margin. The
+   justification test is a vote over the selection: ragged-right text ends lines
+   short all the time and the signal means nothing there.
+
+Two groupings feed those, and they answer different questions. Reading order
+(`block`) starts a new run wherever the text jumps back UP the page - which IS a
+column break - rather than from an x threshold: a copy is a handful of lines, and
+extractor.mjs's page-wide "is this two-column?" vote has nothing to count when the
+selection is one paragraph straddling one break. Margins (`col`) come from
+clustering lines by where they START, so the two columns get their own and the
+same column on consecutive pages shares one; they are percentiles, not min/max,
+or a single full-width caption would define the margin and make every ordinary
+line look short. A column too sparse to measure (a paragraph ending two lines
+into the next one) borrows the width of the densest column, since every column of
+a document is the same width.
+
+### R27-2 - the hyphen, and why shape alone cannot decide it
+"sub-/sequently" is one word broken in two; "state-of-/the-art" is three words a
+compound joined, broken at its own hyphen. TeX writes the same glyph in the same
+place for both. Shape gets most of them - the piece before the hyphen ends
+lowercase, the next line starts lowercase, and that piece is not itself already
+hyphenated - but "well-/known" satisfies all three and must keep its hyphen.
+
+The document is the tiebreaker. A paper that hyphenates "infor- mation" writes
+"information" somewhere else; one that breaks "well-known" writes it intact
+somewhere else. `HyphenVocabulary` learns every whole word in the document and
+answers which of the two readings it has seen; unknown falls back to joining,
+which is the common case by a wide margin. It costs no extra work: the lines come
+from the pass `references/citations.mjs` already runs (new `onLines` hook), and
+line-final fragments are excluded from the vocabulary - "well-" is the question,
+not evidence.
+
+Also here: a soft hyphen always goes, and a URL or DOI broken across lines is
+rejoined with no space at all ("https://github." + "com/..." was being copied
+with a space in the middle of it).
+
+### R27-2a - and a dictionary for the words a paper uses exactly once
+The document is silent whenever the word in question appears ONCE, broken, and
+never again - which is exactly when "wellknown" gets produced. Measured over the
+20-paper arXiv set: 1315 line-final hyphens that the shape rules cannot settle,
+of which the document's own vocabulary settles 959 and 356 fall through to the
+default (join).
+
+So `WordList`: SCOWL, vendored by `scripts/fetch-pdfjs.mjs` beside the fonts,
+consulted after the document and before the default. Its rule is the user's,
+literally - the hyphen stays when it sits BETWEEN TWO WORDS - with one
+precedence: a closed compound the list knows wins over its two halves, which are
+also words ("throughput" beats "through" + "put").
+
+Which SCOWL band to ship is a size question. Measured:
+
+| band | words | unpacked | in the .zip | settles (of 356) |
+|---|---|---|---|---|
+| 20 | 10.9k | 89 KB | 29 KB | 203 |
+| 35 | 39k | 340 KB | 100 KB | 255 |
+| 50 | 61k | 559 KB | 160 KB | 268 |
+| 60 | 77k | 712 KB | 200 KB | 275 |
+| **70** | **111k** | **1.04 MB** | **302 KB** | **285** |
+
+Shipped: all of them. Compressed it is ~300 KB of a ~7 MB package, and the extra
+bands buy more than the 17 decisions the last column shows. The list says "keep
+the hyphen" when both pieces are words AND it does not know the closed compound,
+so every closed compound it learns REMOVES a wrong keep: at 50 the corpus
+produced "sub-sequences", at 70 it produces "subsequences". The three keeps
+added on the way up are "non-trainable", "cross-covariance" (both right) and
+"xi-will" (a math variable meeting a verb - wrong, and harmless).
+
+70 is also the top of SCOWL's sane range: the 80 and 95 tiers are explicitly
+"questionable", carrying misspellings and scannos that would make the
+both-pieces-are-words test fire on nonsense.
+
+What no general English dictionary carries at any size is the technical compound
+- "baseband", "hyperparameter", "dataset" - and those are exactly what the
+document's own vocabulary knows. The two witnesses fail in opposite directions,
+which is why both are worth having.
+
+Measured cost: **+306 KB on a 6.82 MB packaged zip (+4.6%), 1.05 MB on disk**,
+and 1.04 MB of heap - the list is held as ONE newline-delimited string and
+membership is `includes("
+" + word + "
+")`, because a Set of 111k short
+strings costs several megabytes and a handful of scans per copy costs nothing
+anyone can feel.
+
+Of the 285 it settles, 105 are KEEP decisions over 95 distinct word pairs - the
+visible change. Eyeballing all of them: "machine-learning", "closed-form",
+"high-frequency", "non-stationary", "free-space", "second-order", "time-varying",
+"right-hand", "self-supervised", "space-time" and so on, with two questionable
+("down-link", "xi-will"). The failure it trades away - "wellknown", a non-word -
+is worse than the one it introduces.
+
+### R27-3 - the seam
+PDF.js binds its copy listener to each text-layer div and ends with
+`stopEvent` - preventDefault + stopPropagation, NOT stopImmediatePropagation. So
+a listener added to the SAME element afterwards still runs and can replace the
+`text/plain` flavour it wrote. That is the hook: no patch to the vendored
+viewer, and PDF.js's own select-all-and-copy path (a document-level listener,
+reached only when the selection includes its hidden copy element, and never
+reached from a text layer because of that same stopPropagation) is untouched.
+`flowCopy` (default on) turns the whole thing off; it is independent of
+`enabled`, because the reflow is about the text, not the typography.
+
+### Verification
+- `npm test`: 99 unit tests, 99 pass (15 new in `test/unit/copytext.test.mjs`:
+  the hyphen rules under each witness and none, the document outranking the word
+  list, an unvendored list staying silent, indent vs hanging indent, both sides
+  of a column break, running heads, ragged-right text).
+- New harness `test/copytext.mjs`. It selects a page's whole text layer and
+  dispatches a synthetic `ClipboardEvent` carrying its own `DataTransfer`, so it
+  reads back exactly what the handler wrote with no OS clipboard in the loop.
+  The check that matters is LOSSLESS: strip whitespace and hyphens from the
+  browser's own serialization and from ours and the strings must be IDENTICAL -
+  reflowing may change only whitespace and delete hyphens, so a dropped or
+  duplicated word cannot hide behind a nicer-looking paragraph.
+- 12 papers x pages 2-6, 60 pages before the word list and 55 (11 papers) after
+  it, `word list: loaded` on every run: every page LOSSLESS, no compound hyphen
+  lost, no word-hyphen left dangling before a lowercase continuation, and the
+  line count roughly a third of the raw (USENIX code+algorithms p3: 109 lines ->
+  15, one per paragraph plus one per bullet; IEEE journal p3: 103 -> 47).
+  Two pages flagged a "word- " inside a line until the harness learned to
+  subtract what the RAW text already contained - both papers set a spaced hyphen
+  themselves, and copying that verbatim is not this feature's doing.
+- `papers.mjs`: ALL 8 PAPERS PASSED, counts unchanged (the copy handler shares
+  `overlay.mjs`'s textlayerrendered hook with the engine, so the gate has to say
+  the typography is untouched).

@@ -80,6 +80,70 @@ const FONTS = [
 ];
 const FONT_WEIGHTS = ["400", "700"];
 
+// The English word list the copy reflow consults when it has to decide whether
+// a line-break hyphen was splitting one word ("infor- mation") or joining two
+// ("well- known"). SCOWL, via the `wordlist-english` npm package: its lists are
+// CUMULATIVE size bands, 10 = the 1000 commonest words, 95 = every obscurity.
+//
+// Measured over 20 papers — 1315 line-final hyphens the shape rules alone
+// cannot settle, of which the document's own vocabulary settles 959:
+//
+//   band | words | unpacked | in the .zip | of the remaining 356 it settles
+//   -----|-------|----------|-------------|-------------------------------
+//     20 |  10.9k|    89 KB |       29 KB | 203
+//     35 |    39k|   340 KB |      100 KB | 255
+//     50 |    61k|   559 KB |      160 KB | 268
+//     60 |    77k|   712 KB |      200 KB | 275
+//     70 |   111k|  1.04 MB |      302 KB | 285   <- shipped, every band there is
+//
+// Everything, because compressed it is still only ~300 KB of a ~7 MB package.
+// The extra bands buy more than the 17 decisions: the list decides "keep the
+// hyphen" when BOTH pieces are words and it does not know the closed compound,
+// so every closed compound it learns is a wrong keep removed ("sub-sequences"
+// becomes "subsequences" at 70). What no general English dictionary carries at
+// any size is the technical compound — "baseband", "hyperparameter", "dataset" —
+// and those are the document's own vocabulary's job.
+//
+// 70 is the top of this package, and of SCOWL's sane range: its 80 and 95 tiers
+// are explicitly "questionable", carrying misspellings and scannos that would
+// make the both-pieces-are-words test fire on nonsense.
+const WORDLIST_PKG = "wordlist-english@1.2.1";
+const WORDLIST_BANDS = [10, 20, 35, 40, 50, 55, 60, 70];
+
+async function fetchWordList() {
+  const outDir = join(root, "extension", "vendor", "words");
+  mkdirSync(outDir, { recursive: true });
+  const words = new Set();
+  for (const band of WORDLIST_BANDS) {
+    // english-* is the shared core; american-* adds the US spellings.
+    for (const kind of ["english", "american"]) {
+      const url = `https://cdn.jsdelivr.net/npm/${WORDLIST_PKG}/${kind}-words-${band}.json`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Word list download failed (${res.status}): ${url}`);
+      for (const w of await res.json()) {
+        const t = String(w).toLowerCase();
+        // Plain alphabetic words only. A line-break hyphen can only ever
+        // produce those, and dropping the rest (possessives, accents) halves
+        // the file.
+        if (/^[a-z]{2,}$/.test(t)) words.add(t);
+      }
+    }
+  }
+  // Sorted, newline-delimited, with a leading and trailing newline: the viewer
+  // holds it as ONE string and tests membership with `includes("\n" + w + "\n")`,
+  // which costs the file's own size in memory instead of the ~7x a Set of that
+  // many short strings would.
+  const text = "\n" + [...words].sort().join("\n") + "\n";
+  writeFileSync(join(outDir, "english.txt"), text, "utf8");
+  const notice = await fetch(`https://cdn.jsdelivr.net/npm/${WORDLIST_PKG}/Copyright`);
+  if (!notice.ok) throw new Error(`SCOWL copyright download failed (${notice.status})`);
+  writeFileSync(join(outDir, "COPYRIGHT"), await notice.text(), "utf8");
+  console.log(
+    `Word list vendored to ${outDir}: ${words.size} words, ${(text.length / 1024).toFixed(0)} KB` +
+      ` (SCOWL bands ${WORDLIST_BANDS.join("+")})`,
+  );
+}
+
 async function fetchFonts() {
   const fontsDir = join(root, "extension", "vendor", "fonts");
   mkdirSync(fontsDir, { recursive: true });
@@ -100,6 +164,7 @@ await download();
 verify();
 extract();
 await fetchFonts();
+await fetchWordList();
 
 // The edits themselves live in pdfjs-patches.mjs, shared with
 // scripts/check-vendor.mjs so `npm test` can verify a vendored tree still has

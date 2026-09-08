@@ -140,6 +140,41 @@ test("a stray oversized punctuation glyph does not end the bibliography", () => 
   assert.deepEqual(entries.map((e) => e.number), [1, 2, 3]);
 });
 
+test("a float caption interrupting the bibliography does not end it", () => {
+  // A two-column reference list is routinely interrupted by a figure pinned to
+  // the top of the next column. Its caption is set at BODY size — larger than
+  // the entries and as large as the "References" heading — so the heading-size
+  // cutoff read it as the next section and truncated the list. Entries resume
+  // after it; a real appendix heading does not.
+  const entry = (n, y) => ({
+    text: `[${n}] ${"ABC"[n % 3]}. Author, “A reference entry with enough length,” in Proc., 20${10 + n}.`,
+    x: 50,
+    y,
+    page: 9,
+    h: 8,
+    column: 0,
+  });
+  const big = (text, y) => ({ text, x: 50, y, page: 9, h: 10, column: 0 });
+  const doc = [
+    big("References", 700),
+    entry(1, 690),
+    entry(2, 681),
+    big("Fig. 9: Empirical CDFs of the positioning error for each panel", 660),
+    big("configuration, with and without the surface in place.", 650),
+    entry(3, 630),
+    entry(4, 621),
+    big("B Additional Results", 600),
+    big("Appendix prose that should be processed normally.", 590),
+  ];
+  const { heading, body } = findReferencesBody(doc);
+  assert.equal(heading.text, "References");
+  assert.deepEqual(
+    body.map((l) => l.text.slice(0, 3)),
+    ["[1]", "[2]", "[3]", "[4]"], // caption skipped, appendix ends the body
+  );
+  assert.deepEqual(parseReferences(doc).map((e) => e.number), [1, 2, 3, 4]);
+});
+
 test("a running head at a page break does not end the bibliography", () => {
   // Journal/preprint templates print a running head and page number on every
   // page, at BODY size while the bibliography is set smaller — so the

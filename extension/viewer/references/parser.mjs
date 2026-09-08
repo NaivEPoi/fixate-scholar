@@ -262,6 +262,29 @@ export function findReferencesBody(lines) {
   // least as large as the References heading itself and clearly larger than
   // the entries.
   const entryH = lines[start + 1]?.h ?? heading.h;
+  // …and heading-sized is not a boundary either when the bibliography plainly
+  // RESUMES after it. A two-column reference list is routinely interrupted by
+  // a float: a figure or table pinned to the top of the next column carries a
+  // caption set at BODY size, which is larger than the entries and at least as
+  // large as the "References" heading, so the size test read it as the next
+  // section and cut the list off — on a paper whose bibliography starts at the
+  // foot of the left column, that left a body of two lines and one entry, and
+  // 101 of its 104 citations resolved to nothing. A real section boundary is
+  // followed by prose; an interruption is followed by more entry markers at
+  // entry size. Look for those (a bounded scan — a caption plus its float's
+  // stray labels, not a whole page).
+  const resumesAfter = (i) => {
+    for (let j = i + 1; j < Math.min(lines.length, i + 16); j++) {
+      const l = lines[j];
+      if (SECTION_AFTER.test(l.text) || HEADING.test(l.text)) return false;
+      const marker =
+        NUMERIC_MARKER.test(l.text) ||
+        DOTTED_MARKER.test(l.text) ||
+        ALPHA_MARKER.test(l.text);
+      if (marker && Math.abs(l.h - entryH) <= entryH * 0.15) return true;
+    }
+    return false;
+  };
   const body = [];
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i];
@@ -279,6 +302,7 @@ export function findReferencesBody(lines) {
       line.text.trim().length >= 2 &&
       /[\p{L}\p{N}]/u.test(line.text)
     ) {
+      if (resumesAfter(i)) continue; // an interrupting float, not a new section
       break;
     }
     body.push(line);

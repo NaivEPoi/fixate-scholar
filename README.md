@@ -49,6 +49,15 @@ code, fonts, or assets.
   **DOI** — with a pager for multi-citations like `[38, 24, 15]` that shows one card per
   cited reference. It **never scrolls the PDF to the bibliography**, even for a citation
   whose entry couldn't be parsed (that shows an honest placeholder card instead).
+- **Copy a paragraph, get a paragraph**: a PDF stores typeset lines, so copying normally
+  pastes the shape of the page — one fragment per line, hyphens and all
+  (`sub- sequently`). FixateScholar rebuilds the paragraph: each one copies as a single
+  line, joined across column and page breaks, with the line-break hyphens removed and the
+  compound ones (`state-of-the-art`) kept. `well-known` and `information` break identically,
+  so two witnesses decide: the paper's own vocabulary first, then a bundled English word
+  list (the hyphen stays when it sits between two words). Lists keep one item per line,
+  running heads and feet stay separate, and wrapped URLs are put back together. Off switch
+  in the options page.
 - **Highlighting & annotations**: PDF.js's built-in highlighter (and the other annotation
   tools) work in reading mode — highlights show over the fixation-styled text just as over
   the original, appear on both the original and the processed text as you toggle the mode,
@@ -68,7 +77,8 @@ code, fonts, or assets.
 Requirements: [Node.js](https://nodejs.org) 20+, Chrome 128+.
 
 ```sh
-npm run fetch-pdfjs   # downloads + verifies the pinned PDF.js viewer into extension/vendor/
+npm run fetch-pdfjs   # downloads + verifies the pinned PDF.js viewer, the bundled reading
+                      # fonts, and the English word list into extension/vendor/ (~22 MB)
 ```
 
 Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and
@@ -94,6 +104,8 @@ node test/papers.mjs                          # classification/color/link gate (
 node test/diag-dividers.mjs "USENIX (code + algorithms)"    # masks must never cover table rules/underlines
 node test/chrome-xray.mjs  "USENIX (code + algorithms)" 10 --browser=chrome   # real-Chrome overlay-vs-canvas x-ray
 node test/matrix-fonts.mjs "USENIX (code + algorithms)" 14 --browser=edge     # every fontMode × boldWeight combo
+node test/refparse.mjs "<pdf|dir|url>" …      # offline reference-parse sweep, no browser (entries + citations resolved)
+node test/copytext.mjs "<pdf-url>"            # copying a paragraph gives a paragraph, losslessly
 node test/citeaudit.mjs  "<pdf-url>"          # citations: never jump to bib, always carded (jumpCites 0)
 node test/highlights.mjs "<pdf-url>"          # highlight over processed text + save-to-PDF round-trip
 node test/search.mjs "<pdf-url>" protocol     # find matches stay visible AND stay bolded
@@ -122,7 +134,9 @@ per-change verification gates.
 
 The PDF.js generic viewer is vendored (not committed) by `scripts/fetch-pdfjs.mjs`, which
 pins the release version and sha256 and applies the loud-failure string patches listed in
-`scripts/pdfjs-patches.mjs`. Because `extension/vendor/` is not committed, `npm test` also
+`scripts/pdfjs-patches.mjs`. The same script vendors the reading fonts and the English word
+list the copy reflow consults for hyphens (SCOWL, 111k words — 1.04 MB unpacked, ~300 KB of
+the packaged zip; the frequency bands are a constant at the top of the script). Because `extension/vendor/` is not committed, `npm test` also
 runs `scripts/check-vendor.mjs`, which fails if a vendored tree is missing any of those
 patches (`--fix` re-applies them in place, without re-downloading). Everything else is plain
 ES modules — no bundler.

@@ -40,6 +40,23 @@ arXiv side stamp is its own hazard, covered either way).
 `node test/debug-refs.mjs <pdf-url>` dumps heading candidates and surrounding
 extracted lines when reference parsing misbehaves on a new paper.
 
+## Reference-parse regressions (R26)
+
+Public two-column IEEEtran-family papers that got NO citation layer at all
+before R26 — the whole feature silently off, not merely a wrong card. Each is
+`node test/citeaudit.mjs <url>`, which must report `jumpCites=0 noHit=0
+unresolved=0` on every page.
+
+| Paper | Was | Now |
+|---|---|---|
+| https://arxiv.org/pdf/2510.27394 | heading extracted as "EFERENCES" (small-caps "R" pulled into the other column's row) → 0 entries, 0/180 citations | 47 entries, 180/180 |
+| https://arxiv.org/pdf/2603.06158 | same defect (45MB — allow a long settle before auditing) → 0 entries, 0/112 | 40 entries, 112/112 |
+| https://arxiv.org/pdf/2511.09227 | the same cross-column bleed truncating the BODY → 20 entries, 44/178 | 65 entries, 178/178 |
+| https://arxiv.org/pdf/2511.00919 | a figure caption at the top of the next column ended the bibliography → 1 entry, 3/104 | 39 entries, 104/104 |
+
+Known gap: a Chinese-language paper (https://arxiv.org/pdf/2601.18473, heading
+"参考文献:") still parses nothing — the heading vocabulary is English-only.
+
 The full processing rulebook these tests enforce lives in
 [REQUIREMENTS.md](../../REQUIREMENTS.md). When adding a paper with a data
 table, add to its `untouched` list in `test/papers.mjs` a string known to live
