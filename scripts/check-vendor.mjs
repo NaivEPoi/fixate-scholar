@@ -12,7 +12,7 @@
 //
 // --fix needs no network: the vendored files are already there, only the edits
 // are absent. A missing vendor directory is not a failure (unit tests run
-// without it) — it just says to run `npm run fetch-pdfjs`.
+// without it) — it just says to run `npm run setup`.
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -25,7 +25,7 @@ const vendorDir = join(root, "extension", "vendor", "pdfjs");
 const fix = process.argv.includes("--fix");
 
 if (!existsSync(join(vendorDir, "web", "viewer.html"))) {
-  console.log("No vendored PDF.js — run `npm run fetch-pdfjs`. Skipping patch check.");
+  console.log("No vendored PDF.js — run `npm run setup`. Skipping patch check.");
   process.exit(0);
 }
 
@@ -37,7 +37,7 @@ if (!existsSync(join(vendorDir, "web", "viewer.html"))) {
 if (!existsSync(join(root, "extension", "vendor", "words", "english.txt"))) {
   console.log(
     "No vendored word list (extension/vendor/words) — hyphen repair on copy falls\n" +
-      "back to the document's own vocabulary. Run `npm run fetch-pdfjs` to add it.",
+      "back to the document's own vocabulary. Run `npm run setup` to add it.",
   );
 }
 
@@ -53,7 +53,7 @@ if (!fix) {
       missing.map((p) => `${p.file} — ${p.marker}`).join("\n  ") +
       `\n\nThe viewer is built but misbehaving in ways no unit test sees.` +
       `\nFix in place:  node scripts/check-vendor.mjs --fix` +
-      `\nOr re-fetch:   npm run fetch-pdfjs`,
+      `\nOr:            npm run setup`,
   );
   process.exit(1);
 }

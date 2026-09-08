@@ -104,6 +104,7 @@ paper-specific hack.
 ```sh
 npm test                                  # naming guard + unit tests
 node test/e2e.mjs <browser>               # full pipeline on a live arXiv paper
+npm run setup                             # fetch missing vendor deps + apply patches
 node test/papers.mjs [browser]            # 7-template corpus, all rules above
 node test/search.mjs [url] [query]        # find matches: visible + still bolded
 node test/highlights.mjs [url] [page]     # highlight annotations over processed text

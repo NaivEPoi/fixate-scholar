@@ -1,5 +1,5 @@
 // Zips extension/ into dist/fixate-scholar-<version>.zip for Chrome Web Store upload.
-// Requires extension/vendor/pdfjs to exist (run fetch-pdfjs first).
+// Requires extension/vendor/pdfjs to exist (run `npm run setup` first).
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
@@ -11,7 +11,7 @@ const extDir = join(root, "extension");
 const distDir = join(root, "dist");
 
 if (!existsSync(join(extDir, "vendor", "pdfjs", "web", "viewer.html"))) {
-  console.error("extension/vendor/pdfjs missing — run `npm run fetch-pdfjs` first.");
+  console.error("extension/vendor/pdfjs missing — run `npm run setup` first.");
   process.exit(1);
 }
 
