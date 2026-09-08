@@ -134,7 +134,7 @@ const CHECK = (p) => `(() => {
   // "Figure 11 shows…"). Only PDF.js's markedContent wrappers should be skipped.
   const lineMap = new Map();
   for (const s of layer.querySelectorAll("span")) {
-    if (!s.textContent.trim() || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)")) continue;
+    if (!s.textContent.trim() || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
     const r = s.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) continue;
     const key = Math.round((r.top - cr.top) / 5);

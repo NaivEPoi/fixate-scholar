@@ -2036,3 +2036,130 @@ emphasis-and-color envelope that step 4 is supposed to hold to.
 **The version was therefore NOT bumped and no tag was pushed.** G1 in particular
 should not ship: it makes a real paper unreadable in the mode the extension
 exists to provide.
+
+### The four defects the gate found, fixed
+
+**G1 - a space that paints as a .notdef box.** Measured, not inferred: the
+document's embedded body face returns a filled box for U+0020 (486-1194 dark
+pixels at 48px, against 0 for the fallback), and U+00A0 inks too, so no fallback
+escape exists - the face claims coverage and the browser never moves on to the
+next family in the stack. The canvas rendering never asks the font for a space;
+our overlay does, once per gap.
+
+`#spacePaintsInk()` probes the face the span will actually render in, cached per
+family and invalidated in `refreshFonts` (a probe run before the face has loaded
+measures the fallback and would cache a false negative for the life of the
+document). When it inks, whitespace is wrapped in a `span.fx-sp`, which
+overlay.css paints transparent: the glyph keeps its exact advance, so every
+measurement, mask and width correction downstream is untouched, and the space
+stays in `textContent`, so selection and copy still yield real spaces.
+
+Two things went wrong on the way, both worth recording:
+
+- The first version left `.fx-sp` at PDF.js's `display: block`. Every hidden
+  space then contributed NO inline advance and the paragraph rendered with its
+  words jammed together - the boxes gone and the gaps with them. It is the same
+  trap the citation wraps already carry a comment about. Caught by eye, then
+  measured: 550px for the span against 710px for the same text with the wrappers
+  stripped.
+- The wrapper is a nested element inside a text span, and ELEVEN selectors across
+  EIGHT harnesses assumed the only nested spans were the citation wraps. Left
+  alone, those harnesses go blind on exactly the documents this fixes -
+  `shot-region2` could not even find a band to capture. All eleven now exclude
+  `.fx-sp`.
+
+`test/wrapcheck.mjs` is the regression guard, and it is why this is believable:
+it re-probes every processed span on every page, asserts that a face which inks a
+space has all of its whitespace wrapped, and re-measures each wrapped span
+against a clone with the wrappers stripped. On the affected document that is 1360
+spans over 15 pages, 3869 wrappers, unwrapped=0, maxWidthDelta=0px; across both
+corpora, 43 documents and ~41000 spans, no unwrapped whitespace and no stray
+wrapper anywhere.
+
+**G2 - a ligature word losing its emphasis.** `PLAIN_WORD` now admits
+U+FB00-FB06, and the prefix is measured on the LETTERS rather than the
+characters: a ligature is one character standing for two or three, so sizing
+against the raw string shorted every word containing one. A ligature straddling
+the target is taken only if that lands nearer the asked-for length than stopping
+short does - always taking it emphasized four letters of "office" where the
+plain spelling gets two. The public Computer Modern paper went from 1 of 63
+ligature words emphasized to 63 of 63, with words carrying no ligature unchanged
+at 2259/2262, and papers.mjs moved exactly one number: that paper's 1291 -> 1314
+bolded spans. Every other paper is identical to the R24 baseline.
+`test/unit/ligature.test.mjs` pins ten pairs - the ligature form must be
+emphasized, and its prefix must match the plain spelling's to within one letter.
+
+**G3 - emphasis inside a displayed equation.** The rule that should have caught
+these (`blk-figlabel`) is gated on fewer than two lowercase words, and TeX sets
+operator names and connectives as ordinary lowercase text INSIDE the equation -
+so the NeurIPS MultiHead/Concat/where/Attention display counted as prose. The new
+`isDisplayEquation` test uses the signal a lowercase count cannot see: a short
+block whose every row is inset from BOTH of the column's text edges, carrying a
+math face or a relation glyph. Body prose is never inset from both margins, a
+paragraph's last line only on the right, a heading on neither. Equation TAGS are
+excluded from the row measurement, or every numbered equation would look
+flush-right. Deliberately not caught: equations set flush-left (the fleqn class
+option), which present no centering signal at all.
+
+**G4 - a body paragraph skipped as CCS boilerplate.** Found on the 29th private
+document, which arrived mid-sweep (below). The CCS-concepts rule fired on "an
+arrow plus two semicolons", and that paper's prose contains a numeric arrow and
+two clause semicolons in one block - so two body paragraphs rendered with no
+emphasis at all. The arrow must now sit between LETTERS: prose uses one for a
+numeric change, while a real CCS line always joins terms. Verified both ways -
+the paragraphs are emphasized now, and the ACM paper's CCS block is still
+skipped.
+
+### Still open (recorded, not fixed)
+
+- **A text-face NAME inside an inline formula keeps its prefix.** Two private
+  papers: a bold prefix on the operator name in an inline `deg(...)` while the
+  `nrd(...)` beside it stays clean, and on sans-serif procedure names inside an
+  inline expression. Unlike G3 this is not a rule violation - TESTING.md's skip
+  list covers math/symbol/monospace/small-caps/bold faces, and an upright roman
+  or sans identifier inside a formula is none of them. Fixing it means deciding
+  what "a name in a formula" is, which is a policy change rather than a bug fix,
+  and the failing item could not be located from the DOM to validate a rule
+  against. Left for its own round.
+- **A run-in section heading emphasized on one private paper**, where the same
+  construct on another is correctly skipped. Pre-existing; the lead-run detector
+  does not recognize that paper's heading shape.
+- **A caption-vs-prose false positive in the AUDIT HARNESS**, not the product: it
+  counted a ten-character figure-internal annotation as an in-text reference. The
+  criterion now requires four lowercase words, the same prose threshold skipPara
+  uses two rules down. Measured identical on the pre-change tree.
+
+### The private corpus is 29 documents, not 28
+
+It grew during this session: a paper added at 03:26 sorts second, so every
+positional alias from rv02 on shifted by one, and the same document is rv18 in
+one log and rv19 in the next. That cost real time here - a diagnostic aimed at
+"rv18" measured a different paper and appeared to show the space fix failing.
+The aliases are positional by design, so this will recur: read the count in the
+sweep header ("N documents on 127.0.0.1:PORT as rv01..rvNN") before trusting a
+label across runs. CLAUDE.md still says 28.
+
+### Verification for the fixes
+
+- `npm test`: naming guard, vendored patch check 6/6, 125 unit tests (was 103;
+  new: ten ligature pairs plus a guard that words without one are untouched).
+- Clean-room vendoring: `npm run fetch-pdfjs` from scratch applies all six
+  patches to a pristine extract - what CI does on the tag.
+- `papers.mjs`: ALL 8 PASSED, every count identical to the R24 baseline except
+  the ligature paper's 1291 -> 1314.
+- Public corpus, all 14: `diag-drag` 14/14 (selection 186-322 chars), `audit`
+  14/14 with the four hard criteria 0, `console` 14/14 over every page,
+  `wrapcheck` 14/14.
+- Private corpus, all 29: `diag-drag` 29/29, `audit` 29/29 with the four hard
+  criteria 0, `console` 29/29 over 453/453 pages, `wrapcheck` 29/29.
+- Step 4 by eye, after the fixes: 42 documents as matched fx-on/fx-off pairs,
+  plus the 29th re-inspected after G4. Six documents whose page-5 band is a table
+  or a form box were re-captured on page 8 - a byte-identical pair proves
+  nothing, and the worst of these defects was hiding on one of them.
+- Two false alarms from that pass, both chased to the end rather than waved off:
+  a "ligature at word start is still skipped" report on a page whose text layer
+  holds no ligature codepoint at all (that word gets the ordinary two-of-four
+  letter prefix, exactly like its plain spelling), and the alias shift above.
+- G4 landed after the 42-document pass. It can only ever un-skip prose - a
+  taxonomy arrow is never digit-flanked - and papers.mjs plus both audit sweeps
+  are unchanged, so the one document it altered is the one re-inspected by eye.

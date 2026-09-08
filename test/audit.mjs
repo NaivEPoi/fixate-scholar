@@ -75,7 +75,7 @@ const PROBE = `(() => {
     if (!div || !div.childElementCount) continue;
     const page = pv.id;
     const fxRect = pv.div.getBoundingClientRect();
-    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.trim());
+    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)") && s.textContent.trim());
 
     // keepFont: keep spans whose first font-family isn't an embedded g_* face.
     const keepBad = [];
@@ -91,7 +91,13 @@ const PROBE = `(() => {
     const capProse = [];
     for (const s of leaves) {
       const t = s.textContent.trim();
-      if (/^(?:Figure|Fig\\.?|Table|Tab\\.?|Algorithm|Section)\\s*\\d+[a-z]?\\s+[a-zà-ÿ]/.test(t)) {
+      // It must actually BE running prose. A figure's own internal annotation
+      // ("Fig. 2 for", 10 characters, correctly skipped as fig-body) matches the
+      // label-plus-number shape too, and reported as a defect it sends the
+      // reader looking for a paragraph that does not exist. Four lowercase words
+      // is the same prose threshold skipPara uses two rules down.
+      const lcWords = (t.match(/\\b[a-zà-ÿ]{2,}\\b/g) || []).length;
+      if (lcWords >= 4 && /^(?:Figure|Fig\\.?|Table|Tab\\.?|Algorithm|Section)\\s*\\d+[a-z]?\\s+[a-zà-ÿ]/.test(t)) {
         // Report the SKIP REASON (data-fx-why, set by #classifyBlocks under
         // __fxDebug): without it a capProse hit says only "some pass claimed
         // this line", which is not enough to fix anything.
