@@ -1,9 +1,9 @@
-// Launch a HEADFUL Chrome on the real display (so devicePixelRatio = the user's
+// Launch a HEADFUL browser on the real display (so devicePixelRatio = the user's
 // actual scaling, e.g. 1.75), load the current extension, drive it to a PDF via
 // the DNR redirect, enable fx + debug, set zoom, and measure the overlay-vs-canvas
 // baseline + report the per-page calibration that fired. Fresh profile so remote
 // debugging is allowed and the user's profile is untouched.
-// Usage: node test/live-chrome.mjs [zoom]
+// Usage: node test/live-chrome.mjs [zoom] [browser-path]
 
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
@@ -11,11 +11,13 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath } from "./lib/env.mjs";
+import { extensionBrowserPath } from "./lib/env.mjs";
 
 const ZOOM = parseFloat(process.argv[2] ?? "1.25");
 const PDF = "https://yilud.me/usenixsecurity24-tu.pdf"; // .pdf → request-stage DNR rule (most reliable redirect)
-const CHROME = browserPath("chrome");
+// Not branded Chrome: it refuses --load-extension, so the extension under test
+// would never load. See extensionBrowserPath in lib/env.mjs.
+const CHROME = extensionBrowserPath(process.argv[3]);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
 const PORT = 9222;
@@ -25,7 +27,7 @@ const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`
 
 const browser = spawn(CHROME, [
   `--remote-debugging-port=${PORT}`, "--no-first-run", "--no-default-browser-check",
-  "--disable-sync", "--disable-features=DisableLoadExtensionCommandLineSwitch",
+  "--disable-sync",
   `--user-data-dir=${userDataDir}`,
   `--load-extension=${EXT}`, `--disable-extensions-except=${EXT}`, "about:blank",
 ], { stdio: "ignore" });

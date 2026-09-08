@@ -6,6 +6,7 @@
 import { TypographyEngine } from "./typography/engine.mjs";
 import { getSettings, setSettings, onSettingsChange } from "./settings-client.mjs";
 import { ReferencesFeature } from "./references/citations.mjs";
+import { currentFileUrl } from "./file-param.mjs";
 
 // Crisper page canvases: PDF.js rasterizes each page at devicePixelRatio.
 // On standard-density displays (dpr < 2) the glyph rasterization at ~1×
@@ -24,26 +25,6 @@ try {
   }
 } catch {
   /* keep the native ratio */
-}
-
-// The DNR redirect appends the raw PDF URL after ?file= without encoding.
-// Re-encode it so PDF.js (and the URL parser) can't be confused by &, #, etc.
-function normalizeFileParam() {
-  const search = window.location.search;
-  const marker = "?file=";
-  if (!search.startsWith(marker)) return;
-  const raw = search.slice(marker.length) + window.location.hash;
-  if (!raw || raw.startsWith("blob:")) return;
-  let decoded;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-    decoded = raw;
-  }
-  const normalized = "?file=" + encodeURIComponent(decoded);
-  if (search + window.location.hash !== normalized) {
-    history.replaceState(null, "", window.location.pathname + normalized);
-  }
 }
 
 function addToolbarToggle(app, initialOn, onToggle) {
@@ -112,15 +93,9 @@ function addFontButton(initialMode, onChange) {
 // (the service worker installs a one-shot allow rule before re-navigating).
 function addNativeViewerButton() {
   const right = document.getElementById("toolbarViewerRight");
-  const search = window.location.search;
-  if (!right || !search.startsWith("?file=") || typeof chrome === "undefined" || !chrome.runtime?.sendMessage) return;
-  let url;
-  try {
-    url = decodeURIComponent(search.slice(6));
-  } catch {
-    return;
-  }
-  if (!/^(https?|file):/.test(url)) return;
+  if (!right || typeof chrome === "undefined" || !chrome.runtime?.sendMessage) return;
+  const url = currentFileUrl();
+  if (!url) return;
   const button = document.createElement("button");
   button.id = "fxNativeButton";
   button.className = "toolbarButton";
@@ -133,8 +108,6 @@ function addNativeViewerButton() {
   });
   right.prepend(button);
 }
-
-normalizeFileParam();
 
 const app = window.PDFViewerApplication;
 await app.initializedPromise;
@@ -378,15 +351,9 @@ app.eventBus.on("documentloaded", () => {
 // re-navigates with the page's own cookies/session semantics.
 app.eventBus.on("documenterror", () => {
   if (document.getElementById("fxLoadError")) return;
-  const search = window.location.search;
-  if (!search.startsWith("?file=") || !chrome.runtime?.sendMessage) return;
-  let url;
-  try {
-    url = decodeURIComponent(search.slice(6));
-  } catch {
-    return;
-  }
-  if (!/^(https?|file):/.test(url)) return;
+  if (!chrome.runtime?.sendMessage) return;
+  const url = currentFileUrl();
+  if (!url) return;
   const banner = document.createElement("div");
   banner.id = "fxLoadError";
   banner.className = "fx-load-error";
