@@ -18,7 +18,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { PATCHES, applyPatch } from "./pdfjs-patches.mjs";
 
@@ -28,11 +28,11 @@ const PDFJS_VERSION = "6.0.227";
 const PINNED_SHA256 = "f94782e933ce03a101bb5a5f032f0b275458184a07d0b52434dca759c0a0afaa";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const vendorDir = join(root, "extension", "vendor", "pdfjs");
+export const vendorDir = join(root, "extension", "vendor", "pdfjs");
 const zipUrl = `https://github.com/mozilla/pdf.js/releases/download/v${PDFJS_VERSION}/pdfjs-${PDFJS_VERSION}-dist.zip`;
 const zipPath = join(tmpdir(), `pdfjs-${PDFJS_VERSION}-dist.zip`);
 
-async function download() {
+export async function download() {
   if (existsSync(zipPath)) {
     console.log(`Using cached ${zipPath}`);
     return;
@@ -43,7 +43,7 @@ async function download() {
   writeFileSync(zipPath, Buffer.from(await res.arrayBuffer()));
 }
 
-function verify() {
+export function verify() {
   const hash = createHash("sha256").update(readFileSync(zipPath)).digest("hex");
   console.log(`sha256: ${hash}`);
   if (PINNED_SHA256 && PINNED_SHA256 !== "PLACEHOLDER_TO_BE_PINNED" && hash !== PINNED_SHA256) {
@@ -52,7 +52,7 @@ function verify() {
   }
 }
 
-function extract() {
+export function extract() {
   rmSync(vendorDir, { recursive: true, force: true });
   mkdirSync(vendorDir, { recursive: true });
   const extractTmp = join(tmpdir(), `pdfjs-extract-${PDFJS_VERSION}`);
@@ -75,12 +75,12 @@ function extract() {
 // Reading-friendly free fonts (all SIL OFL) offered as alternatives to the
 // document's embedded fonts. Vendored from the @fontsource npm packages via
 // jsDelivr; the exact resolved version is logged for traceability.
-const FONTS = [
+export const FONTS = [
   { pkg: "@fontsource/atkinson-hyperlegible", file: "atkinson-hyperlegible-latin-{w}-normal.woff2", out: "atkinson-{w}.woff2" },
   { pkg: "@fontsource/inter", file: "inter-latin-{w}-normal.woff2", out: "inter-{w}.woff2" },
   { pkg: "@fontsource/literata", file: "literata-latin-{w}-normal.woff2", out: "literata-{w}.woff2" },
 ];
-const FONT_WEIGHTS = ["400", "700"];
+export const FONT_WEIGHTS = ["400", "700"];
 
 // The English word list the copy reflow consults when it has to decide whether
 // a line-break hyphen was splitting one word ("infor- mation") or joining two
@@ -109,10 +109,10 @@ const FONT_WEIGHTS = ["400", "700"];
 // 70 is the top of this package, and of SCOWL's sane range: its 80 and 95 tiers
 // are explicitly "questionable", carrying misspellings and scannos that would
 // make the both-pieces-are-words test fire on nonsense.
-const WORDLIST_PKG = "wordlist-english@1.2.1";
+export const WORDLIST_PKG = "wordlist-english@1.2.1";
 const WORDLIST_BANDS = [10, 20, 35, 40, 50, 55, 60, 70];
 
-async function fetchWordList() {
+export async function fetchWordList() {
   const outDir = join(root, "extension", "vendor", "words");
   mkdirSync(outDir, { recursive: true });
   const words = new Set();
@@ -146,7 +146,7 @@ async function fetchWordList() {
   );
 }
 
-async function fetchFonts() {
+export async function fetchFonts() {
   const fontsDir = join(root, "extension", "vendor", "fonts");
   mkdirSync(fontsDir, { recursive: true });
   for (const font of FONTS) {
@@ -162,18 +162,31 @@ async function fetchFonts() {
   console.log(`Fonts vendored to ${fontsDir}`);
 }
 
-await download();
-verify();
-extract();
-await fetchFonts();
-await fetchWordList();
-
-// The edits themselves live in pdfjs-patches.mjs, shared with
-// scripts/check-vendor.mjs so `npm test` can verify a vendored tree still has
-// them (extension/vendor/ is git-ignored, and a tree missing one looks fine
-// until a user reports the symptom).
-for (const p of PATCHES) {
-  console.log(`${applyPatch(vendorDir, p, PDFJS_VERSION)}: ${p.file} — ${p.marker}`);
+/** Apply every patch to the vendored tree (idempotent — each is skipped when
+ *  its marker is already there). Returns how many were actually applied. */
+export function patch() {
+  let applied = 0;
+  // The edits themselves live in pdfjs-patches.mjs, shared with
+  // scripts/check-vendor.mjs so `npm test` can verify a vendored tree still has
+  // them (extension/vendor/ is git-ignored, and a tree missing one looks fine
+  // until a user reports the symptom).
+  for (const p of PATCHES) {
+    const what = applyPatch(vendorDir, p, PDFJS_VERSION);
+    if (what === "patched") applied++;
+    console.log(`${what}: ${p.file} — ${p.marker}`);
+  }
+  return applied;
 }
 
-console.log("Done. Load the ./extension directory as an unpacked extension.");
+// Run everything only when invoked as a script. `scripts/setup.mjs` imports the
+// steps above and runs just the ones a tree is missing, so importing this file
+// must not start a 22 MB download.
+if (pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {
+  await download();
+  verify();
+  extract();
+  await fetchFonts();
+  await fetchWordList();
+  patch();
+  console.log("Done. Load the ./extension directory as an unpacked extension.");
+}

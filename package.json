@@ -5,6 +5,7 @@
   "description": "Chrome extension: academic PDF viewer with fixation-guided typography and reference lookup",
   "type": "module",
   "scripts": {
+    "setup": "node scripts/setup.mjs",
     "fetch-pdfjs": "node scripts/fetch-pdfjs.mjs",
     "test": "node scripts/check-naming.mjs && node scripts/check-vendor.mjs && node --test \"test/unit/*.test.mjs\"",
     "check-vendor": "node scripts/check-vendor.mjs",

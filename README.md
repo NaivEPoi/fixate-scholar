@@ -77,9 +77,16 @@ code, fonts, or assets.
 Requirements: [Node.js](https://nodejs.org) 20+, Chrome 128+.
 
 ```sh
-npm run fetch-pdfjs   # downloads + verifies the pinned PDF.js viewer, the bundled reading
-                      # fonts, and the English word list into extension/vendor/ (~22 MB)
+npm run setup         # fetches whatever extension/vendor/ is missing: the pinned PDF.js
+                      # viewer (~22 MB), the bundled reading fonts, and the English word
+                      # list — then applies the PDF.js source patches. Safe to re-run; it
+                      # is a no-op on a complete tree and only fills the gaps otherwise.
+                      # `npm run setup -- --check` reports without fetching.
 ```
+
+(`npm run fetch-pdfjs` is still there and still fetches everything
+unconditionally — that is what the release workflow wants; `setup` is the one to
+reach for by hand.)
 
 Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and
 select the `extension/` directory. To open local PDFs by their `file://` URL (e.g. by

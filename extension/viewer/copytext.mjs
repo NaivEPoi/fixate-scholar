@@ -135,7 +135,7 @@ export class WordList {
 }
 
 /** Fetch and parse the vendored list; resolves to an empty list if it is
- *  missing (a dev tree that has not run `npm run fetch-pdfjs` still works —
+ *  missing (a dev tree that has not run `npm run setup` still works —
  *  the document's vocabulary and the shape rules carry on alone). */
 export async function loadWordList(url) {
   const list = new WordList();
