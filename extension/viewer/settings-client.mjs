@@ -23,6 +23,11 @@ export const DEFAULTS = Object.freeze({
   // behavior). Distinct from `enabled`, which only toggles typography inside
   // the viewer.
   intercept: true,
+  // Copy a paragraph and get a paragraph: the viewer rejoins the PDF's typeset
+  // lines and repairs the hyphens they were broken with. Off gives PDF.js's own
+  // behavior — the page's line breaks, verbatim. Independent of `enabled`; the
+  // reflow is about the text, not the typography.
+  flowCopy: true,
 });
 
 const hasStorage = typeof chrome !== "undefined" && chrome.storage?.sync;

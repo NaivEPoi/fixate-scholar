@@ -29,6 +29,18 @@ if (!existsSync(join(vendorDir, "web", "viewer.html"))) {
   process.exit(0);
 }
 
+// Same failure shape, different file: a vendor tree from before the word list
+// existed has no extension/vendor/words, and the copy reflow then quietly falls
+// back to its shape rules for every hyphen it cannot decide. Nothing else says
+// so. Not fatal — the reader works, and `--fix` cannot conjure a download — but
+// it must be said out loud.
+if (!existsSync(join(root, "extension", "vendor", "words", "english.txt"))) {
+  console.log(
+    "No vendored word list (extension/vendor/words) — hyphen repair on copy falls\n" +
+      "back to the document's own vocabulary. Run `npm run fetch-pdfjs` to add it.",
+  );
+}
+
 const missing = missingPatches(vendorDir);
 if (!missing.length) {
   console.log(`Vendored PDF.js patch check passed (${PATCHES.length}/${PATCHES.length}).`);

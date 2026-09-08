@@ -17,6 +17,10 @@ import { CitationPopup } from "./popup.mjs";
 export class ReferencesFeature {
   #app;
   #entries = [];
+  // Does the document HAVE a bibliography, whatever came of parsing it? A
+  // paper whose reference section was found but whose entries all failed to
+  // group is still a paper whose "[12]" is a citation — see #shouldAnnotate.
+  #hasBibliography = false;
   #popup;
   #ready = null;
 
@@ -32,6 +36,11 @@ export class ReferencesFeature {
   /** Called with running-head/foot line boxes (Map<page, boxes>) once known. */
   onFurniture = null;
 
+  /** Called with every extracted line of the document, once. The extraction
+   *  happens here anyway; other features (the copy reflow's hyphen vocabulary)
+   *  want the same text and should not pay for a second pass over the PDF. */
+  onLines = null;
+
   /** Called before / after the four document-wide results above are handed
    *  over. They all land together, and each one re-processes rendered pages,
    *  so the consumer uses this pair to coalesce that into a single pass. */
@@ -45,11 +54,17 @@ export class ReferencesFeature {
 
   onDocumentLoaded(pdfDocument) {
     this.#entries = [];
+    this.#hasBibliography = false;
     this.#ready = (async () => {
       try {
         const lines = await extractLines(pdfDocument);
         if (globalThis.__fxDebug) {
           globalThis.__fxAllLines = lines.map((l) => ({ page: l.page, col: l.column, x: Math.round(l.x), h: Math.round(l.h * 10) / 10, text: l.text })); // test introspection
+        }
+        try {
+          this.onLines?.(lines);
+        } catch (e) {
+          console.warn("FixateScholar: line consumer failed", e);
         }
         this.#entries = parseReferences(lines);
         globalThis.__fxRefCount = this.#entries.length; // test introspection
@@ -85,6 +100,7 @@ export class ReferencesFeature {
           if (globalThis.__fxDebug) {
             globalThis.__fxRefBody = body.map((l) => l.text); // test introspection
           }
+          this.#hasBibliography = !!(heading && body.length);
           if (heading && body.length) {
             const boxes = new Map();
             for (const line of [heading, ...body]) {
@@ -113,14 +129,37 @@ export class ReferencesFeature {
     })();
   }
 
+  /**
+   * Whether to run the citation pass at all.
+   *
+   * Parsed entries are the normal reason. The second one is the honest
+   * fallback: the document HAS a reference section — the heading and its body
+   * lines were found — but the entries could not be grouped out of it (an
+   * unusual marker style, a bibliography rendered as an image-backed text
+   * layer, a list the extractor mangled). Every bracketed "[12]" in that
+   * document is still a citation, and refusing to touch any of them was the
+   * worst of the three outcomes: no color, no card, and — because
+   * reconcileLinks only neutralises a native link that one of OUR hit-targets
+   * covers — a click on the citation scrolled the reader away to the
+   * bibliography, the one thing this feature exists to prevent. With the
+   * fallback each bracketed citation still gets its hit-target and a stub card
+   * that says plainly the entry could not be read. Author-year parentheticals
+   * are NOT annotated here: without entries to resolve against, that pattern
+   * cannot be told from ordinary prose in parentheses (#buildCards already
+   * declines to stub them).
+   */
+  #shouldAnnotate() {
+    return this.#entries.length > 0 || this.#hasBibliography;
+  }
+
   async onTextLayerRendered(pageView) {
     await this.#ready;
-    if (this.#entries.length) this.annotatePage(pageView);
+    if (this.#shouldAnnotate()) this.annotatePage(pageView);
   }
 
   /** Rebuild hit-targets on every rendered page (geometry has changed). */
   reannotateRendered() {
-    if (!this.#entries.length) return;
+    if (!this.#shouldAnnotate()) return;
     const viewer = this.#app.pdfViewer;
     for (let i = 0; i < viewer.pagesCount; i++) {
       const pv = viewer.getPageView(i);

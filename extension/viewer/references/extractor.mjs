@@ -44,10 +44,21 @@ export async function extractLines(pdfDocument) {
     // tolerance, both columns included), then split each row at column-sized
     // x gaps. Grouping in one y-then-x sweep merges the columns of
     // two-column layouts, whose lines share baselines.
+    // The band is sized by the SHORTER of the two items. What legitimately
+    // sits off a shared baseline is small text — a subscript, a superscript,
+    // an inline fragment — and 0.6× ITS height still admits it. Sizing by the
+    // taller one instead let a single large glyph stretch the band far enough
+    // to reach the NEXT LINE of the other column: in a two-column paper whose
+    // columns are a few points out of step, IEEEtran's small-caps
+    // "REFERENCES" (a 10pt "R" followed by an 8pt "EFERENCES") had its "R"
+    // pulled into the row above — the other column's preceding entry line, a
+    // page-width away in x, so the x-gap split then made "R" a line of its own
+    // and left "EFERENCES" behind. The heading regex matched neither, so
+    // findHeadingIndex returned -1 and the document got no citations at all.
     const rows = [];
     let row = null;
     for (const it of items) {
-      if (row && Math.abs(row.y - it.y) < Math.max(row.h, it.h) * 0.6) {
+      if (row && Math.abs(row.y - it.y) < Math.min(row.h, it.h) * 0.6) {
         row.items.push(it);
       } else {
         row = { y: it.y, h: it.h, items: [it] };

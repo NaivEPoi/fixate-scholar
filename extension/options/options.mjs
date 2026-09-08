@@ -12,10 +12,12 @@ $("fractionRow").style.display = settings.emphasisMode === "fraction" ? "" : "no
 $("boldWeight").value = settings.boldWeight;
 $("saccade").value = settings.saccade;
 $("intercept").checked = settings.intercept;
+$("flowCopy").checked = settings.flowCopy;
 $("bypassOrigins").value = settings.bypassOrigins.join("\n");
 
 $("enabled").addEventListener("change", (e) => setSettings({ enabled: e.target.checked }));
 $("intercept").addEventListener("change", (e) => setSettings({ intercept: e.target.checked }));
+$("flowCopy").addEventListener("change", (e) => setSettings({ flowCopy: e.target.checked }));
 $("emphasisMode").addEventListener("change", (e) => {
   $("fractionRow").style.display = e.target.value === "fraction" ? "" : "none";
   setSettings({ emphasisMode: e.target.value });

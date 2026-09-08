@@ -6,6 +6,7 @@
 import { TypographyEngine } from "./typography/engine.mjs";
 import { getSettings, setSettings, onSettingsChange } from "./settings-client.mjs";
 import { ReferencesFeature } from "./references/citations.mjs";
+import { HyphenVocabulary, installFlowCopy, loadWordList } from "./copytext.mjs";
 
 // Crisper page canvases: PDF.js rasterizes each page at devicePixelRatio.
 // On standard-density displays (dpr < 2) the glyph rasterization at ~1×
@@ -142,6 +143,25 @@ await app.initializedPromise;
 const settings = await getSettings();
 const engine = new TypographyEngine(app, settings);
 const references = new ReferencesFeature(app);
+
+// Copy a paragraph, get a paragraph. Two witnesses decide whether a line-break
+// hyphen belonged to the word or joined two: the DOCUMENT's own vocabulary,
+// fed from the very lines the references pass already extracts (so it costs no
+// extra read of the PDF), and a general English word list for the words that
+// appear in this paper exactly once — broken. The list is fetched in the
+// background; `decide` is read at copy time, so a copy made before it lands
+// simply falls back to the document and the shape rules.
+let current = settings;
+const decide = { document: new HyphenVocabulary(), words: null };
+loadWordList(new URL("../vendor/words/english.txt", import.meta.url)).then((list) => {
+  decide.words = list;
+  globalThis.__fxWordsReady = list.ready; // test introspection
+});
+const attachFlowCopy = installFlowCopy(app, {
+  isOn: () => current.flowCopy !== false,
+  decide,
+});
+references.onLines = (lines) => decide.document.learn(lines.map((l) => l.text));
 // Leave the bibliography exactly as the author set it (appendices after it
 // are still processed), and everything before the Abstract (cover pages,
 // title, authors, emails).
@@ -261,6 +281,7 @@ applyStyleVars(settings);
 applyEnabled(settings.enabled);
 
 onSettingsChange(async (next) => {
+  current = next;
   applyStyleVars(next);
   syncButton(next.enabled);
   syncFontButton(next.fontMode);
@@ -270,6 +291,10 @@ onSettingsChange(async (next) => {
 
 app.eventBus.on("textlayerrendered", async (evt) => {
   if (evt.error) return;
+  // Before anything else: PDF.js has just bound its own copy handler to this
+  // text layer, so ours has to go on after it (it stops propagation, not
+  // immediate propagation, so a later listener on the same element still runs).
+  attachFlowCopy(evt.source);
   await engine.onTextLayerRendered(evt.source);
   references.onTextLayerRendered(evt.source);
 });

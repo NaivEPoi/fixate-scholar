@@ -65,6 +65,17 @@
     <p class="hint">1 = every word. Higher values create a sparser rhythm.</p>
   </label>
 
+  <h2>Copying text</h2>
+  <label>
+    <input type="checkbox" id="flowCopy"> Copy paragraphs as flowing text
+    <p class="hint">A PDF stores typeset lines, so copying a paragraph normally
+    pastes it broken at the page's line endings, hyphens and all
+    (“sub- sequently”). With this on, each paragraph is copied as one line and
+    the line-break hyphens are repaired — a hyphen that belongs to a compound
+    (“state-of-the-art”) is kept. Turn it off to copy exactly what is on the
+    page.</p>
+  </label>
+
   <h2>PDF interception</h2>
   <label>
     <input type="checkbox" id="intercept"> Open PDFs in FixateScholar
