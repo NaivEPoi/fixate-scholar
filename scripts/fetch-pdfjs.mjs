@@ -7,6 +7,8 @@
 //   3/4. viewer.html — widen the CSP for file:// PDFs and inline style attrs.
 //   5. viewer.mjs  — keep the drag-selection helper's `.endOfContent` out of
 //      the text spans, which reading mode's markup nests inside.
+//   6. viewer.html — load file-param.mjs BEFORE viewer.mjs, so the ?file= URL
+//      is percent-encoded before PDF.js parses the query with URLSearchParams.
 //
 // Patches use exact string anchors and fail loudly if PDF.js changes them,
 // so a version bump can never silently produce a broken viewer.
