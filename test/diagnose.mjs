@@ -70,7 +70,7 @@ const PROBE = `(() => {
     const div = pv?.textLayer?.div;
     if (!div || !div.childElementCount) continue;
     const page = pv.id;
-    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.trim());
+    const leaves = [...div.querySelectorAll("span")].filter((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)") && s.textContent.trim());
     const masks = [...pv.div.querySelectorAll(".fx-mask > div")].map((m) => m.getBoundingClientRect()).filter((r) => r.width > 0);
     const done = leaves.filter((s) => s.dataset.fxDone);
     const fxRect = pv.div.getBoundingClientRect();

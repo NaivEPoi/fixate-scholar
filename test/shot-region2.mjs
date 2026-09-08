@@ -111,7 +111,7 @@ try {
     const found = await ev(`(() => {
       const pv = window.PDFViewerApplication.pdfViewer.getPageView(${PAGE - 1});
       const div = pv.textLayer && pv.textLayer.div;
-      const hit = div && [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.includes(${JSON.stringify(FIND)}));
+      const hit = div && [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)") && s.textContent.includes(${JSON.stringify(FIND)}));
       if (!hit) return false;
       hit.scrollIntoView({ block: "center" });
       return true;
@@ -127,7 +127,7 @@ try {
     const find = ${JSON.stringify(FIND ?? null)};
     if (find) {
       const div = pv.textLayer && pv.textLayer.div;
-      const hit = [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.includes(find));
+      const hit = [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)") && s.textContent.includes(find));
       if (!hit) return { error: "text not found post-scroll" };
       const r = hit.getBoundingClientRect();
       const pad = ${PAD};
@@ -165,7 +165,7 @@ try {
     const syb = canvas.height / cr.height;
     const out = [];
     for (const s of pv.textLayer.div.querySelectorAll("span")) {
-      if (s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)")) continue;
+      if (s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
       const r = s.getBoundingClientRect();
       if ((r.bottom - cr.top) * syb < ${band.y0} || (r.top - cr.top) * syb > ${band.y1}) continue;
       if (s.textContent.trim()) out.push(s.textContent);
