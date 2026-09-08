@@ -179,6 +179,7 @@ export class TypographyEngine {
   #contentStart = null; // { page, y, h } — the Abstract heading; front matter above it
   #bodyHeight = null; // document-wide body-text height (from the refs extractor)
   #ascentCache = new Map(); // fontFamily -> browser ascent ratio (baseline align)
+  #spaceInkCache = new Map(); // famKey -> the embedded face PAINTS U+0020
   #measureCtx = null; // offscreen 2d context for ascent measurement
   #snapCtx = null; // offscreen willReadFrequently context for canvas pixel reads
   #pageFonts = new Map(); // pageNumber -> Set<famKey> used by processed spans
@@ -306,6 +307,10 @@ export class TypographyEngine {
     if (!this.#enabled) return Promise.resolve();
     if (!families?.length) return this.refresh();
     const keys = new Set(families.map((f) => famKey(f)));
+    // A face that has only just loaded was probed against the FALLBACK, whose
+    // space is blank — so the cached answer for it is a false negative. Drop it
+    // and let the re-process below measure the real face.
+    for (const k of keys) this.#spaceInkCache.delete(k);
     const promises = [];
     this.#eachRenderedPage((pv) => {
       const used = this.#pageFonts.get(pv.id);
@@ -428,17 +433,13 @@ export class TypographyEngine {
       }
       at += text.length;
       if (!runs.some((r) => r.bold)) continue;
-      const frag = document.createDocumentFragment();
-      for (const run of runs) {
-        if (run.bold) {
-          const b = document.createElement("b");
-          b.className = "fx-b";
-          b.textContent = run.text;
-          frag.append(b);
-        } else {
-          frag.append(run.text);
-        }
-      }
+      // Same space-glyph guard as the first pass: this path re-wraps a span
+      // PDF.js rebuilt, so without it a repaired span would go back to painting
+      // .notdef boxes for its spaces.
+      const frag = this.#emphasisFragment(
+        runs,
+        this.#spacePaintsInk(span.style.fontFamily),
+      );
       node.replaceWith(frag);
     }
     return true;
@@ -976,8 +977,72 @@ export class TypographyEngine {
     };
 
     const regions = twoColumn ? [left, right, full] : [full];
+    // An equation TAG ("(3)", "(2.1a)") sits out at the column margin and is
+    // not part of the equation's own line box - measuring the row with it makes
+    // every numbered display equation look flush-right.
+    const EQ_TAG = /^\(\d+(?:[.\d]*\d)?[a-z]?\)$/;
+    const rowSpan = (r) => {
+      let x0 = Infinity;
+      let x1 = -Infinity;
+      const its = r.items.filter((p) => !EQ_TAG.test(p.item.str.trim()));
+      for (const p of its.length ? its : r.items) {
+        const x = p.item.transform[4];
+        x0 = Math.min(x0, x);
+        x1 = Math.max(x1, x + (p.item.width ?? 0));
+      }
+      return [x0, x1];
+    };
+    const quantile = (arr, f) => {
+      const a = arr.slice().sort((m, n) => m - n);
+      if (!a.length) return 0;
+      return a[Math.min(a.length - 1, Math.max(0, Math.round((a.length - 1) * f)))];
+    };
+    // Relation and operator glyphs. A displayed equation carries at least one,
+    // even when every NAME in it is set in an ordinary text face.
+    const MATH_SIGNAL = /[=<>≤≥≈≠→←↔±∓∈∉∀∃∑∏∫√⊕⊗×÷]/;
     for (const region of regions) {
       const blocks = blocksOf(region);
+      // The column's own text edges, from a robust quantile so one wide item
+      // (a full-width figure remnant) cannot set them.
+      const spans = region.map(rowSpan);
+      const regX0 = quantile(spans.map((v) => v[0]), 0.1);
+      const regX1 = quantile(spans.map((v) => v[1]), 0.9);
+      const regW = regX1 - regX0;
+      /**
+       * A DISPLAYED equation: a short block whose every row is inset from BOTH
+       * of the column's text edges, carrying a math face or a relation glyph.
+       *
+       * TESTING.md lists displayed equations as a skip class, but the only rule
+       * that could catch them (blk-figlabel) is gated on `lc < 2` - fewer than
+       * two lowercase words. TeX sets operator names and connectives as
+       * ordinary lowercase text INSIDE the equation, so on NeurIPS p5
+       * "MultiHead(Q,K,V) = Concat(head_1, ..., head_h)W^O / where head_i =
+       * Attention(...)" counted as prose and every one of those names was
+       * emphasized - visibly, against a uniform math face in the control.
+       * Centering is the signal the lowercase count cannot see: body prose is
+       * never inset from both margins, a paragraph's last line is inset only on
+       * the right, and a heading only on neither.
+       *
+       * Deliberately NOT caught: equations set flush-left (the fleqn class
+       * option), which present no centering signal at all.
+       */
+      const isDisplayEquation = (b) => {
+        if (!(regW > 0) || b.rows.length > 4) return false;
+        const text = b.items.map((q) => q.item.str).join("");
+        if (!b.items.some((q) => isMath(q)) && !MATH_SIGNAL.test(text)) return false;
+        for (const r of b.rows) {
+          const [x0, x1] = rowSpan(r);
+          const insetL = x0 - regX0;
+          const insetR = regX1 - x1;
+          if (insetL < regW * 0.06 || insetR < regW * 0.06) return false;
+          // Roughly balanced about the centre - an indented block quote or a
+          // hanging-indent reference is inset on one side only.
+          const lo = Math.min(insetL, insetR);
+          const hi = Math.max(insetL, insetR);
+          if (hi > lo * 4) return false;
+        }
+        return true;
+      };
       for (let bi = 0; bi < blocks.length; bi++) {
         const b = blocks[bi];
         const lc = lowerWords(b.items);
@@ -1048,7 +1113,14 @@ export class TypographyEngine {
         // (the leading bullet is often cut into its own block, so it can't be
         // required). Running prose never combines a literal arrow with a
         // semicolon-separated Title-Case list.
-        if (btext.includes("→") && (btext.match(/;/g) || []).length >= 2) { skipBlock(b, "blk-ccs"); continue; }
+        // The arrow has to sit between LETTERS. R25: an ordinary body paragraph
+        // — "… reduces combined held-out MAE by 15.1% (0.117→0.099 m); cf05 is
+        // the hardest run …; disambiguating …" — was skipped as boilerplate.
+        // Prose does use an arrow for a numeric change, and semicolons to
+        // separate clauses, so arrow-plus-two-semicolons is not the CCS shape on
+        // its own. A real CCS line always joins TERMS ("… and privacy → Mobile
+        // and wireless security; Network security"), never digits.
+        if (/[A-Za-z]\s*→\s*[A-Za-z]/.test(btext) && (btext.match(/;/g) || []).length >= 2) { skipBlock(b, "blk-ccs"); continue; }
         // Footnotes: a smaller-than-body block in the page's bottom band that
         // OPENS with a footnote marker — a symbol (•†‡§¶*) or a superscript
         // numeral (a tiny leading item). A plain smaller-than-body cut would
@@ -1095,6 +1167,7 @@ export class TypographyEngine {
         const blockText = b.items.map((p) => p.item.str).join("");
         const nonSpace = blockText.replace(/\s/g, "");
         const punct = nonSpace.length ? (nonSpace.match(/[^A-Za-z0-9À-ɏ]/g) || []).length / nonSpace.length : 0;
+        if (isDisplayEquation(b)) { skipBlock(b, "blk-eqn"); continue; }
         if (lc < 2 && (spc >= 0.3 || offSize || b.items.length <= 3 || punct >= 0.15) && !REF_PROSE.test(b.lead)) { skipBlock(b, "blk-figlabel"); continue; }
         // Off-size block with little prose (footnotes, sub/superscript rows).
         if (offSize && lc < 4) { skipBlock(b, "blk-offsize"); continue; }
@@ -1723,6 +1796,99 @@ export class TypographyEngine {
       }
     }
     return height;
+  }
+
+  /**
+   * Does the FIRST family in this stack paint visible ink for a space?
+   *
+   * Some embedded subset fonts map U+0020 to their `.notdef` glyph — a filled
+   * box. The canvas rendering never asks the font for a space (PDF.js positions
+   * the next glyph and draws nothing between), but our overlay renders real text
+   * in that same face, so every inter-word gap paints as a box and the paragraph
+   * becomes unreadable: found on a private paper, where it turned a whole body
+   * page into words separated by tofu. No fallback saves us — the face claims
+   * coverage of U+0020 (and of U+00A0, measured), so the browser never moves on
+   * to the next family in the stack.
+   *
+   * Measured, not guessed: paint the character and count dark pixels. Cached per
+   * family (the answer is a property of the face) and invalidated in
+   * refreshFonts, because a probe run before the face has loaded measures the
+   * fallback and would cache a false negative for the life of the document.
+   */
+  #spacePaintsInk(family) {
+    if (!family) return false;
+    const key = famKey(family);
+    if (this.#spaceInkCache.has(key)) return this.#spaceInkCache.get(key);
+    let inks = false;
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 64;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, 64, 64);
+      ctx.fillStyle = "#000";
+      ctx.font = `48px ${family}`;
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText(" ", 4, 52);
+      const data = ctx.getImageData(0, 0, 64, 64).data;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] < 200) {
+          inks = true;
+          break;
+        }
+      }
+    } catch {
+      inks = false; // no canvas read (tainted/blocked) — assume the normal case
+    }
+    this.#spaceInkCache.set(key, inks);
+    return inks;
+  }
+
+  /**
+   * Build the emphasis markup for one span's parts.
+   *
+   * `hideSpaces` wraps every run of whitespace in a `<span class="fx-sp">`,
+   * which overlay.css paints in `transparent`. That keeps the advance width
+   * exactly as the face reports it — so every measurement, mask and width
+   * correction downstream is untouched — and keeps the space in `textContent`,
+   * so selection and copy still see real spaces. Only the glyph stops being
+   * painted, which is the whole of the defect.
+   *
+   * It IS a nested element inside a text span, so anything that walks the text
+   * layer looking for leaf spans must exclude it, exactly as it already
+   * excludes the citation wraps: the selector is
+   * `span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)`. Eleven such sites across
+   * eight harnesses were updated with this — a harness that forgets it goes
+   * blind on precisely the documents this fixes.
+   */
+  #emphasisFragment(parts, hideSpaces) {
+    const frag = document.createDocumentFragment();
+    for (const part of parts) {
+      if (part.bold) {
+        const b = document.createElement("b");
+        b.className = "fx-b";
+        b.textContent = part.text;
+        frag.append(b);
+      } else if (hideSpaces && /\s/.test(part.text)) {
+        // Split so only the whitespace is wrapped: a part is "word tail plus
+        // the following space" often enough that hiding the whole part would
+        // hide letters too.
+        for (const piece of part.text.split(/(\s+)/)) {
+          if (!piece) continue;
+          if (/^\s+$/.test(piece)) {
+            const sp = document.createElement("span");
+            sp.className = "fx-sp";
+            sp.textContent = piece;
+            frag.append(sp);
+          } else {
+            frag.append(piece);
+          }
+        }
+      } else {
+        frag.append(part.text);
+      }
+    }
+    return frag;
   }
 
   #fontFamilyFor(pair) {
@@ -3079,20 +3245,15 @@ export class TypographyEngine {
           });
           this.#wordStart.set(span, entry.wordStart);
           if (entry.join) this.#joinCtx.set(span, entry.join);
-          const frag = document.createDocumentFragment();
-          for (const part of parts) {
-            if (part.bold) {
-              const b = document.createElement("b");
-              b.className = "fx-b";
-              b.textContent = part.text;
-              frag.append(b);
-            } else {
-              frag.append(part.text);
-            }
-          }
-          span.replaceChildren(frag);
           const origFamily = span.style.fontFamily;
           const family = this.#fontFamilyFor(pair);
+          // Decided from the face this span will ACTUALLY render in, which is
+          // the incoming family only until the swap below replaces it.
+          const frag = this.#emphasisFragment(
+            parts,
+            this.#spacePaintsInk(family || origFamily),
+          );
+          span.replaceChildren(frag);
           if (family && family !== origFamily) {
             span.style.fontFamily = family;
             // A bundled face REPLACES the embedded one — carry the original

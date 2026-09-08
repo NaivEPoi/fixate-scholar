@@ -10,8 +10,8 @@
 // can always be overridden: a CLI argument the script passes in, or the
 // FX_EDGE / FX_CHROME / FX_BROWSER environment variables.
 
-import { existsSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,6 +59,89 @@ const CANDIDATES = {
     "/usr/bin/chromium",
   ],
 };
+
+/**
+ * Chromium builds that still load an UNPACKED extension from the command line.
+ *
+ * Branded Google Chrome no longer does. It refuses the switch outright —
+ * `--load-extension is not allowed in Google Chrome, ignoring`
+ * (chrome/browser/extensions/extension_service.cc) — and the extension is
+ * simply never installed: `chrome-extension://<id>/manifest.json` comes back
+ * ERR_BLOCKED_BY_CLIENT and no service-worker target ever appears. Measured on
+ * Chrome 152; neither `--enable-unsafe-extension-debugging` (with or without
+ * `--remote-debugging-pipe`) nor
+ * `--disable-features=DisableLoadExtensionCommandLineSwitch` brings it back.
+ *
+ * So anything that needs the extension in the browser must run on an unbranded
+ * Chromium (Chrome for Testing, Chromium) or on Edge — which is what the rest
+ * of the suite already uses. Chrome for Testing is preferred when present
+ * because it is the closest thing to Chrome itself.
+ */
+function extensionCandidates() {
+  const cft = [];
+  // Chrome for Testing, as @puppeteer/browsers installs it.
+  const cache = join(homedir(), ".cache", "puppeteer", "chrome");
+  if (existsSync(cache)) {
+    for (const dir of readdirSync(cache)) {
+      cft.push(
+        join(cache, dir, "chrome-win64", "chrome.exe"),
+        join(cache, dir, "chrome-linux64", "chrome"),
+        join(cache, dir, "chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+        join(cache, dir, "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+      );
+    }
+  }
+  return [
+    ...cft,
+    "C:/Program Files/Chromium/Application/chrome.exe",
+    join(homedir(), "AppData/Local/Chromium/Application/chrome.exe"),
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    ...CANDIDATES.edge,
+  ];
+}
+
+/**
+ * Resolve a browser that can actually run the unpacked extension.
+ *
+ * Same override semantics as `browserPath`: an explicit path — CLI argument or
+ * FX_BROWSER / FX_CHROME / FX_EDGE — always wins, so asking for a specific
+ * binary (including branded Chrome, to watch it refuse) still works. Otherwise
+ * the first installed entry from `extensionCandidates()` is used; branded
+ * Chrome is never chosen on its own, because with it the run cannot succeed.
+ */
+export function extensionBrowserPath(override) {
+  const explicit =
+    override || process.env.FX_BROWSER || process.env.FX_CHROME || process.env.FX_EDGE;
+  if (explicit) return explicit;
+  const candidates = extensionCandidates();
+  return candidates.find((p) => existsSync(p)) ?? browserPath("edge");
+}
+
+/**
+ * Read a browser's own log and report, in one line, that it refused to load the
+ * extension — or null if it never said so.
+ *
+ * Worth the few lines: without it the symptom is a harness timing out on "no
+ * service-worker target", which reads as a broken extension or a slow machine
+ * and sent this project looking in the wrong place. The browser says exactly
+ * what happened; it just says it on stderr, which needs `--enable-logging=stderr`
+ * and a piped stdio to see.
+ */
+export function extensionLoadRefusal(log) {
+  // Both switches are refused, and only ONE of the two warnings is printed:
+  // with both on the command line Chrome complains about
+  // --disable-extensions-except and never gets as far as --load-extension. So
+  // match either, or the message would appear only in the variant nobody runs.
+  const REFUSED = /--(load-extension|disable-extensions-except) is not allowed/;
+  const line = String(log).split(/\r?\n/).find((l) => REFUSED.test(l));
+  if (!line) return null;
+  return (
+    "this browser refuses command-line extension loading: " +
+    line.slice(line.indexOf("--")).trim() +
+    " — run it on Edge, Chromium, or Chrome for Testing (see extensionBrowserPath)"
+  );
+}
 
 /**
  * Resolve a browser executable.

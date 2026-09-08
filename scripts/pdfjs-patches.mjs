@@ -87,6 +87,21 @@ export const PATCHES = [
       }`,
     marker: "fixate-scholar-patch-5",
   },
+  {
+    // Re-encode ?file= BEFORE viewer.mjs reads it. The DNR redirect that brings
+    // us here cannot percent-encode the URL it substitutes, and PDF.js parses
+    // the query with URLSearchParams — so a PDF link carrying more than one
+    // query parameter loses everything from the first `&`. This tag must sit
+    // AHEAD of viewer.mjs: module scripts run in document order, and PDF.js
+    // calls run() during its own evaluation (readyState is already
+    // "interactive" by then), so overlay.mjs — which patch 2 appends after it —
+    // can never win that race. See extension/viewer/file-param.mjs.
+    file: "web/viewer.html",
+    anchor: `  <script src="viewer.mjs" type="module"></script>`,
+    replacement: `  <script src="../../../viewer/file-param.mjs" type="module"></script><!-- fixate-scholar-patch-6 -->
+  <script src="viewer.mjs" type="module"></script>`,
+    marker: "fixate-scholar-patch-6",
+  },
 ];
 
 /** Apply one patch in `vendorDir`. Idempotent; throws if the anchor is gone. */
