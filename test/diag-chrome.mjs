@@ -1,6 +1,8 @@
-// Chrome dev/diagnostic harness. Chrome stable >=137 gates --load-extension
-// behind a feature flag, so we re-enable it with
-// --disable-features=DisableLoadExtensionCommandLineSwitch. Captures, on a PDF:
+// Dev/diagnostic harness. Runs on whatever Chromium build can still load an
+// unpacked extension (Chrome for Testing / Chromium / Edge) — branded Google
+// Chrome refuses --load-extension outright and no flag brings it back, see
+// extensionBrowserPath() in lib/env.mjs. `--edge` still forces Edge
+// explicitly. Captures, on a PDF:
 //   - CSP violations WITH SOURCE (securitypolicyviolation: directive, sample,
 //     sourceFile:line) — pinpoints the blocked inline style.
 //   - service-worker console errors / exceptions (the DNR duplicate-id error).
@@ -15,7 +17,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath } from "./lib/env.mjs";
+import { browserPath, extensionBrowserPath } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe"));
 const FILTER = POS.find((a) => !/^\d+$/.test(a)) ?? "NeurIPS";
@@ -31,9 +33,7 @@ const PAPERS = {
   "NeurIPS": "https://arxiv.org/pdf/1706.03762",
 };
 const USE_EDGE = process.argv.slice(2).includes("--edge");
-const CHROME = USE_EDGE
-  ? browserPath("edge")
-  : browserPath("chrome");
+const CHROME = USE_EDGE ? browserPath("edge") : extensionBrowserPath();
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });
 const EXT = join(root, "extension");
@@ -45,7 +45,8 @@ const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`
 const browser = spawn(CHROME, [
   `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync",
-  ...(USE_EDGE ? [] : ["--disable-features=DisableLoadExtensionCommandLineSwitch"]),
+  // (no --disable-features here: DisableLoadExtensionCommandLineSwitch does not
+  //  re-enable --load-extension in branded Chrome — measured on Chrome 152.)
   ...(DSF ? [`--force-device-scale-factor=${DSF}`, "--high-dpi-support=1"] : []),
   "--window-size=1400,1800",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,

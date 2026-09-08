@@ -111,7 +111,7 @@ try {
     const found = await ev(`(() => {
       const pv = window.PDFViewerApplication.pdfViewer.getPageView(${PAGE - 1});
       const div = pv.textLayer && pv.textLayer.div;
-      const hit = div && [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.includes(${JSON.stringify(FIND)}));
+      const hit = div && [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)") && s.textContent.includes(${JSON.stringify(FIND)}));
       if (!hit) return false;
       hit.scrollIntoView({ block: "center" });
       return true;
@@ -127,7 +127,7 @@ try {
     const find = ${JSON.stringify(FIND ?? null)};
     if (find) {
       const div = pv.textLayer && pv.textLayer.div;
-      const hit = [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c)") && s.textContent.includes(find));
+      const hit = [...div.querySelectorAll("span")].find((s) => !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)") && s.textContent.includes(find));
       if (!hit) return { error: "text not found post-scroll" };
       const r = hit.getBoundingClientRect();
       const pad = ${PAD};
@@ -153,6 +153,26 @@ try {
   })()`);
   const shotOn = await send("Page.captureScreenshot", { format: "png", clip });
   writeFileSync(join(root, "test", "out", `region-${OUTNAME}-p${PAGE}-fxon.png`), Buffer.from(shotOn.data, "base64"));
+  // The words the image MUST contain, taken from the text layer while
+  // reading mode is on. The gate asks for this alongside the picture: an eye
+  // comparing two renderings can say "that word looks wrong", but only the
+  // expected string can settle whether a word is missing, doubled, or simply
+  // hyphenated across the band edge.
+  const bandText = await ev(`(() => {
+    const pv = window.PDFViewerApplication.pdfViewer.getPageView(${PAGE - 1});
+    const canvas = pv.canvas || pv.div.querySelector("canvas");
+    const cr = canvas.getBoundingClientRect();
+    const syb = canvas.height / cr.height;
+    const out = [];
+    for (const s of pv.textLayer.div.querySelectorAll("span")) {
+      if (s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
+      const r = s.getBoundingClientRect();
+      if ((r.bottom - cr.top) * syb < ${band.y0} || (r.top - cr.top) * syb > ${band.y1}) continue;
+      if (s.textContent.trim()) out.push(s.textContent);
+    }
+    return out.join(" | ");
+  })()`).catch(() => "(unavailable)");
+  console.log(`band text: ${bandText}`);
   await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:false},r))`);
   // WAIT for the restore to be observable, do not just sleep. Restoring is
   // idle-chunked, and at a high zoom on a dense page 2.5s was not enough: the

@@ -71,9 +71,9 @@ this be processed?" — review everything against them.
 
 ```bash
 cd /c/misc/Claude_Workspace/fixate-scholar
-npm test                 # naming guard + vendored-PDF.js patch check + 99 unit tests
-                         # (segmenter/parser/extractor/copytext/scholar/fontclass).
-                         # MUST be 99/99.
+npm test                 # naming guard + vendored-PDF.js patch check + 143 unit tests
+                         # (segmenter/parser/extractor/copytext/fileparam/ligature/
+                         # scholar/fontclass). MUST be 143/143.
 node test/papers.mjs     # 8-paper corpus smoke test. MUST be 8/8 PASS, all checks true.
 ```
 
@@ -110,8 +110,8 @@ never received all pass it.
 
 | Command | What it verifies | Pass criteria |
 |---|---|---|
-| `npm test` | naming guard (trademarked 2-word brand absent) + vendored-PDF.js patch check + unit tests | `Naming guard passed`, `patch check passed (5/5)`, 99/99. It also NOTES a missing `extension/vendor/words` — not a failure (the reader works), but the copy reflow's hyphen repair is running on the shape rules alone |
-| `node scripts/check-vendor.mjs [--fix]` | every source edit in `scripts/pdfjs-patches.mjs` is present in `extension/vendor/pdfjs`. `extension/vendor/` is git-ignored, so a tree can arrive with only SOME patches applied and every other check stays green — that is how patch 5 went missing and drag-selection regressed to "I can only select the bolded part of a word" (R24-5). `--fix` re-applies the missing ones in place, no download | `patch check passed (5/5)`; exit 1 naming the missing markers |
+| `npm test` | naming guard (trademarked 2-word brand absent) + vendored-PDF.js patch check + unit tests | `Naming guard passed`, `patch check passed (6/6)`, 143/143. It also NOTES a missing `extension/vendor/words` — not a failure (the reader works), but the copy reflow's hyphen repair is running on the shape rules alone |
+| `node scripts/check-vendor.mjs [--fix]` | every source edit in `scripts/pdfjs-patches.mjs` is present in `extension/vendor/pdfjs`. `extension/vendor/` is git-ignored, so a tree can arrive with only SOME patches applied and every other check stays green — that is how patch 5 went missing and drag-selection regressed to "I can only select the bolded part of a word" (R24-5). `--fix` re-applies the missing ones in place, no download | `patch check passed (6/6)`; exit 1 naming the missing markers |
 | `node test/papers.mjs` | full corpus classification + color + links | 8/8 PASS |
 | `node test/verify-links.mjs` | hyperref borders suppressed in fx-on, links still clickable, masks track glyphs | `ALL LINK CHECKS PASSED` |
 | `node test/diagnose.mjs <paper>` | rendering fidelity: true whiteout, mask peek, font fallback, skipped paragraphs, citation alignment, selectability | whiteout 0; peek low; fontBad 0; selBad 0 |

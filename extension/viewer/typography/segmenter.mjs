@@ -14,9 +14,64 @@ const VOWELS = /[aeiouyàâäéèêëîïôöùûüAEIOUY]/;
 // "Mart" + "´" + "ın". These are the accent glyphs, spacing and combining.
 const ACCENTS = "\u00a8\u00b4\u0060\u00af\u00b8\u02c6\u02c7\u02d8\u02d9\u02da\u02db\u02dc\u02dd\u0300-\u036f";
 const ACCENT_ONLY = new RegExp(`^[${ACCENTS}]+$`);
-// A plain Latin word, accent glyphs included. It must still carry a real
-// letter, so a stray accent run on its own is never emphasized.
-const PLAIN_WORD = new RegExp(`^[A-Za-zÀ-\u024f'\u2019\\-${ACCENTS}]+$`);
+// Typographic ligatures: ONE character in the text layer, two or three letters
+// on the page. pdfTeX and friends emit these codepoints for the f-ligatures, so
+// "efficient" can arrive as "eﬃcient" - 7 characters for 9 letters.
+//
+// They live in Alphabetic Presentation Forms, outside the Latin range below, so
+// until R25 every word carrying one failed PLAIN_WORD and was left with NO
+// emphasis at all: measured at 62 of 63 such words on one public paper, against
+// 2259/2262 for words without one. Whether a document is affected is purely a
+// matter of how its producer encoded the ligature, which is why this was
+// invisible on the arXiv/USENIX papers and plain on the Computer Modern one.
+const LIGATURES = {
+  "\ufb00": "ff",
+  "\ufb01": "fi",
+  "\ufb02": "fl",
+  "\ufb03": "ffi",
+  "\ufb04": "ffl",
+  "\ufb05": "st",
+  "\ufb06": "st",
+};
+const LIGATURE_RANGE = "\ufb00-\ufb06";
+const expandLigatures = (word) =>
+  word.replace(new RegExp(`[${LIGATURE_RANGE}]`, "g"), (c) => LIGATURES[c]);
+
+/**
+ * Convert a prefix length measured in LETTERS into a count of CHARACTERS of
+ * `word` - the two differ exactly when a ligature is involved.
+ *
+ * A ligature that straddles the boundary is taken whole: it is a single glyph,
+ * so there is no way to emphasize half of it, and including it keeps the prefix
+ * at least as long as asked rather than silently shorter.
+ */
+function charsForLetters(word, letters) {
+  let chars = 0;
+  let seen = 0;
+  for (const ch of word) {
+    if (seen >= letters) break;
+    const width = LIGATURES[ch]?.length ?? 1;
+    // A ligature straddling the target: take it only if that lands NEARER the
+    // asked-for length than stopping short does. Always taking it emphasized
+    // four letters of "oﬃce" where "office" gets two.
+    if (
+      seen + width > letters &&
+      chars > 0 &&
+      seen + width - letters > letters - seen
+    ) {
+      break;
+    }
+    seen += width;
+    chars++;
+  }
+  return Math.max(1, chars);
+}
+
+// A plain Latin word, accent glyphs and ligatures included. It must still
+// carry a real letter, so a stray accent run on its own is never emphasized.
+const PLAIN_WORD = new RegExp(
+  `^[A-Za-zÀ-\u024f'\u2019\\-${LIGATURE_RANGE}${ACCENTS}]+$`,
+);
 
 // Spans dominated by digits and operators (equations, axis labels) are left
 // alone — bolding fragments of math reads as noise. Ordinary prose containing
@@ -201,7 +256,20 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
       continue;
     }
     const whole = segIndex === lastWord ? seg.text + tailJoin : seg.text;
-    let n = Math.min(emphasisLength(whole, opts), seg.text.length);
+    // The prefix is a fraction of the word as READ, so it is measured on the
+    // letters, not the characters: a ligature is one character standing for two
+    // or three, and sizing against the raw string would short the prefix on
+    // every word containing one. Words without a ligature take the identical
+    // path they always did - expandLigatures is a no-op on them, so no existing
+    // count moves.
+    const letters = expandLigatures(whole);
+    let n =
+      letters === whole
+        ? Math.min(emphasisLength(whole, opts), seg.text.length)
+        : Math.min(
+            charsForLetters(whole, emphasisLength(letters, opts)),
+            seg.text.length,
+          );
     // Never end the prefix on an accent glyph: the accent paints over the
     // NEXT letter, which is not bolded, so a bold accent sits on a light stem.
     while (n > 1 && ACCENT_ONLY.test(seg.text[n - 1])) n--;

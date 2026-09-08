@@ -1,13 +1,15 @@
-// Inspect what the viewer page context actually is in headless Chrome.
+// Inspect what the viewer page context actually is in a headless Chromium.
+// Runs on a build that can load an unpacked extension (branded Chrome cannot
+// — see extensionBrowserPath in lib/env.mjs).
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath } from "./lib/env.mjs";
+import { extensionBrowserPath } from "./lib/env.mjs";
 
-const CHROME = browserPath("chrome");
+const CHROME = extensionBrowserPath();
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
 const PORT = 9600 + (process.pid % 90);
@@ -36,7 +38,7 @@ try {
   let version = null;
   for (let i = 0; i < 50 && !version; i++) { try { version = await http("/json/version"); } catch { await sleep(250); } }
   let extId = null;
-  for (let i = 0; i < 60 && !extId; i++) { const t = await http("/json/list"); const sw = t.find((x) => x.type === "service_worker" && x.url.includes("chrome-extension://")); if (sw) extId = new URL(sw.url).hostname; else await sleep(300); }
+  for (let i = 0; i < 60 && !extId; i++) { const t = await http("/json/list"); const sw = t.find((x) => x.type === "service_worker" && x.url.includes("background/service-worker.mjs")); if (sw) extId = new URL(sw.url).hostname; else await sleep(300); }
   console.log(`Browser: ${version.Browser} headless=${HEADLESS} ext=${extId}`);
   // Navigate to the PDF URL itself; the extension's DNR rule redirects it into
   // the viewer (Chrome blocks direct top-level nav to a web_accessible_resource).

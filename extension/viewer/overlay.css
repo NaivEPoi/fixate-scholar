@@ -71,6 +71,31 @@
   color: var(--fx-text-color) !important;
 }
 
+/* Whitespace inside a span whose embedded face maps U+0020 to its .notdef
+   glyph — a filled box. The engine probes the face (see #spacePaintsInk) and
+   only wraps spaces when it actually paints one, so this rule normally matches
+   nothing. Painting it transparent, rather than removing or narrowing it, is
+   deliberate: the glyph keeps its exact advance width, so every measurement,
+   mask and width correction downstream is unaffected, and the character stays
+   in textContent so selection and copy still yield real spaces.
+
+   ::selection must repeat it — Chrome paints selected text from the highlight
+   style, and a `color` it does not find there falls back to the initial value,
+   which would make every hidden box reappear the moment a drag covered it. */
+.textLayer span.fx-sp {
+  /* PDF.js makes every .textLayer span position:absolute and block — exactly
+     the trap the citation wraps above document. Left as it comes, each hidden
+     space contributed NO inline advance and the whole paragraph rendered with
+     its words jammed together: the tofu was gone and the gaps with it. */
+  position: static !important;
+  display: inline;
+}
+
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-sp,
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-sp::selection {
+  color: transparent;
+}
+
 /* EMPHASIS. A hairline fake bold, painted with text-shadow rather than
    -webkit-text-stroke. DON'T switch it back to text-stroke: Chrome drops
    text-stroke while painting SELECTED text (the ::selection highlight style

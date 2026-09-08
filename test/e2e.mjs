@@ -11,13 +11,17 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath } from "./lib/env.mjs";
+import { extensionBrowserPath, extensionLoadRefusal } from "./lib/env.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = join(root, "test", "out");
 mkdirSync(outDir, { recursive: true });
 
-const CHROME = browserPath("chrome", process.argv[2]);
+// Not necessarily Chrome: branded Google Chrome refuses --load-extension
+// outright, so this run cannot happen in it. extensionBrowserPath() picks a
+// build that can (Chrome for Testing / Chromium / Edge) and still honours an
+// explicit path argument or FX_BROWSER.
+const BROWSER = extensionBrowserPath(process.argv[2]);
 const EXT = join(root, "extension");
 const PORT = 9333;
 const PDF_URL = "https://arxiv.org/pdf/1706.03762";
@@ -70,8 +74,14 @@ class CDP {
   }
 }
 
-const chrome = spawn(CHROME, [
+// stderr is piped, not ignored, for one reason: when a browser refuses to load
+// the extension it SAYS so there, and without it the only symptom is this
+// harness timing out on "no service-worker target" — which reads as a broken
+// extension rather than a browser policy.
+let browserLog = "";
+const chrome = spawn(BROWSER, [
   `--remote-debugging-port=${PORT}`,
+  "--enable-logging=stderr",
   "--headless=new",
   "--no-first-run",
   "--no-default-browser-check",
@@ -81,7 +91,9 @@ const chrome = spawn(CHROME, [
   `--load-extension=${EXT}`,
   `--disable-extensions-except=${EXT}`,
   "about:blank",
-], { stdio: "ignore" });
+], { stdio: ["ignore", "pipe", "pipe"] });
+chrome.stdout.on("data", (d) => (browserLog += d));
+chrome.stderr.on("data", (d) => (browserLog += d));
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -100,7 +112,7 @@ try {
     }
   }
   if (!version) throw new Error("Chrome debugger endpoint never came up");
-  console.log(`Chrome: ${version.Browser}`);
+  console.log(`Browser: ${version.Browser}  (${BROWSER})`);
 
   // Find the extension id via its service worker target.
   let extId = null;
@@ -112,7 +124,11 @@ try {
     if (sw) extId = new URL(sw.url).hostname;
     else await sleep(250);
   }
-  check("extension service worker running", !!extId, extId ?? "not found");
+  check(
+    "extension service worker running",
+    !!extId,
+    extId ?? extensionLoadRefusal(browserLog) ?? "not found",
+  );
   if (!extId) throw new Error("extension did not load");
 
   // --- Test 1: viewer renders a real PDF with fixation typography ---

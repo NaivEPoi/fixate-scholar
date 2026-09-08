@@ -7,10 +7,11 @@ screenshot before listing. Rules: `TESTING.md` Section 3.
 Status: **review complete; F1-F5 all FIXED & validated. Round 3 (F6/F7) below.**
 Latest: **Round 27 (R27) — copy a paragraph, get a paragraph: the page's line
 breaks are rejoined and the hyphens they were broken with are repaired.**
-Before it: **Round 26 (R26) — a two-column paper whose citations were never
+Before it: **Round 26 (R26)** — a two-column paper whose citations were never
 linked at all: a small-caps heading lost to the next column's baseline, a float
 caption truncating the bibliography, and a fallback so a reference section that
-exists is always worth processing.**
+exists is always worth processing. **Round 25 (R25)** — PDFs from the internet,
+and the browser that cannot load us.
 
 ### Round 3 (2026-07-09) — divider-line masking + "upper-left shift" (user report)
 Built `test/diag-dividers.mjs`: per page, finds long thin dark runs on the
@@ -1763,6 +1764,412 @@ a form feed). This warning was already here for Set-Content, and it happened aga
 anyway. Use an editor that writes UTF-8, and check with
 `node -e "..."` for control characters before committing.
 
+## Round 25 (R25) - PDFs from the internet, and the browser that cannot load us
+
+User report, with a screenshot: the toolbar reads "0 of 0" and the viewer shows
+"FixateScholar couldn't load this document. Open in the browser's native
+viewer." The document was reached by clicking a link on the web.
+
+### R25-1 - the redirect hands PDF.js a URL it re-parses into a different URL
+
+The service worker redirects a PDF navigation with a declarativeNetRequest rule
+whose action is `redirect: { regexSubstitution: "<viewer>?file=\1" }`. DNR has
+no way to percent-encode `\1`, so the target URL lands in the viewer's query
+string exactly as it appeared in the address bar - and `web/viewer.mjs` parses
+that query with `URLSearchParams`, which reads three characters as its own
+syntax:
+
+| in the URL | what URLSearchParams does | what gets fetched |
+| --- | --- | --- |
+| `&` | starts the next parameter | `…/get.pdf?a=1&b=2` -> `…/get.pdf?a=1` |
+| `+` | decodes to a space | `…/a+b.pdf` -> `…/a b.pdf` |
+| `%xx` | decodes one level | `…/a%26b.pdf` -> `…/a&b.pdf` |
+
+The first is the everyday case: **any PDF link with more than one query
+parameter**. Presigned S3/CloudFront links, download endpoints
+(`?download=true&type=pdf`), library-proxy URLs. The server is asked for a URL
+the user never clicked, answers 400/404/403, and the viewer reports a document
+it "couldn't load" - while the same link opens fine in the browser's own viewer,
+which is what makes it read as "can't open PDFs from the internet".
+
+Measured, not assumed. A local server that serves the PDF only for the exact
+query `?a=1&b=2` and 400s otherwise; navigate to it through the extension:
+
+```
+FAIL  query with & (strict)    pages=0 banner=true
+      rawSearch : ?file=http://127.0.0.1:8788/q.pdf%3Fa%3D1%26b%3D2
+      app.url   : http://127.0.0.1:8788/q.pdf?a=1
+      srv GET /q.pdf?a=1
+```
+
+`app.url` is the truncation, and the server log is the proof it left the
+browser that way.
+
+**Why `normalizeFileParam()` in overlay.mjs did not already prevent this.** It
+existed, with a comment naming this exact hazard - and it has never once run in
+time. `viewer.mjs` is a module script, so it evaluates only after the parser has
+finished, when `document.readyState` is already `"interactive"`; PDF.js
+therefore calls `run()` (which reads `location.search`) *during its own
+evaluation*, not on `DOMContentLoaded`. Module scripts run in document order and
+patch 2 appends `overlay.mjs` after `viewer.mjs`, so the rewrite always landed
+after PDF.js had read - and truncated - the URL. Traced:
+
+```
+TRACE docstart          search= ?file=http://127.0.0.1:8790/q.pdf?a=1&b=2
+TRACE webviewerloaded   search= ?file=http://127.0.0.1:8790/q.pdf?a=1&b=2
+TRACE app.open          url= http://127.0.0.1:8790/q.pdf?a=1      <- already lost
+TRACE replaceState      -> …?file=http%3A%2F%2F…%3Fa%3D1%26b%3D2  <- too late
+```
+
+**Fix.** `extension/viewer/file-param.mjs`, loaded by a new vendored patch 6 in
+the one position that works - ahead of `viewer.mjs`:
+
+```html
+<script src="../../../viewer/file-param.mjs" type="module"></script><!-- patch 6 -->
+<script src="viewer.mjs" type="module"></script>
+```
+
+The rewrite is deliberately *minimal*: escape only `%`, `&` and `+`, the three
+characters `URLSearchParams` treats as syntax. The obvious
+decode-then-`encodeURIComponent` round trip also fixes the common cases, but it
+destroys escapes that belong to the address - `…/a%26b.pdf`, an object key whose
+name really does contain `&`, decodes to a query separator and can never be
+put back. An already-encoded parameter (the context-menu and `file://` paths
+encode at the source) is detected by
+`encodeURIComponent(decodeURIComponent(raw)) === raw` and left alone, so the
+rewrite is idempotent.
+
+The fragment now stays on `location` instead of being folded into the parameter:
+it is the PDF open parameter (`#page=7`) that PDF.js reads from
+`document.location.hash`. `currentFileUrl()` - shared by the "native" button and
+the error banner, which each had their own copy of the decode - returns the URL
+*without* it, because the service worker matches that string against a DNR
+`urlFilter` and a webNavigation URL, and neither ever carries a fragment.
+
+### Not a defect: the 403s
+
+Two publisher PDFs in the spot-check (a Cloudflare-fronted preprint server and a
+paper repository) failed with `fetch 403` on the viewer's re-fetch, which looks
+exactly like a hotlink block on our request. It is not: with the extension
+removed entirely, a plain navigation to the same URLs from the same automation
+profile gets the same 403 from the same Cloudflare edge. It is the headless
+profile being blocked, not the viewer's fetch. Recorded here because it is the
+sort of thing that reads as a product bug on a screenshot.
+
+A real hotlink guard - a server that requires `Sec-Fetch-Dest: document` - does
+still fail, and inherently so: the viewer re-fetches the document as a
+subresource, and `Sec-Fetch-*` cannot be forged from the page or by DNR. That
+case is what the error banner's "Open in the browser's native viewer" exists
+for, and `test/native-button.mjs` confirms the escape hatch still lands on the
+original URL and stays there.
+
+### Verification
+- `npm test`: naming guard, vendored patch check now **6/6**, 103 unit tests
+  (was 81). `test/unit/fileparam.test.mjs` asserts the round-trip property the
+  way PDF.js actually reads it (`new URLSearchParams(search).get("file")`) over
+  nine URL shapes, plus idempotency, the fragment, `blob:`, and a stray `%`.
+- Browser matrix, real navigations through the DNR redirect, before -> after:
+  `query with & (strict)` FAIL -> PASS, `plus in path` PASS, `escaped & in
+  filename` PASS; `plain .pdf`, `fragment`, no-extension + `Content-Type`,
+  `application/octet-stream`, `Content-Disposition: attachment`, cookie-gated,
+  single-use URL and `302` redirect all still PASS.
+- `#page=5` still opens page 5 - both alone and combined with `?a=1&b=2`, which
+  before this change could not open at all.
+- `papers.mjs`: ALL 8 PAPERS PASSED, every bolded/masks/refs/cites count
+  identical to the R24 baseline (LaTeX article CM still 1291 bolded / 64 refs).
+- `test/e2e.mjs`: ALL CHECKS PASSED under Edge. Under Chrome 152 it failed at
+  "extension service worker running - not found" **on a clean tree as well**
+  (verified by stashing this change), so nothing here caused it - that is
+  R25-2 below, fixed in the same pass.
+- `test/console.mjs` on the IEEE stamped paper, whose corpus URL carries a
+  `%20`: `PROBLEMS=0`.
+- Not run: the private corpus and the full release gate. This change is not
+  tagged or version-bumped.
+
+### R25-2 - Google Chrome will not load the unpacked extension, and the harness blamed the extension
+
+`test/e2e.mjs` failed at `FAIL extension service worker running - not found`,
+which reads as a broken extension or a slow machine. It is neither. Branded
+Google Chrome refuses the switch:
+
+```
+WARNING:chrome/browser/extensions/extension_service.cc:423]
+  --load-extension is not allowed in Google Chrome, ignoring.
+WARNING:chrome/browser/extensions/extension_service.cc:445]
+  --disable-extensions-except is not allowed in Google Chrome, ignoring.
+```
+
+The extension is then simply not installed - `chrome-extension://<id>/manifest.json`
+comes back ERR_BLOCKED_BY_CLIENT - so no service-worker target ever appears and
+the harness waits out its timeout. Measured on Chrome 152.0.7977.76; Edge
+152.0.4191.66, the same Chromium, installs it from the same command line.
+
+Nothing on the command line brings it back. All three proposals were run
+(`test/chrome-load-check.mjs`, which exists for exactly this question):
+`--disable-features=DisableLoadExtensionCommandLineSwitch`,
+`--enable-unsafe-extension-debugging`, and that flag together with
+`--remote-debugging-pipe`. Headless and headful. Our extension loaded in none of
+them. The same five variants on Edge: loaded in all but the pipe one, where the
+HTTP debugging endpoint is off by design and the harness cannot look.
+
+**Fix.** `extensionBrowserPath()` in `test/lib/env.mjs` - the browser to use
+when a run needs the unpacked extension. It prefers Chrome for Testing (the
+puppeteer cache), then Chromium, then Edge, and never picks branded Chrome on
+its own, because with it the run cannot succeed. Explicit paths and
+FX_BROWSER / FX_CHROME / FX_EDGE still win, so anything can still be pointed at
+a specific binary. The five harnesses that defaulted to `browserPath("chrome")`
+now use it: `e2e`, `chrome-page-check`, `live-chrome`, `diag-chrome` (whose
+header claimed the feature flag re-enabled loading - it does not), and
+`chrome-load-check`, which keeps branded Chrome as its default because
+interrogating it is its job.
+
+And when a browser does refuse, the harness now says so: `extensionLoadRefusal()`
+reads the browser's own stderr - which is why `e2e` pipes it and passes
+`--enable-logging=stderr` - and turns the timeout into
+
+```
+FAIL  extension service worker running — this browser refuses command-line
+      extension loading: --disable-extensions-except is not allowed in Google
+      Chrome, ignoring. — run it on Edge, Chromium, or Chrome for Testing
+```
+
+It matches either warning on purpose: with both switches present Chrome
+complains about `--disable-extensions-except` and never reaches the
+`--load-extension` check, so matching only the obvious one would print nothing
+in the case everybody actually runs.
+
+**Two harness bugs found while confirming this.** `chrome-load-check` ended its
+wait as soon as ANY `chrome-extension://` target appeared - and every browser
+ships component extensions of its own, which show up within a second. It
+therefore reported "not loaded" for Edge, which does load it, a second later. It
+now waits for `background/service-worker.mjs` specifically and prints
+`OUR extension loaded: YES/no` rather than a target count that is never zero.
+`chrome-page-check` picked its extension id the same way and printed a component
+extension's. Both were finding the browser's furniture and calling it ours.
+
+### Verification (R25-2)
+- `test/e2e.mjs` with no arguments: **ALL CHECKS PASSED** (Edge 152).
+- `test/e2e.mjs "C:/Program Files/Google/Chrome/Application/chrome.exe"`: still
+  fails - it must - but now names the reason in the FAIL line.
+- `chrome-load-check`: 5/5 variants "no" on Chrome, 4/5 "YES" on Edge (the fifth
+  is the pipe variant, where there is no endpoint to ask). The check can tell the
+  two apart, which is what makes the Chrome result mean something.
+- `chrome-page-check` and `diag-chrome NeurIPS 3`: both run again, and
+  `diag-chrome` reports `Extension loaded: YES`, 1795 fx-b spans, DNR ids
+  [201,202,203], 0 SW errors, 0 CSP violations, 0 page console errors.
+- `live-chrome` is headful and interactive; syntax-checked only, not run.
+
+### The full release gate, run for R25 — and it does NOT pass
+
+Steps 1-3 and 5 pass. Step 4 does not: looking at 42 documents turned up three
+render defects, none of them caused by this round's change (each was A/B'd
+against the pre-change tree, or reproduced from the engine's own code, and
+`git diff` shows `extension/viewer/typography/` untouched by R25). They are
+recorded here as found, because the gate's rule is that a defect seen is a
+defect fixed before the version moves.
+
+**Method.** One matched fx-on/fx-off pair per document, page 5,
+`shot-region2 --find=" the " --zoom=2 --pad=150`, the R23 method - 14 public
+papers and all 28 private documents. Six of the 42 pairs came back BYTE-IDENTICAL
+(the page-5 band on those documents is a table, a figure or a form box, so
+nothing was emphasized and nothing was proven); they were re-captured on page 8
+and inspected there. That check is worth keeping: identical bytes cannot
+distinguish "correctly skipped" from "reading mode never engaged", and one of the
+two worst defects below was hiding on exactly such a document.
+
+**G1 - every inter-word space renders as a .notdef box.** On one private
+document, reading mode turns a whole body paragraph into words separated by tofu
+(the missing-glyph box) instead of spaces. The caption above it, which is not
+processed, is unaffected; fx-off is a normal paragraph. The overlay renders its
+text in the span's own embedded face, and in this document's body face the space
+character has no glyph - so every space our DOM text emits paints as .notdef,
+while the original canvas rendering never asked that font for a space at all.
+Nothing in the repo's oracles sees this: the document PASSES `diag-drag`, and
+`console.mjs` reports PROBLEMS=0 on all of its pages. It is glaringly obvious in
+a picture. A/B: the fx-on capture is byte-identical on the pre-change tree, so
+this predates R25.
+
+**G2 - a word containing a typographic ligature gets no emphasis at all.**
+`PLAIN_WORD` in `segmenter.mjs` is `^[A-Za-z<accents>'-]+$`, and the ligature
+codepoints (U+FB00-FB04: ff fi fl ffi ffl) live in Alphabetic Presentation Forms,
+outside that range. Any word carrying one is rejected as "not a plain Latin word"
+and left unemphasized. Reproduced with no browser at all:
+
+```
+"efficient"   => [effic]ient        "eﬃcient"     => eﬃcient
+"different"   => [dif]ferent        "diﬀerent"    => diﬀerent
+"workflow"    => [wor]kflow         "workﬂow"     => workﬂow
+```
+
+Quantified on the PUBLIC corpus, over the first six pages of the LaTeX/CM paper:
+63 rendered words carry a ligature glyph and exactly 1 of them is emphasized,
+against 2259/2262 for words without one. Three private documents showed the same
+class by eye. Whether a document is affected depends on how its producer encoded
+the ligature, which is why the two arXiv/USENIX papers measured 0 ligature words
+and looked perfect.
+
+**G3 - emphasis lands inside math.** TESTING.md is explicit - "Figure labels,
+axis labels, displayed equations" are skip classes, and "Green over a figure /
+table / caption / heading / equation / code -> BUG". On NeurIPS page 5 the
+display equation is processed: `Mul` in MultiHead, `Con` in Concat, `whe` in
+where and `Atten` in Attention all carry the prefix, while fx-off shows the
+equation in a uniform math face. Two private documents show the inline form of
+the same thing: a bold prefix on a math operator name inside `deg(φ)`, and on
+sans-serif procedure names inside an inline expression.
+
+**Also seen, needs an intent ruling rather than a fix.** The PDF's own link
+annotation borders (the dotted/green boxes hyperref draws around citations) are
+present in fx-off and gone in fx-on, on the LaTeX/CM paper and on 5GShield. No
+glyph moves and no word changes - our citation layer recolors the text instead -
+so it is not a render defect, but it IS a difference outside the
+emphasis-and-color envelope that step 4 is supposed to hold to.
+
+### Verification actually performed for R25
+- `npm test`: naming guard, vendored patch check 6/6, 103 unit tests, 0 failures.
+- Public corpus, all 14 papers, `diag-drag`: 14/14 PASS, selection 186-322 chars.
+- Private corpus, all 28, `diag-drag`: 28/28 PASS. One document selects 79 chars
+  where the rest sit at 171+; measured 79 on the pre-change tree too, so it is
+  that document's short drag line, not a regression.
+- Console gate, every page of every document: public 197/197 pages and private
+  447/447 pages, PROBLEMS=0, viewer page and service worker. One public paper
+  first failed with a 30s CDP timeout while two sweeps ran concurrently; re-run
+  alone it reports 25/25 pages PROBLEMS=0. The allowlist earned nothing new.
+- `papers.mjs`: ALL 8 PAPERS PASSED, every count identical to the R24 baseline.
+- Step 4: 48 inspections over 42 documents, listed above.
+- Clean-room patch application (`npm run fetch-pdfjs` from scratch) was NOT run
+  yet; `check-vendor` verifies all six markers against the current tree.
+
+**The version was therefore NOT bumped and no tag was pushed.** G1 in particular
+should not ship: it makes a real paper unreadable in the mode the extension
+exists to provide.
+
+### The four defects the gate found, fixed
+
+**G1 - a space that paints as a .notdef box.** Measured, not inferred: the
+document's embedded body face returns a filled box for U+0020 (486-1194 dark
+pixels at 48px, against 0 for the fallback), and U+00A0 inks too, so no fallback
+escape exists - the face claims coverage and the browser never moves on to the
+next family in the stack. The canvas rendering never asks the font for a space;
+our overlay does, once per gap.
+
+`#spacePaintsInk()` probes the face the span will actually render in, cached per
+family and invalidated in `refreshFonts` (a probe run before the face has loaded
+measures the fallback and would cache a false negative for the life of the
+document). When it inks, whitespace is wrapped in a `span.fx-sp`, which
+overlay.css paints transparent: the glyph keeps its exact advance, so every
+measurement, mask and width correction downstream is untouched, and the space
+stays in `textContent`, so selection and copy still yield real spaces.
+
+Two things went wrong on the way, both worth recording:
+
+- The first version left `.fx-sp` at PDF.js's `display: block`. Every hidden
+  space then contributed NO inline advance and the paragraph rendered with its
+  words jammed together - the boxes gone and the gaps with them. It is the same
+  trap the citation wraps already carry a comment about. Caught by eye, then
+  measured: 550px for the span against 710px for the same text with the wrappers
+  stripped.
+- The wrapper is a nested element inside a text span, and ELEVEN selectors across
+  EIGHT harnesses assumed the only nested spans were the citation wraps. Left
+  alone, those harnesses go blind on exactly the documents this fixes -
+  `shot-region2` could not even find a band to capture. All eleven now exclude
+  `.fx-sp`.
+
+`test/wrapcheck.mjs` is the regression guard, and it is why this is believable:
+it re-probes every processed span on every page, asserts that a face which inks a
+space has all of its whitespace wrapped, and re-measures each wrapped span
+against a clone with the wrappers stripped. On the affected document that is 1360
+spans over 15 pages, 3869 wrappers, unwrapped=0, maxWidthDelta=0px; across both
+corpora, 43 documents and ~41000 spans, no unwrapped whitespace and no stray
+wrapper anywhere.
+
+**G2 - a ligature word losing its emphasis.** `PLAIN_WORD` now admits
+U+FB00-FB06, and the prefix is measured on the LETTERS rather than the
+characters: a ligature is one character standing for two or three, so sizing
+against the raw string shorted every word containing one. A ligature straddling
+the target is taken only if that lands nearer the asked-for length than stopping
+short does - always taking it emphasized four letters of "office" where the
+plain spelling gets two. The public Computer Modern paper went from 1 of 63
+ligature words emphasized to 63 of 63, with words carrying no ligature unchanged
+at 2259/2262, and papers.mjs moved exactly one number: that paper's 1291 -> 1314
+bolded spans. Every other paper is identical to the R24 baseline.
+`test/unit/ligature.test.mjs` pins ten pairs - the ligature form must be
+emphasized, and its prefix must match the plain spelling's to within one letter.
+
+**G3 - emphasis inside a displayed equation.** The rule that should have caught
+these (`blk-figlabel`) is gated on fewer than two lowercase words, and TeX sets
+operator names and connectives as ordinary lowercase text INSIDE the equation -
+so the NeurIPS MultiHead/Concat/where/Attention display counted as prose. The new
+`isDisplayEquation` test uses the signal a lowercase count cannot see: a short
+block whose every row is inset from BOTH of the column's text edges, carrying a
+math face or a relation glyph. Body prose is never inset from both margins, a
+paragraph's last line only on the right, a heading on neither. Equation TAGS are
+excluded from the row measurement, or every numbered equation would look
+flush-right. Deliberately not caught: equations set flush-left (the fleqn class
+option), which present no centering signal at all.
+
+**G4 - a body paragraph skipped as CCS boilerplate.** Found on the 29th private
+document, which arrived mid-sweep (below). The CCS-concepts rule fired on "an
+arrow plus two semicolons", and that paper's prose contains a numeric arrow and
+two clause semicolons in one block - so two body paragraphs rendered with no
+emphasis at all. The arrow must now sit between LETTERS: prose uses one for a
+numeric change, while a real CCS line always joins terms. Verified both ways -
+the paragraphs are emphasized now, and the ACM paper's CCS block is still
+skipped.
+
+### Still open (recorded, not fixed)
+
+- **A text-face NAME inside an inline formula keeps its prefix.** Two private
+  papers: a bold prefix on the operator name in an inline `deg(...)` while the
+  `nrd(...)` beside it stays clean, and on sans-serif procedure names inside an
+  inline expression. Unlike G3 this is not a rule violation - TESTING.md's skip
+  list covers math/symbol/monospace/small-caps/bold faces, and an upright roman
+  or sans identifier inside a formula is none of them. Fixing it means deciding
+  what "a name in a formula" is, which is a policy change rather than a bug fix,
+  and the failing item could not be located from the DOM to validate a rule
+  against. Left for its own round.
+- **A run-in section heading emphasized on one private paper**, where the same
+  construct on another is correctly skipped. Pre-existing; the lead-run detector
+  does not recognize that paper's heading shape.
+- **A caption-vs-prose false positive in the AUDIT HARNESS**, not the product: it
+  counted a ten-character figure-internal annotation as an in-text reference. The
+  criterion now requires four lowercase words, the same prose threshold skipPara
+  uses two rules down. Measured identical on the pre-change tree.
+
+### The private corpus is 29 documents, not 28
+
+It grew during this session: a paper added at 03:26 sorts second, so every
+positional alias from rv02 on shifted by one, and the same document is rv18 in
+one log and rv19 in the next. That cost real time here - a diagnostic aimed at
+"rv18" measured a different paper and appeared to show the space fix failing.
+The aliases are positional by design, so this will recur: read the count in the
+sweep header ("N documents on 127.0.0.1:PORT as rv01..rvNN") before trusting a
+label across runs. CLAUDE.md still says 28.
+
+### Verification for the fixes
+
+- `npm test`: naming guard, vendored patch check 6/6, 125 unit tests (was 103;
+  new: ten ligature pairs plus a guard that words without one are untouched).
+- Clean-room vendoring: `npm run fetch-pdfjs` from scratch applies all six
+  patches to a pristine extract - what CI does on the tag.
+- `papers.mjs`: ALL 8 PASSED, every count identical to the R24 baseline except
+  the ligature paper's 1291 -> 1314.
+- Public corpus, all 14: `diag-drag` 14/14 (selection 186-322 chars), `audit`
+  14/14 with the four hard criteria 0, `console` 14/14 over every page,
+  `wrapcheck` 14/14.
+- Private corpus, all 29: `diag-drag` 29/29, `audit` 29/29 with the four hard
+  criteria 0, `console` 29/29 over 453/453 pages, `wrapcheck` 29/29.
+- Step 4 by eye, after the fixes: 42 documents as matched fx-on/fx-off pairs,
+  plus the 29th re-inspected after G4. Six documents whose page-5 band is a table
+  or a form box were re-captured on page 8 - a byte-identical pair proves
+  nothing, and the worst of these defects was hiding on one of them.
+- Two false alarms from that pass, both chased to the end rather than waved off:
+  a "ligature at word start is still skipped" report on a page whose text layer
+  holds no ligature codepoint at all (that word gets the ordinary two-of-four
+  letter prefix, exactly like its plain spelling), and the alias shift above.
+- G4 landed after the 42-document pass. It can only ever un-skip prose - a
+  taxonomy arrow is never digit-flanked - and papers.mjs plus both audit sweeps
+  are unchanged, so the one document it altered is the one re-inspected by eye.
+
 ## Round 26 (R26) - a two-column paper whose citations were never linked at all
 
 User: "no reference in this paper have been processed. for the unlinked
@@ -1858,9 +2265,10 @@ entries (`refCount=0`): `citeaudit` reports `noHit=4` before the change and
 `noHit=0, jumpCites=0` after, with all four citations honestly UNRESOLVED.
 
 ### Verification
-- `npm test`: 84 unit tests, 84 pass (was 81 - three new: two in a new
-  `test/unit/extractor.test.mjs` covering the row band in both directions, one in
-  `parser.test.mjs` for the interrupting float).
+- `npm test`: three new tests - two in a new `test/unit/extractor.test.mjs`
+  covering the row band in both directions, one in `parser.test.mjs` for the
+  interrupting float. (Measured 84/84 on this round's branch; 143/143 once R25's
+  suite merged in.)
 - `papers.mjs`: **ALL 8 PAPERS PASSED**, every count identical to the R24
   baseline (LaTeX article CM still 1291 bolded / 64 refs; IEEE journal 1997 / 68;
   ACM acmart full 2353 / 73).
@@ -2017,10 +2425,11 @@ reached from a text layer because of that same stopPropagation) is untouched.
 `enabled`, because the reflow is about the text, not the typography.
 
 ### Verification
-- `npm test`: 99 unit tests, 99 pass (15 new in `test/unit/copytext.test.mjs`:
-  the hyphen rules under each witness and none, the document outranking the word
-  list, an unvendored list staying silent, indent vs hanging indent, both sides
-  of a column break, running heads, ragged-right text).
+- `npm test`: 15 new in `test/unit/copytext.test.mjs` - the hyphen rules under
+  each witness and none, the document outranking the word list, an unvendored
+  list staying silent, indent vs hanging indent, both sides of a column break,
+  running heads, ragged-right text. (99/99 on this round's branch; 143/143
+  merged.)
 - New harness `test/copytext.mjs`. It selects a page's whole text layer and
   dispatches a synthetic `ClipboardEvent` carrying its own `DataTransfer`, so it
   reads back exactly what the handler wrote with no OS clipboard in the loop.
