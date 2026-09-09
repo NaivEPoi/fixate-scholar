@@ -137,16 +137,25 @@ const OFFENDERS = (page, boxes) => `(() => {
   const lr = div.getBoundingClientRect();
   const out = [];
   let done = 0;
+  const touched = [];
   for (const s of div.querySelectorAll("span[data-fx-done]")) {
     done++;
     const t = s.textContent.trim();
     if (!t) continue;
     const r = s.getBoundingClientRect();
     const [x, y] = vp.convertToPdfPoint(r.left - lr.left, r.bottom - lr.top);
-    if (boxes.some((b) => y >= b.yMin && y <= b.yMax && x >= b.x0 && x <= b.x1))
-      out.push({ t: t.slice(0, 46), x: Math.round(x), y: Math.round(y), why: s.dataset.fxWhy || null });
+    if (!boxes.some((b) => y >= b.yMin && y <= b.yMax && x >= b.x0 && x <= b.x1)) continue;
+    const rec = { t: t.slice(0, 46), x: Math.round(x), y: Math.round(y), why: s.dataset.fxWhy || null };
+    // EMPHASIZED, not merely processed. A span the engine walked but left
+    // without a single emphasis run renders identically to an untouched one, so
+    // counting it as an offender fails a document over something invisible —
+    // which is what one private paper did on every sweep, for a single ALL-CAPS
+    // caption span carrying zero runs. Report those separately: worth knowing
+    // the mask ran there, not worth failing a release over.
+    if (s.querySelector(".fx-b")) out.push(rec);
+    else touched.push(rec);
   }
-  return { rendered: true, done, offenders: out };
+  return { rendered: true, done, offenders: out, touched };
 })()`;
 
 try {
@@ -192,6 +201,7 @@ try {
       `boxes on ${ext.boxPages.length} page(s)`,
     );
     let total = 0;
+    let touchedTotal = 0;
     for (const page of pages) {
       const boxes = ext.boxes.filter((b) => b.page === page);
       await ev(`window.PDFViewerApplication.page = ${page}`);
@@ -205,15 +215,19 @@ try {
       await sleep(900);
       res = await ev(OFFENDERS(page, boxes));
       total += res.offenders.length;
-      console.log(`p${page}: processed=${res.done} inBibliography=${res.offenders.length}${res.offenders.length ? "  <<< EMPHASIZED REFERENCES" : ""}`);
+      touchedTotal += (res.touched?.length ?? 0);
+      console.log(`p${page}: processed=${res.done} emphasizedInBibliography=${res.offenders.length}`
+        + `${res.touched?.length ? ` processedNoEmphasis=${res.touched.length}` : ""}`
+        + `${res.offenders.length ? "  <<< EMPHASIZED REFERENCES" : ""}`);
       // The boxes a flagged span was judged against — a wrong box is the first
       // thing to rule out before believing a finding.
-      if (res.offenders.length) {
+      if (res.offenders.length || res.touched?.length) {
         for (const b of boxes) console.log(`   box: x${b.x0}-${b.x1} y${b.yMin}-${b.yMax} (${b.n} lines)`);
       }
       for (const o of res.offenders.slice(0, 8)) console.log(`   x${o.x} y${o.y}: "${o.t}"${o.why ? ` (${o.why})` : ""}`);
+      for (const o of (res.touched ?? []).slice(0, 4)) console.log(`   (no emphasis run) x${o.x} y${o.y}: "${o.t}"`);
     }
-    console.log(`\nTOTAL emphasized bibliography spans: ${total}`);
+    console.log(`\nTOTAL emphasized bibliography spans: ${total}` + `${touchedTotal ? ` (plus ${touchedTotal} processed but carrying no emphasis run — reported, not failed)` : ""}`);
     if (total > 0) process.exitCode = 1;
   }
 } catch (e) {

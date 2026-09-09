@@ -2378,6 +2378,49 @@ export class TypographyEngine {
       this.#dominantHeight(
         allPairs.filter((p) => !skipSet.has(p.div) && !inRefsBox(p.item)),
       );
+    // --- Running header/footer band, with a contiguity exemption. ---
+    //
+    // The 6% bands at the top and bottom of the page are where page numbers and
+    // running heads live. They are ALSO where the last line of body text lands
+    // on a paper with a tight bottom margin, and that line was being dropped in
+    // silence: on one document 12 of 20 pages lost the final line of EVERY
+    // column, with no skip reason recorded anywhere, because this cut runs
+    // before any classifier that would have recorded one.
+    //
+    // What separates the two is isolation, not position. A running head or
+    // footer sits alone, a full margin away from the text block; a final body
+    // line is one line pitch below its predecessor. So the band still cuts,
+    // unless the baseline chains back to a baseline in the body region within
+    // one pitch — grown iteratively so that two body lines inside the band are
+    // both admitted, while a footer block that only touches itself is not.
+    const bandY0 = pageH * 0.06;
+    const bandY1 = pageH * 0.94;
+    const inBand = (y) => y - vy0 < bandY0 || y - vy0 > bandY1;
+    const bodyBaselines = (() => {
+      const ys = new Set();
+      for (const { item } of allPairs) {
+        if (!item?.transform) continue;
+        const t = (item.str || "").trim();
+        // Letterless runs (bare page numbers) and single characters never carry
+        // emphasis anyway, so they must not vouch for a neighbour either.
+        if (t.length < 2 || !/[A-Za-zÀ-ɏ]/.test(t)) continue;
+        ys.add(Math.round(item.transform[5]));
+      }
+      return [...ys];
+    })();
+    const bandPitch = (dominant || pageH * 0.02) * 1.8;
+    const bandOK = new Set(bodyBaselines.filter((y) => !inBand(y)));
+    for (let pass = 0; pass < 4; pass++) {
+      let grew = false;
+      for (const y of bodyBaselines) {
+        if (bandOK.has(y)) continue;
+        for (const b of bandOK) {
+          if (Math.abs(b - y) <= bandPitch) { bandOK.add(y); grew = true; break; }
+        }
+      }
+      if (!grew) break;
+    }
+
     // Document-level cut from setContentStart; until it arrives, a per-page
     // fast path keeps the common single-cover case (Abstract on page 1) right.
     // y grows upward in PDF coordinates: "above the heading" means y greater.
@@ -2410,6 +2453,16 @@ export class TypographyEngine {
         });
       }
     }
+    // Why a candidate was rejected HERE, not just in the block classifier.
+    // This filter runs before #classifyBlocks's `dbg`, so its rejections used
+    // to leave no trace at all: an unprocessed line read as "no reason
+    // recorded", which is indistinguishable from a line the engine never saw.
+    // That ambiguity is what hid the margin-band bug above. Never overwrite a
+    // block-pass reason — that one is more specific.
+    const reject = (div, why) => {
+      if (globalThis.__fxDebug && div && !div.dataset.fxWhy) div.dataset.fxWhy = why;
+      return false;
+    };
     const pairs = allPairs.filter((pair) => {
       const { div, item } = pair;
       if (!div?.isConnected || div.dataset.fxDone) return false;
@@ -2426,7 +2479,7 @@ export class TypographyEngine {
       // are picked up as obstacles (see obstacleDivs), so neighbouring per-span
       // masks clamp around them and never white them out.
       if (isSpecial({ item }) || !/[A-Za-zÀ-ɏ]/.test(trimmed) || trimmed.length < 2) {
-        return false;
+        return reject(div, "special-or-short");
       }
       // Sub/superscripts of math symbols — the "out"/"in"/"dev" under γ, S,
       // M — are set well below body size and are only a few characters.
@@ -2435,7 +2488,7 @@ export class TypographyEngine {
       // the parent symbol. Footnotes/appendix small text are unaffected
       // (their spans are full words/lines, not ≤4-char fragments).
       if (dominant && item?.height && item.height < dominant * 0.8 && trimmed.length <= 4) {
-        return false;
+        return reject(div, "script-size");
       }
       // Block classification (#classifyBlocks) owns content-type: anything not
       // body text — headings, captions, tables, figures, equations — is here.
@@ -2446,7 +2499,7 @@ export class TypographyEngine {
       // a point smaller than the main body). The threshold is the DOCUMENT body
       // height, so a small-text-heavy page can't skew it and clip real prose.
       if (dominant && item?.height && item.height > dominant * 1.2) {
-        return false;
+        return reject(div, "over-body");
       }
       // …and the TEXT such a script attaches to: a candidate with a kept
       // sub/superscript fragment hugging its edge (vertically offset from
@@ -2475,14 +2528,14 @@ export class TypographyEngine {
               : -dy >= item.height * 0.08 && -dy <= item.height * 0.45;
           if (!inWin) continue; // same baseline / another line
           if (f.x0 > sx1 + 2 || f.x1 < sx0 - 2) continue; // not adjacent
-          return false;
+          return reject(div, "script-attach");
         }
       }
       if (item?.transform) {
         const x = item.transform[4];
         const y = item.transform[5];
-        if (y - vy0 < pageH * 0.06 || y - vy0 > pageH * 0.94) return false;
-        if (x - vx0 < pageW * 0.04) return false;
+        if (inBand(y) && !bandOK.has(Math.round(y))) return reject(div, "margin-band");
+        if (x - vx0 < pageW * 0.04) return reject(div, "left-margin");
         if (contentStart) {
           if (pageNumber < contentStart.page) return false;
           // Front matter is what sits ABOVE the Abstract line — cut strictly

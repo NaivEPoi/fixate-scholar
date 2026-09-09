@@ -293,8 +293,33 @@ All write to `test/out/`. Add `--headful` (where supported) for real-DPI.
   above the Abstract is skipped by design — counted, it failed every paper with a
   3-line author block).
   Per-page deep dive: `node test/probe.mjs <paper> <page> <query> [--shot]`.
-- **Bibliography emphasis**: `node test/refbold.mjs <paper> [--url=]` → 0 processed
-  spans inside the reference list, per page and column.
+- **Bibliography emphasis**: `node test/refbold.mjs <paper> [--url=]` → 0
+  **emphasized** spans inside the reference list, per page and column. It counts
+  spans that actually carry an emphasis run, not spans the engine merely walked:
+  a processed span with zero runs renders identically to an untouched one, and
+  counting it failed one paper on every sweep over something invisible. Those are
+  still reported (`processedNoEmphasis=N`), just not fatal.
+- **Kept faces stay kept**: `node test/fontkeep.mjs --url=<pdf> --all` → 0
+  violations, i.e. no processed span resolves to a math, monospace, small-caps or
+  bold-display face. Reads the font off each processed span and resolves it
+  through `commonObjs` — the string the engine's own filter tests — so there is
+  no span↔item alignment to degrade silently. It also FAILS when it resolves no
+  fonts at all: a check that reads zero because it is blind is worse than no
+  check, so a single-page run over a bibliography page exits 1 by design. Use
+  `--all`.
+- **Why was this prose skipped?**: `node test/whyskip.mjs --url=<pdf> --all` →
+  every unprocessed prose span with its `data-fx-why`, and a `trailing` count of
+  unreasoned prose sitting at or below everything processed. `trailing` must be
+  **0**; it is the regression guard for the margin-band class (R35). A reason of
+  `(none)` means no stage recorded one — treat that as a bug in the diagnostics,
+  not as "the engine chose to".
+- **Is this word really wrong?**: `node test/wordshot.mjs --url=<pdf> --page=N
+  --find="word"` → what the engine did to that exact word, plus a tightly
+  cropped high-zoom capture of it. Read the verdict before trusting an eye:
+  `processed=false keep=true` means absent emphasis there is CORRECT, and
+  `emph=0` falsifies "emphasis applied here" outright. About twenty claimed
+  render defects went through this during one gate and every one turned out to be
+  a downsampling artifact, by-design behaviour, or the manuscript's own typo.
 - **Baseline alignment**:
   `node test/diag-baseline.mjs <paper> <page> [--headful] [--zoom=1.25] [--dsf=1.75]`
   → `medBotErr` in the aligned range (~−2 to −3); per-span `topErr/botErr`.
@@ -330,6 +355,24 @@ as color, then check each region.
 node test/review-capture.mjs "<paper>"     # all pages of one paper
 # or omit the arg to capture every paper
 ```
+
+**A capture must settle on the page it is photographing.** `debug-shot.mjs` and
+`shot-region2.mjs` used to wait for a document-wide `.fx-b` count to cross a
+threshold and then sleep a fixed interval — which says nothing about the target
+page. The shutter fired mid-emphasis and a whole batch of "emphasis missing from
+this paragraph" findings followed, every one of them false. Both now poll the
+target page's `data-fx-done` AND `.fx-b` counts until neither changes: two
+counters, because a run is painted after its span is marked done. If you write a
+new capture harness, do the same, and never compare capture hashes across
+commits to argue "no visual change" — three captures of ONE page at ONE commit
+differed in 15.8% of pixels from sub-pixel canvas rasterisation. Identical
+hashes mean something; differing ones prove nothing.
+
+**Hide the outline sidebar.** A PDF with `/PageMode /UseOutlines` opens it, and
+it keeps its layout width even when the toggle reports it closed, pushing the
+right-hand column past the viewport edge. A capture that silently loses a column
+is exactly how a visual gate reports "clean" on a page it only partly saw. Force
+it hidden (`#sidebarContainer{display:none}`) and clip to the page's own rect.
 For each page it writes to `test/out/review/<paper>/`:
 - `pNN.png` — fx-on render with a **classification overlay**: processed body =
   **green** tint, skipped/left-on-canvas = **red** tint, kept math/special =
