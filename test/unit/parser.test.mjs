@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseReferences,
   findReferencesBody,
+  findReferenceSections,
   findFurniture,
   guessTitle,
   guessAuthors,
@@ -664,4 +665,53 @@ test("bibAuthors never cuts a surname-first name in half", () => {
   assert.equal(bibAuthors("Doe, J., & Smith, A."), "Doe, J. and Smith, A.");
   assert.equal(bibAuthors("Smith, A., Jones, B., & Lee, C."), "Smith, A. and Jones, B. and Lee, C.");
   assert.equal(bibAuthors(null), null);
+});
+
+
+// A journal proof: the article, its REFERENCES, then supplementary material
+// with a second, shorter REFERENCES of its own. Both lists number from [1], so
+// the document holds two different references called "[1]" — and the article's
+// list, being neither the first heading nor the last, is the one a single-
+// bibliography search loses.
+function proofDoc() {
+  const article = lines([
+    "We build on prior work [1], [2].",
+    "REFERENCES",
+    "[1] A. Author, “A protocol analysis paper,” in Proc. ACM CCS, 2021.",
+    "[2] B. Buthor, “A second cited work,” IEEE Trans. Inf. Forensics, 2022.",
+    "[3] C. Cuthor, “A third cited work,” in Proc. USENIX Security, 2023.",
+  ]);
+  const supplement = lines([
+    "APPENDIX A",
+    "The supplement restates [1] in more detail.",
+    "REFERENCES",
+    "[1] Z. Zuthor, “A supplement-only citation,” arXiv:2401.00001, 2024.",
+    "[2] Y. Yuthor, “Another supplement-only citation,” arXiv:2401.00002, 2024.",
+  ]);
+  for (const l of supplement) l.page = 11;
+  return [...article, ...supplement];
+}
+
+test("findReferenceSections finds every bibliography, not just the last", () => {
+  const sections = findReferenceSections(proofDoc());
+  assert.equal(sections.length, 2);
+  assert.equal(sections[0].heading.page, 9);
+  assert.equal(sections[0].body.length, 3);
+  assert.equal(sections[1].heading.page, 11);
+  assert.equal(sections[1].body.length, 2);
+});
+
+test("findReferencesBody returns the primary (longest) section", () => {
+  const { heading, body } = findReferencesBody(proofDoc());
+  assert.equal(heading.page, 9);
+  assert.equal(body.length, 3);
+  assert.match(body[0].text, /A protocol analysis paper/);
+});
+
+test("parseReferences returns both sections' entries, tagged and in order", () => {
+  const entries = parseReferences(proofDoc());
+  assert.deepEqual(entries.map((e) => e.number), [1, 2, 3, 1, 2]);
+  assert.deepEqual(entries.map((e) => e.section), [0, 0, 0, 1, 1]);
+  // A bare "[1]" with no page context resolves to the ARTICLE's entry.
+  assert.match(resolveCitation(["1"], entries)[0].raw, /A protocol analysis paper/);
 });

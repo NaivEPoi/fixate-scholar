@@ -102,6 +102,42 @@ export const PATCHES = [
   <script src="viewer.mjs" type="module"></script>`,
     marker: "fixate-scholar-patch-6",
   },
+  {
+    // Turn PDF.js's comment feature ON. The build ships it complete — a
+    // comment on a highlight, a standalone sticky note, the comments sidebar,
+    // and /Contents written into the saved file — but behind a preference that
+    // defaults to false, so the toolbar button stays hidden and
+    // PDFViewerApplication builds no CommentManager at all. Reviewing a paper
+    // is exactly what this viewer is for, and a highlight you cannot say
+    // anything about is half the tool. Flipping the DEFAULT (rather than
+    // writing a stored preference) keeps it on for every profile the extension
+    // is loaded into, including the throwaway ones the harnesses spawn.
+    file: "web/viewer.mjs",
+    anchor: `  enableComment: {
+    value: false,`,
+    replacement: `  enableComment: {
+    /* fixate-scholar-patch-7: comments on highlights, on by default */
+    value: true,`,
+    marker: "fixate-scholar-patch-7",
+  },
+  {
+    // Write an AUTHOR onto saved annotations. Every markup annotation the
+    // worker writes takes its /T from the serialized editor's `user` field —
+    // and nothing in the viewer ever sets it, so a highlight or comment saved
+    // by PDF.js arrives in Acrobat, Preview or Foxit with an empty author.
+    // That is fine for a private highlight and wrong for a review comment,
+    // which is read by someone who needs to know whose it is. The name comes
+    // from the options page (overlay.mjs publishes it as fxAnnotationAuthor);
+    // unset leaves the field undefined, which is exactly the old behavior.
+    file: "build/pdf.mjs",
+    anchor: `      structTreeParentId: this._structTreeParentId,
+      popupRef: this._initialData?.popupRef || ""`,
+    replacement: `      structTreeParentId: this._structTreeParentId,
+      /* fixate-scholar-patch-8: author name for saved annotations (/T) */
+      user: globalThis.fxAnnotationAuthor || undefined,
+      popupRef: this._initialData?.popupRef || ""`,
+    marker: "fixate-scholar-patch-8",
+  },
 ];
 
 /** Apply one patch in `vendorDir`. Idempotent; throws if the anchor is gone. */

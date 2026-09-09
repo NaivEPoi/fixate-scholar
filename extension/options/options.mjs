@@ -13,6 +13,7 @@ $("boldWeight").value = settings.boldWeight;
 $("saccade").value = settings.saccade;
 $("intercept").checked = settings.intercept;
 $("flowCopy").checked = settings.flowCopy;
+$("annotationAuthor").value = settings.annotationAuthor;
 $("bypassOrigins").value = settings.bypassOrigins.join("\n");
 
 $("enabled").addEventListener("change", (e) => setSettings({ enabled: e.target.checked }));
@@ -30,6 +31,9 @@ $("fraction").addEventListener("change", (e) => setSettings({ fraction: Number(e
 $("boldWeight").addEventListener("change", (e) => setSettings({ boldWeight: Number(e.target.value) }));
 $("saccade").addEventListener("change", (e) =>
   setSettings({ saccade: Math.max(1, Math.min(4, Number(e.target.value) || 1)) }),
+);
+$("annotationAuthor").addEventListener("change", (e) =>
+  setSettings({ annotationAuthor: e.target.value.trim().slice(0, 120) }),
 );
 $("bypassOrigins").addEventListener("change", (e) => {
   const origins = e.target.value

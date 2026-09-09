@@ -9,6 +9,10 @@
 //      the text spans, which reading mode's markup nests inside.
 //   6. viewer.html — load file-param.mjs BEFORE viewer.mjs, so the ?file= URL
 //      is percent-encoded before PDF.js parses the query with URLSearchParams.
+//   7. viewer.mjs  — enable the comment feature (comments on highlights and
+//      standalone notes), which the build ships behind a false-by-default pref.
+//   8. pdf.mjs     — carry an author name into saved annotations (/T), which
+//      the viewer otherwise never sets.
 //
 // Patches use exact string anchors and fail loudly if PDF.js changes them,
 // so a version bump can never silently produce a broken viewer.

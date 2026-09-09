@@ -2448,3 +2448,103 @@ reached from a text layer because of that same stopPropagation) is untouched.
 - `papers.mjs`: ALL 8 PAPERS PASSED, counts unchanged (the copy handler shares
   `overlay.mjs`'s textlayerrendered hook with the engine, so the gate has to say
   the typography is untouched).
+
+
+## Round 28 (R28) - two bibliographies in one PDF (user report)
+
+Reported on a private-corpus paper: citations were not linked, and the
+reference list was emphasized as body prose. Both symptoms, one cause.
+
+### R28-1 (HIGH) - only the LAST reference list was ever found
+
+`findHeadingIndex` searched from the END of the document for a "References"
+heading, skipping y-clustered running heads (R19), and returned ONE index. That
+is right for a paper, and wrong for a PDF that holds a document plus an
+appended one - an article followed by its supplementary material, a technical
+report followed by its system card, a thesis's collected chapters. Each part
+carries its own "References" and its own `[1]…[n]`, and the search locked onto
+the LAST, shortest list. Consequences, in order of how badly they mislead:
+
+- The article's own bibliography - the long one - was outside the refs region,
+  so the engine treated pages of dense entries as body prose and emphasized
+  them. That is the visible half of the report.
+- Its in-text `[3]` resolved against the SUPPLEMENT's third entry. Not an
+  error, not a stub: a citation card for a different paper, with the confident
+  layout of a resolved one. The quiet half, and the worse one.
+- Numbers with no counterpart in the short list resolved to nothing and fell
+  back to stub cards, which is what "citations not linked" looked like.
+
+Offline, on the reported document: heading found, body 19 lines, **5 entries**,
+126 citations, **26 resolved**.
+
+Fix (`parser.mjs`): `findHeadingIndexes` returns EVERY genuine heading, and
+`findReferenceSections` walks each one's body with the existing per-section
+scan (page furniture stepped over, floats that interrupt a column list
+tolerated, next section ends it). `parseReferenceSections` parses each body on
+its own, so per-section numbering stays separate.
+`findReferencesBody` keeps its signature - it now returns the LONGEST section,
+which is the article's whenever a supplement's shorter list follows - for
+callers and tests that can act on only one bibliography.
+`citations.mjs` uses the sections: the region handed to the engine is the union
+of them all (nothing is left emphasized), and `#entriesForPage` narrows the
+entry pool to the section that governs the citing page - the first section at
+or after it, since a part's citations precede its own list, falling back to the
+last. With one bibliography, which is every ordinary paper, that is all the
+entries and nothing changes.
+
+Same document after: **47 entries** (42 + 5), **125 of 126** citations resolved,
+`citeaudit` jumpCites=0 noHit=0 unresolved=0 on all 20 pages, `refbold` 0
+emphasized bibliography spans, and a per-page probe showing the reference pages
+fully tagged `data-fx-refs` with 0 processed spans in either list.
+
+**Public repro** (the reported file is private; this one shows the same defect):
+`node test/refparse.mjs https://arxiv.org/pdf/2303.08774` - the GPT-4 technical
+report, whose System Card appendix carries a second "References" (p71) after the
+paper's own (p18). Before: 105 entries, i.e. only the appendix's list, so the
+paper's `[1]` (Brown et al., *Language models are few-shot learners*) showed the
+System Card's `[1]` (Tamkin et al.) instead. After: 190 entries, both lists.
+
+### Regression
+- `npm test` 146/146 (3 new unit tests: every section found, the primary is the
+  longest, entries tagged and ordered so a bare `[1]` means the article's).
+- 12-paper offline sweep, before vs after: identical on 11 (entries, resolved,
+  mode all unchanged) and 105 -> 190 on the two-bibliography one. No paper lost
+  an entry or a resolution.
+- `papers.mjs` corpus gate, `test/highlights.mjs`.
+
+## Round 29 (R29) - a highlight you can say something about (user request)
+
+Requested: highlights and COMMENTS, with the saved PDF readable by other tools.
+
+PDF.js 6.0.227 already ships the entire comment feature - a note attached to a
+highlight, a standalone sticky note, the comments sidebar, the writer that puts
+it in the file - behind `enableComment`, which defaults to false. So the
+toolbar button stayed hidden and `PDFViewerApplication` built no
+`CommentManager` at all. **Patch 7** flips the default in the vendored build
+(rather than storing a preference, so every profile the extension is loaded
+into - including the throwaway ones the harnesses spawn - has it).
+
+What that produces in the saved file is already standard: `/Contents` on the
+`/Highlight` plus a child `/Popup` whose `/Parent` points back at it, `/F 4` so
+it prints, and an `/AP` appearance stream for readers that do not synthesize
+one. One field is missing: the AUTHOR. The worker writes `/T` from the
+serialized editor's `user`, and nothing in the viewer ever sets it, so every
+note PDF.js saves opens authorless. Fine for a private highlight, wrong for a
+review comment, which is read by someone who needs to know whose it is.
+**Patch 8** carries `globalThis.fxAnnotationAuthor` into the base editor's
+`serialize()`; `overlay.mjs` publishes it from a new options-page field
+(**Your name on annotations**) and republishes it on change. Empty leaves the
+field undefined - PDF.js's own behavior, unchanged.
+
+### Verification (`test/comments.mjs`, new)
+Runs against the live extension: the comment control is shown; a highlight is
+made by drag; the note is attached through the REAL UI (the highlight's comment
+button → the dialog → save); the save is inspected for each of the six things
+another reader needs; the bytes are re-parsed (text and author round-trip, the
+`/Popup` resolves its `/Parent`); and then the SAVED bytes are reopened in the
+viewer with reading mode on, where the note's button must be hit-testable -
+`.fx-cite-layer` sits above the page and would otherwise swallow the click -
+and must open the note. `COMMENTS: PASS`, with reading mode confirmed live
+(3063 emphasized spans on the reopened page) and the button, not the overlay,
+answering `elementFromPoint`.
+`test/highlights.mjs` still passes with patch 8 applied.

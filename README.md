@@ -58,11 +58,17 @@ code, fonts, or assets.
   list (the hyphen stays when it sits between two words). Lists keep one item per line,
   running heads and feet stay separate, and wrapped URLs are put back together. Off switch
   in the options page.
-- **Highlighting & annotations**: PDF.js's built-in highlighter (and the other annotation
+- **Highlighting & comments**: PDF.js's built-in highlighter (and the other annotation
   tools) work in reading mode — highlights show over the fixation-styled text just as over
   the original, appear on both the original and the processed text as you toggle the mode,
   and **save into the PDF** with the toolbar's download/save button (standard `/Highlight`
-  annotations that open in any PDF reader).
+  annotations that open in any PDF reader). Any highlight can carry a **comment**: the
+  note button on the highlight (or the toolbar's comment tool, for a standalone sticky
+  note) opens a box to type in, the comments sidebar lists every note in the document, and
+  a saved note is an ordinary `/Contents` + `/Popup` annotation — Acrobat, Preview, Foxit
+  and the browser's own viewer all show it. Set **Your name on annotations** in the options
+  page and it is written as each annotation's author, so a review someone else opens says
+  whose comments they are.
 - **Find (Ctrl+F)**: a match landing on fixation-styled text stays fully readable and keeps
   its bolded prefixes. PDF.js rewrites the matched line's markup to insert its own highlight
   span, so the overlay re-colors that span and re-applies the emphasis around it — without
