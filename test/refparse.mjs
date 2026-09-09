@@ -21,50 +21,11 @@
 //                    (with page/column/x/height) — the "why did the heading not
 //                    match" view, same job as debug-refs.mjs without a browser.
 
-import { readFileSync, readdirSync, statSync, writeFileSync, mkdtempSync } from "node:fs";
-import { join, dirname, basename } from "node:path";
-import { tmpdir } from "node:os";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadPdfjs, loadReferenceModules, openPdf, resolveTargets } from "./lib/pdfjs-node.mjs";
 
-// pdf.js's browser build is what the extension vendors, and it touches a few
-// DOM globals at import time. Text extraction needs none of their behavior, so
-// stubs are enough — and using the vendored build (rather than a second copy
-// from npm) is the point: this measures what actually ships.
-class Matrix {
-  constructor() { this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0; }
-  multiplySelf() { return this; }
-  translateSelf() { return this; }
-  scaleSelf() { return this; }
-  invertSelf() { return this; }
-  transformPoint(p) { return p; }
-}
-globalThis.DOMMatrix ??= Matrix;
-globalThis.Path2D ??= class { addPath() {} };
-globalThis.ImageData ??= class { constructor(d, w, h) { this.data = d; this.width = w; this.height = h; } };
-// Newer array/Math methods pdf.js uses that older Node releases lack.
-Uint8Array.prototype.toHex ??= function () { return Buffer.from(this).toString("hex"); };
-Uint8Array.fromHex ??= (h) => new Uint8Array(Buffer.from(h, "hex"));
-Uint8Array.prototype.toBase64 ??= function () { return Buffer.from(this).toString("base64"); };
-Uint8Array.fromBase64 ??= (b) => new Uint8Array(Buffer.from(b, "base64"));
-Math.sumPrecise ??= (xs) => [...xs].reduce((a, b) => a + b, 0);
-
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const vendor = join(root, "extension", "vendor", "pdfjs");
-let pdfjs;
-try {
-  pdfjs = await import(pathToFileURL(join(vendor, "build", "pdf.mjs")).href);
-} catch {
-  console.error("extension/vendor/pdfjs is missing — run `npm run fetch-pdfjs` first.");
-  process.exit(2);
-}
-pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(join(vendor, "build", "pdf.worker.mjs")).href;
-
-const { extractLines } = await import(
-  pathToFileURL(join(root, "extension", "viewer", "references", "extractor.mjs")).href
-);
-const { parseReferences, findReferencesBody, findCitations, resolveCitation } = await import(
-  pathToFileURL(join(root, "extension", "viewer", "references", "parser.mjs")).href
-);
+const pdfjs = await loadPdfjs();
+const { extractLines, parseReferences, findReferencesBody, findCitations, resolveCitation } =
+  await loadReferenceModules();
 
 const args = process.argv.slice(2);
 const LINES = args.find((a) => a.startsWith("--lines="))?.slice(8);
@@ -74,37 +35,15 @@ if (!targets.length) {
   process.exit(2);
 }
 
-// Expand directories; download URLs into a temp dir (deleted with it by the OS).
-const files = [];
-let downloads = null;
-for (const t of targets) {
-  if (/^https?:/i.test(t)) {
-    downloads ??= mkdtempSync(join(tmpdir(), "fx-refparse-"));
-    const dest = join(downloads, `${files.length}-${basename(new URL(t).pathname) || "paper"}.pdf`);
-    const res = await fetch(t);
-    if (!res.ok) { console.log(`ERR  ${t} — HTTP ${res.status}`); continue; }
-    writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
-    files.push({ path: dest, name: t });
-    continue;
-  }
-  if (statSync(t).isDirectory()) {
-    for (const f of readdirSync(t).filter((f) => f.toLowerCase().endsWith(".pdf"))) {
-      files.push({ path: join(t, f), name: f });
-    }
-  } else {
-    files.push({ path: t, name: basename(t) });
-  }
-}
+// Directories expanded; URLs downloaded into a temp dir the OS reclaims.
+const files = await resolveTargets(targets);
 
 globalThis.__fxDebug = true;
 let zero = 0;
 let low = 0;
 for (const { path, name } of files) {
   try {
-    const doc = await pdfjs.getDocument({
-      data: new Uint8Array(readFileSync(path)),
-      standardFontDataUrl: join(vendor, "web", "standard_fonts") + "/",
-    }).promise;
+    const doc = await openPdf(pdfjs, path);
     const lines = await extractLines(doc);
     const entries = parseReferences(lines);
     const { heading, body } = findReferencesBody(lines);

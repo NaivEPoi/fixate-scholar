@@ -1,128 +1,94 @@
-// Fetches a Google Scholar result preview for a parsed reference. Only runs
-// when the user clicks a citation (one search request, like typing the query
-// into Scholar manually); results are cached per query for the session.
-// Scholar has no public API, so this parses the result page and degrades
-// gracefully (returns null) on any change, block, or consent interstitial.
+// Google Scholar as a reference source: the default one.
 //
-// The lookup is TITLE + FIRST AUTHOR + YEAR, and the result is VERIFIED against
-// the reference before it is shown. Searching the bare title and trusting hit
-// #1 is what made three different citations show the same card: a short or
-// generic title ("Applied pi calculus") ranks a longer, better-cited paper that
-// merely contains those words ("Simulation based security in the applied pi
-// calculus") above the work actually cited, and neighbouring citations in the
-// same bracket landed on that same paper. When nothing on the page matches the
-// reference well enough, this returns null and the caller shows the
-// document's own bibliography entry instead of a confidently wrong one.
+// Scholar has no API, so this parses its result page. Two things make that
+// workable, and both are properties of HOW the request is made:
+//
+//   1. It is made with the reader's own browser and their own cookies
+//      (`credentials: "include"`). Scholar refuses an anonymous request — a
+//      cookieless one gets 429 and a captcha page, measured, from Node and
+//      from a browser's fresh profile alike — and answers the same request
+//      from a browser that has been to scholar.google.com once: 14 of 15
+//      queries at a reader's pace, p50 413ms.
+//   2. It is made ONE PER CLICK. Nothing here runs on its own: no crawl, no
+//      prefetch, no background pass over a bibliography. A reader clicks a
+//      citation and one search happens, which is the search they would have
+//      typed themselves.
+//
+// The consequence a reader should know about is in README's Privacy section:
+// these requests carry their Google cookies, so Scholar sees the lookups the
+// way it sees their own searches. The open databases in sources.mjs are the
+// fallback and carry no cookie at all; either can be turned off in Options.
+//
+// What Scholar gives that the databases do not: a citation count for anything
+// it indexes (not just DOI-registered work), theses and technical reports, and
+// its own [PDF] links. What it does not give: an abstract — `.gs_rs` is a
+// two-line ellipsed snippet — or a DOI, which is why sources.mjs still enriches
+// a Scholar match afterwards when it can.
+//
+// Every candidate is verified against the reference by matching.mjs before it
+// is shown, exactly as for every other source: Scholar ranks by citation count,
+// so a generic title puts a better-cited paper above the work actually cited
+// (R24-1), and being the default source does not make it trusted.
 
-const cache = new Map();
-const bibCache = new Map();
+import { bestMatch } from "./matching.mjs";
+
 const BASE = "https://scholar.google.com";
-/** Results parsed from the search page before scoring. Scholar returns ten. */
-const CANDIDATES = 5;
+/** Results parsed from the page before scoring. Scholar returns ten. */
+const CANDIDATES = 10;
 
 export function scholarSearchUrl(query) {
   return `${BASE}/scholar?hl=en&q=${encodeURIComponent(query)}`;
 }
 
 /**
- * The search query for a parsed reference: its title, plus the first author's
- * surname and the year when the title does not already carry them. The extra
- * two terms are what separate a work from the better-cited papers that quote
- * its subject in their own titles.
+ * Scholar's refusal, in every wording it has been seen to use.
  *
- * @param ref a parsed entry ({title, surname, year, raw}) or a plain string.
+ * It does NOT always come as an HTTP error. The one that matters most is a
+ * 200 whose body says "Please show you're not a robot" while the header still
+ * reports "About 34 results" — measured, and served to a real tab navigation
+ * as readily as to this fetch once an address has searched enough. Parsed
+ * naively that page is zero results, which the ladder would read as "Scholar
+ * has nothing", cache as a no-match for a week, and never retry.
+ *
+ * So every one of these is a REFUSAL: fall through to the open databases, and
+ * remember nothing.
  */
-export function referenceQuery(ref) {
-  if (typeof ref === "string") return ref.trim();
-  const title = queryText(ref?.title || ref?.raw || "");
-  const terms = [title];
-  const lower = title.toLowerCase();
-  const surname = queryText(ref?.surname || "");
-  if (surname.length >= 2 && !lower.includes(surname.toLowerCase())) terms.push(surname);
-  if (ref?.year && !title.includes(ref.year)) terms.push(String(ref.year).slice(0, 4));
-  return terms.join(" ").trim();
-}
+const REFUSAL =
+  /gs_captcha|id="gs_captcha|not a robot|unusual traffic|automated queries|[/]sorry[/]index/i;
 
-/** A PDF text layer leaves TeX accent composition behind as loose spacing
- *  accents ("Mart´ın", "C´edric"); they are noise in a search query. */
-function queryText(s) {
-  return String(s)
-    .replace(/[´`ˆ˜¨˚ˇ]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 220);
+export class ScholarRefused extends Error {}
+
+/**
+ * Candidates for `ref` from one Scholar search, in page order.
+ *
+ * `fetchPage` is injected so the caller owns pacing, timeouts and retries (see
+ * sources.mjs) and so a test can drive this with a page of its own.
+ */
+export async function searchScholar(query, fetchPage) {
+  const html = await fetchPage(scholarSearchUrl(query));
+  if (REFUSAL.test(html)) throw new ScholarRefused("captcha interstitial");
+  return { exact: false, candidates: readResults(html) };
 }
 
 /**
- * @param ref parsed entry (or a bare title string, for callers with nothing
- *        else to go on).
- * @returns {Promise<{title, url, byline, snippet, citedBy, citedByUrl,
- *           pdfUrl, pdfHost, cid, relatedUrl} | null>} null when no result on
- *          the page is a convincing match for `ref`.
+ * The result blocks of a Scholar search page as card shapes.
+ *
+ * Exported so the parse can be measured and tested separately from the fetch —
+ * "did Scholar answer", "did the page parse" and "did anything verify" are
+ * three different failures with three different fixes.
  */
-export function fetchScholarPreview(ref) {
-  const query = referenceQuery(ref);
-  if (!query) return Promise.resolve(null);
-  if (!cache.has(query)) {
-    const promise = fetchAndParse(query, ref).catch(() => {
-      cache.delete(query); // allow a retry later
-      return null;
-    });
-    cache.set(query, promise);
-  }
-  return cache.get(query);
-}
-
-/**
- * BibTeX for a result, via Scholar's cite dialog (the same path the "Cite"
- * link uses): the cluster id → cite popup → the signed .bib link → its text.
- * One extra fetch pair, only when the user opens "Cite". Null on any failure
- * (the caller falls back to a locally generated BibTeX).
- */
-export function fetchScholarBibtex(cid) {
-  if (!cid) return Promise.resolve(null);
-  if (!bibCache.has(cid)) {
-    const promise = fetchBibtex(cid).catch(() => {
-      bibCache.delete(cid);
-      return null;
-    });
-    bibCache.set(cid, promise);
-  }
-  return bibCache.get(cid);
-}
-
-async function fetchBibtex(cid) {
-  const citeUrl = `${BASE}/scholar?q=info:${encodeURIComponent(cid)}:scholar.google.com/&output=cite&hl=en`;
-  const res = await fetch(citeUrl, { credentials: "omit" });
-  if (!res.ok) throw new Error(`cite HTTP ${res.status}`);
-  const doc = new DOMParser().parseFromString(await res.text(), "text/html");
-  const links = [...doc.querySelectorAll("a.gs_citi")];
-  const bibA = links.find((a) => /bibtex/i.test(a.textContent)) ?? links[0];
-  const href = bibA?.getAttribute("href");
-  if (!href) throw new Error("no bibtex link");
-  const bibRes = await fetch(new URL(href, BASE).href, { credentials: "omit" });
-  if (!bibRes.ok) throw new Error(`bib HTTP ${bibRes.status}`);
-  const text = (await bibRes.text()).trim();
-  if (!text.startsWith("@")) throw new Error("not bibtex");
-  return text;
-}
-
-async function fetchAndParse(query, ref) {
-  const res = await fetch(scholarSearchUrl(query), { credentials: "omit" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+export function readResults(html, limit = CANDIDATES) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
   const roots = [...doc.querySelectorAll(".gs_r")].filter((r) => r.querySelector(".gs_ri"));
-  const results = (roots.length ? roots : [...doc.querySelectorAll(".gs_ri")])
-    .slice(0, CANDIDATES)
+  return (roots.length ? roots : [...doc.querySelectorAll(".gs_ri")])
+    .slice(0, limit)
     .map(readResult)
     .filter(Boolean);
-  if (!results.length) throw new Error("no parseable result");
-  return bestMatch(results, ref);
 }
 
-/** One result block → the preview shape, or null when it has no title. */
+/** One result block → the card shape, or null when it has no title. */
 function readResult(node) {
-  // Scholar nests <div class="gs_r" data-cid=...> around <div class="gs_ri">.
+  // Scholar nests <div class="gs_r" data-cid=…> around <div class="gs_ri">.
   // The cite-cluster id and the [PDF] link live on the OUTER one, the text on
   // the inner — and either may be what the page selector matched.
   const root = node.closest?.(".gs_r") ?? node;
@@ -140,85 +106,58 @@ function readResult(node) {
   const cited = [...result.querySelectorAll(".gs_fl a")].find((a) =>
     /^Cited by \d/.test(a.textContent),
   );
-  const related = [...result.querySelectorAll(".gs_fl a")].find((a) =>
-    /^Related articles/i.test(a.textContent),
-  );
   const pdfA = root.querySelector(".gs_ggs a") ?? null;
   const pdfUrl = abs(pdfA);
+  let pdfHost = null;
+  try {
+    pdfHost = pdfUrl ? new URL(pdfUrl).hostname.replace(/^www\./, "") : null;
+  } catch {
+    pdfHost = null;
+  }
+  const byline = result.querySelector(".gs_a")?.textContent.trim() ?? "";
   return {
     title,
+    // Scholar prints the authors, venue and year in one line; matching.mjs
+    // reads the author and the year out of it, as it did before there were
+    // structured sources.
+    byline,
+    year: parseInt((byline.match(/\b(?:19|20)\d{2}\b/g) ?? []).at(-1), 10) || null,
     url: abs(titleA),
-    byline: result.querySelector(".gs_a")?.textContent.trim() ?? "",
+    // `.gs_rs` is a query-biased snippet, NOT the abstract — labelled as what
+    // it is so the card never presents it as one.
     snippet: result.querySelector(".gs_rs")?.textContent.trim() ?? "",
+    snippetIsAbstract: false,
     citedBy: cited?.textContent.trim() ?? null,
     citedByUrl: abs(cited),
     pdfUrl,
-    pdfHost: pdfUrl ? new URL(pdfUrl).hostname.replace(/^www\./, "") : null,
+    pdfHost,
+    doi: null,
     cid: root.getAttribute("data-cid") || null,
-    relatedUrl: abs(related),
+    source: "Google Scholar",
+    sourceUrl: abs(titleA),
   };
 }
 
-/** Diacritics dropped, punctuation to spaces, case-folded — so "Martín" and
- *  the text layer's "Mart´ın" compare equal, as do "TLS 1.3" and "TLS 1·3". */
-export function fold(s) {
-  return String(s || "")
-    .normalize("NFKD")
-    .replace(/\p{M}+/gu, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-const tokens = (s) => new Set(fold(s).split(" ").filter(Boolean));
-
-/** Dice coefficient over word sets: 1 = same words, 0 = disjoint. Symmetric,
- *  unlike containment — which scores a SUPERSET title ("Simulation based
- *  security in the applied pi calculus" over "Applied pi calculus") a perfect
- *  1.0 and is exactly how the wrong paper got through. */
-export function titleScore(a, b) {
-  const A = tokens(a);
-  const B = tokens(b);
-  if (!A.size || !B.size) return 0;
-  let hit = 0;
-  for (const t of A) if (B.has(t)) hit++;
-  return (2 * hit) / (A.size + B.size);
-}
-
-const TITLE_FLOOR = 0.45; // below this the titles are simply different works
-const ACCEPT = 0.85; // title score plus the author/year bonuses
-
 /**
- * The best-scoring result that is convincingly the cited work, or null.
- *
- * Score = title similarity + 0.25 if the first author appears in the byline
- * + 0.15 if the year matches within a year (Scholar dates a cluster by its
- * earliest version, so a journal reprint is often a year or two off).
- * A title match alone has to be near-exact; a middling one needs corroboration.
+ * BibTeX from Scholar's own cite dialog, for a match that has no DOI to ask
+ * Crossref about: the cluster id → the cite popup → the signed .bib link.
+ * Two more requests, only when the reader opens "Cite" and only as a last
+ * resort before the locally generated entry.
  */
-export function bestMatch(results, ref) {
-  const wanted = typeof ref === "string" ? { title: ref } : ref || {};
-  const refTitle = wanted.title || wanted.raw || "";
-  // A hyphenated surname folds to two words ("Ben-Or" -> "ben or"), so the
-  // byline test is per word, not on the joined string.
-  const surnameWords = fold(wanted.surname || "").split(" ").filter((w) => w.length >= 2);
-  const year = parseInt(wanted.year, 10);
-  let best = null;
-  let bestScore = 0;
-  for (const r of results) {
-    const dice = titleScore(refTitle, r.title);
-    if (dice < TITLE_FLOOR) continue;
-    const bylineWords = tokens(r.byline);
-    const authorOk =
-      surnameWords.length > 0 && surnameWords.every((w) => bylineWords.has(w));
-    const resultYear = parseInt((fold(r.byline).match(/\b(?:19|20)\d{2}\b/g) ?? []).at(-1), 10);
-    const yearOk =
-      Number.isFinite(year) && Number.isFinite(resultYear) && Math.abs(year - resultYear) <= 1;
-    const score = dice + (authorOk ? 0.25 : 0) + (yearOk ? 0.15 : 0);
-    if (score > bestScore) {
-      bestScore = score;
-      best = r;
-    }
-  }
-  return bestScore >= ACCEPT ? best : null;
+export async function scholarBibtex(cid, fetchPage) {
+  if (!cid) return null;
+  const citeUrl = `${BASE}/scholar?q=info:${encodeURIComponent(cid)}:scholar.google.com/&output=cite&hl=en`;
+  const doc = new DOMParser().parseFromString(await fetchPage(citeUrl), "text/html");
+  const links = [...doc.querySelectorAll("a.gs_citi")];
+  const bibA = links.find((a) => /bibtex/i.test(a.textContent)) ?? links[0];
+  const href = bibA?.getAttribute("href");
+  if (!href) return null;
+  const text = (await fetchPage(new URL(href, BASE).href)).trim();
+  return text.startsWith("@") ? text : null;
+}
+
+/** The verified Scholar match for `ref`, or null. Kept here so the scoring
+ *  call sits next to the parse it scores. */
+export function verifyScholar(candidates, ref) {
+  return bestMatch(candidates, ref);
 }

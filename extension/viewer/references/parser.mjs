@@ -480,7 +480,7 @@ function buildEntry(group) {
 // with its own delimiter, tried in order; the last is a generic sentence split.
 //
 // Quoted title: `A. Author, “Title,” in Proc. …`
-const QUOTED_TITLE = /[“"]([^”"]{8,200})[”"]/;
+const QUOTED_TITLE = /[“"]([^”"]{8,320})[”"]/;
 // LNCS/Springer: `Surname, I., Surname, I.: Title. In: Venue`. The author list
 // is surname+initials pairs (or "et al.") and ends at a COLON, which no other
 // shape here does — so this guard cannot swallow a numeric entry whose TITLE
@@ -491,6 +491,13 @@ const LNCS =
   /^(?:(?:\p{Ll}{2,4}\s+)?\p{Lu}[\p{L}'’-]+,\s*(?:\p{Lu}\.\s*)+(?:,\s*)?|et\s+al\.\s*,?\s*)+:\s*(.{8,220}?)(?=\.\s|$)/u;
 // APA: `… (2020). Title. Venue …`
 const APA_PERIOD = /\(\s*(?:19|20)\d{2}[a-z]?\s*\)\.\s*([^.]{8,200})\./;
+// …but only when what follows the year is a TITLE. The ACM Reference Format
+// puts its parenthesised year AFTER the title and follows it with the preprint
+// id — "… Software Radio. (2016). arXiv:1607.05171 [cs.CR]" — where this
+// pattern's answer is "arXiv:1607" (the capture cannot span a period, and
+// there is one inside the identifier). Two words is the test: an identifier is
+// one token, and the shortest real titles ("Applied cryptography") are two.
+const TWO_WORDS = /\p{L}[\p{L}'’-]*\s+\S*\p{L}/u;
 // The same author-year form punctuated with COMMAS — "L. M. Adleman (1994),
 // Algorithmic number theory, in Proceedings of …" (older LaTeX article
 // bibliographies). It has no sentence period anywhere, so the generic split
@@ -508,7 +515,61 @@ const TITLE_SHAPED = /\p{L}{4}/u;
 // comma/initial-heavy first sentence and the title is the next one. The
 // lookbehind requires two word chars, so "A. Vaswani" initials don't split a
 // sentence while "et al." does.
-const SENTENCE_SPLIT = /(?<=\w{2}[.?!])\s+(?=[A-Z“"])/u;
+//
+// The lookahead is what a title may START with, and a capital is not the only
+// thing: "5GReasoner: …", "5G SUCI-Catchers: …" begin with a digit, and a
+// bibliography that keeps BibTeX casing braces begins with one ("{DoLTEst}:
+// In-depth downlink negative testing"). Neither used to split, so the sentence
+// AFTER the title — the venue — became the title, and those papers could not be
+// looked up at all. A digit run of one to three is a title like "5G…"; four is
+// the year of an ACM-format entry ("… Bertino. 2019. 5GReasoner: …"), which
+// must NOT split there or the title becomes "2019."
+//
+// A square bracket is deliberately NOT in that set: IEEE-style entries mark
+// their link with one ("Smart home control on one app. [Online]. Available:
+// https://…"), and splitting there makes "[Online]" the title — measured on
+// six entries of one private paper, where the unsplit entry had been right.
+//
+// Two guards on the sentence end itself:
+//   - Not inside a URL. A wrapped link reaches the parser with a space in it
+//     ("Available: https://www. 3gpp.org/dynareport/33501.htm"), and "www."
+//     then reads as the end of a sentence — making the rest of the URL the
+//     title of a 3GPP specification.
+//   - A title ending in "?" or "!" is followed by the style's own period
+//     ("Still catching them all?. In Proceedings of…"), and one word character
+//     plus two marks is still a sentence end.
+// (A closing brace or paren may sit between the last word and the period —
+// "…trade-offs in {PIR}. In 30th USENIX…" — and that is still a sentence end.)
+const SENTENCE_SPLIT =
+  /(?<!(?:https?:\/\/|www\.)\S{0,30})(?<=\w{2}[)}\]"”]?[.?!]{1,2})\s+(?=[A-Z“"{]|\d{1,3}\p{L})/u;
+
+/**
+ * Is this sentence a title, or the identifiers that some styles put between
+ * the author and the title?
+ *
+ * "3GPP. TS 33.331 version 17.2.0 . 2022. 5G NR; Radio Resource Control (RRC);
+ * Protocol specification" has THREE sentences before the title, and taking the
+ * one right after the authors gives "TS 33.331 version 17.2.0 . 2022". Two
+ * words of three letters or more is the test: a spec id and a year have one at
+ * most, and the shortest real titles ("Applied cryptography") have two. They
+ * are counted, not required to be adjacent — "Applied pi calculus" has a
+ * two-letter word between its two.
+ */
+const readsLikeTitle = (s) => (s.match(/\p{L}{3,}/gu) ?? []).length >= 2;
+
+/**
+ * A sentence that announces where the work appeared, or how to reach it —
+ * never the work's title. Reached when the author block and the title are one
+ * sentence (authors ending in an initial: "…and Sakimura, N. JSON Web
+ * Signature (JWS). Technical report, RFC Editor…"), where the sentence AFTER
+ * the authors is the venue and picking it loses the title entirely.
+ *
+ * A bare "In" is deliberately not here — "In search of an understandable
+ * consensus algorithm" is a title — so only the venue forms that actually
+ * follow it are listed.
+ */
+const VENUE_START =
+  /^(?:in\s+(?:proc\b|proceedings\b|the\s+proceedings\b|\d+(?:st|nd|rd|th)\b|acm\b|ieee\b|usenix\b|advances\b|lecture\s+notes\b|hardware\b)|proc\.|proceedings\b|technical\s+(?:report|specification)\b|tech\.?\s*rep\.?\b|rfc\s*\d|arxiv[:\s]|available\b|\[online\]|ieee\s+std\b|pages?\b|pp\.\s|vol\.\s|volume\s+\d|released\b|accessed\b|version\s+\d|preprint\b|(?:master'?s?|phd|doctoral)\s+thesis)/i;
 
 const trimEdge = (s) => s.replace(/[,.;]\s*$/, "").trim();
 
@@ -526,7 +587,7 @@ function splitEntry(raw) {
     return { authors: raw.slice(0, raw.indexOf(":")).trim(), title: trimEdge(lncs[1]) };
   }
   const apa = APA_PERIOD.exec(raw);
-  if (apa) {
+  if (apa && TWO_WORDS.test(apa[1])) {
     // The year parenthesis is the delimiter, so a trailing period belongs to
     // the last initial ("Doe, J.") and is kept.
     return {
@@ -543,9 +604,23 @@ function splitEntry(raw) {
   }
   const sentences = raw.split(SENTENCE_SPLIT);
   if (sentences.length >= 2) {
-    const candidate = trimEdge(sentences[1]);
+    // The first sentence after the authors that reads as a title, not as the
+    // identifiers a few styles put in between (a spec number, a bare year).
+    // Everything skipped stays with the authors, so `authors` and `title`
+    // still describe the same cut.
+    // No qualifying sentence means the title is not a sentence of its own (it
+    // shares one with the authors), and the whole entry — the catch-all below
+    // — carries it where a venue sentence would not.
+    let i = 1;
+    while (
+      i < sentences.length &&
+      !(readsLikeTitle(trimEdge(sentences[i])) && !VENUE_START.test(trimEdge(sentences[i])))
+    ) {
+      i++;
+    }
+    const candidate = i < sentences.length ? trimEdge(sentences[i]) : "";
     if (candidate.length >= 8 && candidate.length <= 250) {
-      return { authors: trimEdge(sentences[0]), title: candidate };
+      return { authors: trimEdge(sentences.slice(0, i).join(" ")), title: candidate };
     }
   }
   return { authors: null, title: raw.slice(0, 150) };

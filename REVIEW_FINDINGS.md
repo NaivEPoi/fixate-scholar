@@ -5,9 +5,43 @@ Produced by the per-page audit (`test/review-capture.mjs` overlays +
 screenshot before listing. Rules: `TESTING.md` Section 3.
 
 Status: **review complete; F1-F5 all FIXED & validated. Round 3 (F6/F7) below.**
-Latest: **Round 27 (R27) — copy a paragraph, get a paragraph: the page's line
-breaks are rejoined and the hyphens they were broken with are repaired.**
-Before it: **Round 26 (R26)** — a two-column paper whose citations were never
+> **Numbering note.** Two threads of work ran in parallel and both reached for
+> "R28". The reference-lookup thread (R28–R33 below) kept those numbers because
+> its findings are cross-referenced from code comments; the multi-bibliography
+> and highlight-comments work, first written as R28/R29, is renumbered **R34 and
+> R35** at the end. No content was changed by that renumbering — only the
+> headings. Read R34/R35 as having landed alongside R28–R33, not after them.
+
+Latest: **Round 33 (R33) — a real abstract on a Scholar card (OpenAlex by
+title, verified), NO artificial delay on a reader's lookup (the click is the
+rate limit; the gap moved to the test harnesses), and a git-ignored local cache
+of real Scholar pages so the source can be measured offline instead of waiting
+out a captcha.** Alongside it: **R34** (two bibliographies in one PDF) and
+**R35** (comments on highlights).
+Before it: **Round 32 (R32) — Google Scholar as the DEFAULT source (one search per
+click, with the reader own cookies, title-only query), the open databases as
+the fallback, both switchable — plus a Privacy section, a no-affiliation /
+as-is notice, and the services listed in THIRD_PARTY_NOTICES.**
+Before it: **Round 31 (R31) — the 429 was the cookie jar, not the IP: a headful
+re-test overturned R28-1 (a cookieless request is what Scholar refuses; the
+same browser with its own cookies answers 14 of 15), the wrong claims are
+corrected in place, and the switch to the open databases stands on its other
+reasons.**
+Before it: **Round 30 (R30) — the abstract on every paper card, live links in the
+entry, and a miss that costs 3s instead of 5: a per-request deadline, a tail
+that runs concurrently, a per-host pacer, and a failed source that is no longer
+remembered as 'no match'.**
+Before it: **Round 29 (R29)** — the card stopped asking Google Scholar: four keyless
+scholarly APIs in a measured order (1.39 requests per matched reference, 97% of
+a real bibliography), the answering source named on the card, a button to the
+paper's page on the venue's own site, and the rate limit engineered away.
+**Round 28 (R28)** — the reference card that said the paper was not on
+Scholar: Scholar's rate limit told apart from a real miss, a query ladder over
+a verifier that makes loosening safe, the venue out of the query, four verifier
+defects, and a lookup cache that survives reopening the paper.
+**Round 27 (R27)** — copy a paragraph, get a paragraph: the page's
+line breaks are rejoined and the hyphens they were broken with are repaired.
+**Round 26 (R26)** — a two-column paper whose citations were never
 linked at all: a small-caps heading lost to the next column's baseline, a float
 caption truncating the bibliography, and a fallback so a reference section that
 exists is always worth processing. **Round 25 (R25)** — PDFs from the internet,
@@ -2449,13 +2483,677 @@ reached from a text layer because of that same stopPropagation) is untouched.
   `overlay.mjs`'s textlayerrendered hook with the engine, so the gate has to say
   the typography is untouched).
 
+## Round 28 (R28) - the reference card that said the paper was not on Scholar
 
-## Round 28 (R28) - two bibliographies in one PDF (user report)
+User: "most of the references can be found in Google Scholar, but after recent
+updates, many papers are not shown in the card."
+
+The card has three possible answers and R24 gave it only two names. It shows a
+Scholar result when one VERIFIES against the reference, and otherwise shows the
+document's own entry under "From this document's bibliography" - which reads as
+"Scholar does not have this paper" whatever actually happened. Four different
+things were happening.
+
+### R28-0 - what the measurement had to do first (`test/citelookup.mjs`)
+A lookup that fails is one `null`, and the fix depends entirely on WHY. The new
+harness runs the shipping code in its real environment - entries from the
+vendored pdf.js + `references/{extractor,parser}.mjs` in Node, the fetch and the
+scoring from `references/scholar.mjs` inside an extension page - and classifies
+every entry as BLOCKED (Scholar refused: 429 or captcha), EMPTY (a real result
+page with no results: the QUERY is too narrow), REJECT (results came back and
+none verified: the SCORING), or OK. `--json` records every candidate with its
+score so thresholds can be re-tuned offline (`--replay`) instead of re-querying.
+
+`scholar.mjs` grew two exports for it - `readResults` (parse) and `scoreResult`
+(score one candidate, with the term-by-term breakdown) - so fetch, parse and
+verify can be measured separately.
+
+**The harness must run HEADFUL.** Headless Chrome announces itself in its user
+agent and client hints and Google answers 429 + a captcha page for every single
+query: measured, headless 429 / headful 200, same machine, same profile, same
+minute. Run headless and every row reads BLOCKED, which says nothing about the
+product. (`--headless` reproduces that; it is not for using.)
+
+### R28-1 - Scholar refuses us, and the card blamed the paper
+Scholar's budget, measured: a few dozen searches inside a few minutes and it
+**[CORRECTED IN R31: what is refused is a COOKIELESS request, not this IP.
+The same browser with Scholar's own cookies answers 14 of 15 queries at a
+reader's pace. The measurement below stands for the cookieless shape only.]**
+
+answers **429 with a captcha page** — and R29 later measured how long that
+lasts: a probe every three minutes for 57 minutes, 429 every single time, from
+Node and from the browser alike. A reader
+clicking through a bibliography can reach that, and every 429 became "From this
+document's bibliography" - the one message that makes a user who can see the
+paper on Scholar conclude the feature is broken.
+
+- `fetchSearchPage` now recognises a refusal (429/503, or the captcha markers in
+  a 200 body) and `lookup` returns `SCHOLAR_UNAVAILABLE` instead of null. The
+  card says "Google Scholar is rate-limiting lookups - showing this document's
+  entry", and the Scholar pill next to it still carries the enriched query.
+- A refusal is never cached and never persisted: it is a fact about Scholar's
+  mood, not about the reference, so the next click tries again. A no-match IS a
+  fact and stays cached.
+- Header shaping was tried first and rejected: a session `declarativeNetRequest`
+  rule removing `Origin` / `Sec-Fetch-*` and setting a `Referer` changed nothing
+  (still 429). The 429 was the headless UA, and there is nothing to work around
+  in the product.
+  **[R31: that probe ran headless AND on a profile that had never visited
+  Scholar, so its `credentials:"include"` arm had no cookies to send. The
+  conclusion it supported — that nothing about the request can be changed — is
+  WRONG. The cookie jar is exactly what Scholar checks, and with it the same
+  request answers.]**
+
+### R28-2 - the precise query returned an EMPTY page
+R24 narrowed the query to title + first-author surname + year for precision.
+Scholar ANDs those over the full text, so one wrong term returns NOTHING: a year
+that differs from the one Scholar indexed (preprint vs journal), an author
+spelled differently, a title the text layer mangled. Measured on one paper's
+first 12 entries, the strict query returned zero results for 8 while a looser
+one returned a full page for 5 of them.
+
+`lookup` now walks a ladder and stops at the first VERIFIED result: (1) title +
+author + year, (2) the title alone. At most two requests, and only when the
+first found nothing.
+
+Loosening is safe now for the reason it was not in R24: `bestMatch` verifies
+every candidate against the reference, so precision comes from the verifier, not
+from the query. The enriched query stays FIRST only because it ranks the cited
+work onto page one.
+
+`CANDIDATES` also went 5 -> 10: Scholar returns ten, scoring the other five
+costs nothing, and a work that ranks sixth was being reported as absent.
+
+### R28-3 - the query carried things that are not the paper
+A paper is indexed under its title and authors. What was reaching Scholar:
+
+- **The venue instead of the title.** `SENTENCE_SPLIT` required a title to start
+  with a capital, so "5GReasoner: ...", "5G SUCI-Catchers: ..." and "{DoLTEst}:
+  ..." never split from the author block and the NEXT sentence - the venue -
+  became the title. Those papers could not be found by any query. Now a digit
+  run of one to three followed by a letter, or a brace, also starts a title;
+  four digits still does not (it is the year of an ACM-format entry). A closing
+  brace or paren before the period is a sentence end too ("...in {PIR}. In 30th
+  USENIX..."). Square brackets are deliberately NOT title starts - IEEE entries
+  mark their link with one ("[Online]. Available: ...").
+- **A preprint id as the title.** `APA_PERIOD` matched the ACM Reference
+  Format's trailing year and captured "arXiv:1607" (its capture cannot cross a
+  period). A title must now have two words.
+- **A spec number as the title.** "3GPP. TS 33.331 version 17.2.0 . 2022. 5G NR;
+  Radio Resource Control (RRC)..." has three sentences before the title. The
+  split now takes the first sentence that reads like a title (two words of 3+
+  letters) and is not a venue form (`VENUE_START`); when none qualifies the
+  whole entry is used, as before - a venue is worse than an unsplit entry. A
+  bare "In" is not a venue form: "In search of an understandable consensus
+  algorithm" is a title.
+- **A 290-character quoted title.** `QUOTED_TITLE` capped the quote at 200
+  chars, so IEEE standards fell through to the sentence split. Cap raised to 320.
+- **Links, DOIs, braces and venue tails, on the query side.** `queryText` cuts
+  a venue tail at a sentence end ("... (TLS). RFC 7858, May 2016"), and strips
+  URLs, DOIs and BibTeX casing braces.
+
+Measured over both corpora (14 public + 29 private documents, 2316 entries):
+**42 entries went from a venue to a real title, 0 the other way**, 117 titles
+changed in all, and every document's entry count and citation-resolution count
+is IDENTICAL. `[Online]` and a wrapped URL ("https://www. 3gpp.org/...") each
+cost a first attempt at this and are why the rule is as narrow as it is.
+
+### R28-4 - the verifier rejected papers it should have accepted
+Four defects, each found by reading the score breakdown rather than the verdict:
+
+- **A dropped ligature.** Some PDFs have no mapping for the f-ligature glyph, so
+  the text layer leaves a gap: "Certified email" arrives as "Certi ed email",
+  "efficient" as "e cient". Dice then scores the paper ~0.4 against its own
+  title, under the floor. `healLigatureGaps` rejoins a fragment pair when a
+  ligature explains the gap AND the other title contains the word that results -
+  so it can restore a match, never invent one.
+- **A title Scholar printed truncated** ("...for security..."): both sides are
+  now cut to the shorter one's length before scoring.
+- **A surname the text layer cut short.** TeX accent composition truncates a
+  name at the accented letter ("Fiterau-Brostean" reaches the parser as "Bro"),
+  losing the author bonus on exactly the papers whose authors have accented
+  names. The byline test now matches a prefix - with a three-letter minimum, or
+  every initial in a byline would "match" every surname starting with that
+  letter.
+- **The year, read from the wrong place.** It took the LAST year in the byline;
+  a venue carries its own ("2019 IEEE Symposium on Security and Privacy, 2019").
+  Any year within one now counts.
+
+### R28-5 - requests spent on things that are not papers, and spent twice
+- An entry that is a name and a link ("Amarisoft. https://www.amarisoft.com/.")
+  is a tool or a website. Scholar answers with nothing or with ten unrelated
+  papers, and the request comes out of the budget above. `isSearchable` sends
+  those straight to the bibliography entry: **75 of 2316 entries (3%)**, none of
+  which could ever have matched. Only entries carrying a link are judged, so a
+  short real title ("Applied cryptography") is unaffected.
+- The cache was a per-page `Map`, so reopening a paper spent the whole budget
+  again from zero - and rereading a paper is the normal case.
+  `references/lookup-cache.mjs` keeps results in `chrome.storage.local` keyed by
+  query: a match for 30 days, a miss for 7 (a preprint indexed next week
+  deserves another ask), a refusal never. 500 entries, evicted oldest-first via
+  a small index key. Local only - `storage.local` does not sync - and clearable
+  from the options page ("Clear stored lookups"), because a persistent cache the
+  user cannot clear is a trap.
+
+### Verification
+- `npm test`: **158/158** and `Naming guard passed` (was 143). 15 new in
+  `test/unit/scholar.test.mjs` - the venue tail, links and DOIs and braces out
+  of the query, the name+link skip, the ladder's shape, both ligature directions
+  (including that a repair cannot invent a match), the truncated title, the
+  cut-short surname, an initial NOT counting as an author, the year anywhere in
+  the byline - and a new `test/unit/lookupcache.test.mjs` (key stability, the
+  two TTLs, a stored query guarding against a hash collision).
+- `test/e2e.mjs`: ALL CHECKS PASSED, including the citation card - and its body
+  now reads "Google Scholar is rate-limiting lookups...", which is the R28-1
+  message being right about a headless browser being refused.
+- `test/cachecheck.mjs` (new): ALL 13 CHECKS PASSED. It replaces `fetch` in the
+  page with a counter serving a synthetic result page, so the request COUNT is
+  the assertion and Scholar is never contacted - which also makes it the one
+  harness that still works while Scholar is refusing us. It pins the two
+  behaviors that would otherwise only have been read off the source: a card's
+  three lookups cost ONE request and a second page load costs ZERO, and an
+  EMPTY page for the enriched rung falls through to the title alone and finds
+  the paper in exactly two requests (R28-2, verified without the live service).
+  Also that a 429 is reported as unavailable, is never stored, and is retried on
+  a later load.
+- `test/optionscheck.mjs` (new): ALL CHECKS PASSED - the options page loads with
+  the cache module imported, a match / a remembered miss / a never-asked query
+  read back as three distinct answers, "Clear stored lookups" empties the store,
+  console silent.
+- Parse regression: `test/parsediff.mjs` over 14 public + 29 private documents,
+  before vs after, comparing every entry's title and surname, not just the
+  counts (above).
+- **Not done, and needed before any version bump:** this round touched
+  `parser.mjs`, so the release gate's steps 2-5 (both corpora rendered and
+  LOOKED at, console silent) apply and have not been run.
+- The ladder's end-to-end recall on real papers was left unmeasured here,
+  because Scholar refused every request for the rest of the session (the
+  57-minute measurement above). R29 then replaced the Scholar lookup outright,
+  so it was never taken and is moot: `citelookup.mjs` now measures the SOURCE
+  ladder, and R29-1 carries the numbers. The query ladder itself is verified
+  deterministically instead, in `test/cachecheck.mjs`, with no service in the
+  loop.
+
+## Round 29 (R29) - the card stopped asking Google Scholar
+
+User: "instead of searching Google Scholar, fetch the paper from other sources
+and label the source."
+
+R28 made the Scholar lookup as good as scraping Scholar can be, and R28-1 is why
+that ceiling is low: Scholar has no API, the only way to read it is to parse its
+result page, and it answered our requests with 429 + a captcha — a probe every
+three minutes for 57 minutes, 429 every time, from Node and from a browser
+alike.
+
+**[R31 corrects what that measured: every one of those probes was COOKIELESS,
+and a cookieless request is what Scholar refuses. The same browser, after one
+visit to scholar.google.com, answers 14 of 15 queries at a reader's pace. The
+switch below is still right, but for the other reasons: no cookie, no key, no
+terms to breach, and structured metadata instead of a page to parse.]**
+
+So the lookup now asks services that are meant to be asked, and the card says
+which one answered.
+
+### R29-1 - four sources, in a measured order
+`references/sources.mjs` replaces `references/scholar.mjs`. The scraping,
+the captcha detection and the cluster-id BibTeX are gone; the query building and
+the verification moved to `references/matching.mjs`, unchanged in behavior and
+now shared by every source.
+
+The order exists to make the FEWEST requests, and each rung runs only when the
+ones before it returned nothing that VERIFIES. Measured over 39 real references
+(entries 25-63 of the USENIX baseline paper), 38 of which resolve:
+
+| rung | what it is | matched |
+|---|---|---|
+| arXiv by id | the `arXiv:2409.02905` the entry prints - one request names the work | 2 |
+| DOI | OpenAlex by DOI, Crossref if it has nothing - the entry named the record | 0 (this paper prints few) |
+| Crossref `query.bibliographic` | the purpose-built citation matcher, widest DOI coverage | 28 |
+| OpenAlex `title.search` | records Crossref has in another form, plus OA PDFs and citation counts | 5 |
+| OpenAIRE | the venues that register NO DOI - USENIX Security, NDSS | 3 |
+
+**1.39 requests per matched reference.** 97% of the 39 matched (38); the one
+that did not is a GitHub tool, which has no paper to find.
+
+### R29-2 - the conference site, without scraping the conference site
+User: "can we just go to the conference site (e.g., USENIX.org) to get the most
+accurate results?"
+
+Measured: `usenix.org` answers a scripted request with **403**, and `dblp.org`
+with a bot-check page ("Making sure you're not a bot!"). Venue-by-venue
+scrapers would also mean one scraper per publisher, each breaking on its own
+schedule, and would only ever help where the entry names a venue we support.
+
+OpenAIRE is the same data without any of that: it collects DBLP, and the record
+it returns for a USENIX paper links **the paper's page on usenix.org**
+(`usenix.org/conference/usenixsecurity22/presentation/park-cheoljun`). Where
+DBLP has no such link the record points at its own page, so `openAireWork`
+prefers a non-aggregator URL when the record offers a choice.
+
+Semantic Scholar was measured for this rung first and rejected: it HAS these
+papers, but its keyless pool answered 429 to all four requests of an audit -
+a rung that always fails is two wasted requests per unmatched reference.
+
+### R29-3 - the card says where the record came from
+`.fx-scholar-foot` carries the cited-by count on the left and **"via Crossref"**
+(OpenAlex / arXiv / OpenAIRE), linking the record, on the right. The four know
+different things - the registered metadata, the citation graph and open-access
+copies, the preprint itself, the unregistered proceedings - so which one
+answered is part of reading the card.
+
+Also on the card now:
+- **A button to the paper's own page**, labelled by host (`usenix.org`,
+  `arxiv.org`, `dl.acm.org`). Shown when the record's landing page is not a
+  `doi.org` redirect, since that is the DOI pill's job. A conference paper page
+  is not a PDF and is where the abstract, slides and artifact live.
+- **[PDF]** is now an open-access copy the RECORD points at (OpenAlex's
+  `best_oa_location`, arXiv's own PDF), not a link scraped off a result page.
+- **Cite** is the publisher-registered BibTeX, fetched by DOI through Crossref
+  content negotiation. Better than what it replaced: Scholar's cite dialog was
+  keyed by the cluster id of the result shown, so a wrong match produced a wrong
+  BibTeX.
+- "Related articles" is gone - it was a Scholar result-page link.
+- The failure label is now "Couldn't reach the reference sources", and only
+  when NOTHING answered.
+
+### R29-4 - three defects the switch exposed
+Found by reading the score breakdown of the first audit's four misses:
+
+- **Crossref registers the subtitle separately.** Its `title` for the 5GReasoner
+  paper is literally "5GReasoner"; the rest is `subtitle`. A card built from
+  `title` alone scored one word against the reference's fifteen - the right
+  record, first hit, rejected. `crossrefWork` rejoins them.
+- **OpenAlex title search is AND over the indexed title**, and many of its
+  titles are the short form ("Breaking and Fixing VoLTE", "The Open-Source
+  LearnLib"). A full-title query misses exactly those records; the first four
+  words (stop words dropped) found all three of the misses that had one.
+- **A registered SHORT title is a prefix, not a superset.** `titleMatch` now
+  compares prefixes when one title is the opening of the other, and
+  `scoreResult` CAPS what that can earn (`PREFIX_CAP` 0.7) so it is accepted
+  only with both the author and the year - a prefix agreement alone must never
+  be enough, or "Applied pi calculus" becomes the short title of every paper
+  that starts with those words.
+
+### R29-5 - the rate limit, on our side of the wire
+- Every outgoing request is **serialized with a 350 ms floor** (`paced`). A
+  lookup is user-driven, so this is invisible; what it prevents is the burst a
+  person can still produce by clicking down a bibliography. Crossref's public
+  pool answered 429 to ~20 queries in 30 seconds during the first audit.
+- A 429/503 is **waited out once** (honouring `Retry-After`, capped at 3s) —
+  unlike Scholar's, these clear in about a second. Two of the first audit's four
+  misses were Crossref 429s reported as "not found".
+- `test/citelookup.mjs` waits **3 s between lookups by default**, and says why:
+  the product looks a reference up when a reader CLICKS it, so a harness that
+  fires a whole bibliography at once measures the services' burst limits instead
+  of our coverage.
+- **The requests carry the reader's own browser identity.** Measured on the
+  wire (`Network.requestWillBeSentExtraInfo`): a lookup goes out with the
+  browser's own User-Agent; `fetch` silently ignores a `User-Agent` header (it
+  is forbidden to page script); and declarativeNetRequest CAN set one - proved,
+  the wire showed `FixateScholar/1.0.7` - which is the lever to pull if we ever
+  want Crossref's polite pool. Not pulled: identifying as a tool is the opposite
+  of what a reader-driven request is.
+
+### Verification
+- `npm test`: **168/168** and `Naming guard passed`. `test/unit/scholar.test.mjs`
+  became `matching.test.mjs` (every R24/R28 regression test kept, still
+  passing), plus a new `test/unit/sources.test.mjs`: each source's documented
+  payload shape → the card shape, the identifier regexes, the abstract in both
+  of its forms, and the short-title cap in both directions.
+- `test/e2e.mjs`: ALL CHECKS PASSED - and the citation card body now reads
+  "Long Short-Term Memory / Sepp Hochreiter, Jürgen Schmidhuber - Neural
+  Computation" where in R28 it read "Google Scholar is rate-limiting lookups".
+  Headless, which Scholar refused outright.
+- `test/cachecheck.mjs`: 13/13, updated for the ladder - a DOI resolves in ONE
+  request with no search, a first source with only near-misses falls through in
+  exactly two, every source failing is UNAVAILABLE and retried later.
+- `test/citelookup.mjs` over 39 references: the table above.
+- **Not done, and needed before any version bump:** the release gate's steps 2-5
+  (both corpora rendered and LOOKED at, console swept). R28 touched `parser.mjs`
+  and R29 touches the card's DOM and CSS.
+
+## Round 30 (R30) - the abstract, the links, and where the seconds went
+
+User: "if the reference is a paper, include its abstract. If it includes a URL,
+make it clickable in the card. The current ref search seems too slow."
+
+### R30-1 - where the seconds went
+Measured first, per source, same references, from an extension page:
+
+| source | p50 | p90 | |
+|---|---|---|---|
+| Crossref | 485 ms | 1.36 s | fast, and answers most references |
+| OpenAlex | **8.3 s** | 9.1 s | mid-outage: 503s that took nine seconds to arrive |
+| OpenAIRE | 616 ms | 1.39 s | fast |
+
+End-to-end p50 was fine (478 ms - a Crossref hit) and the TAIL was not: a
+reference Crossref missed cost **4.5-4.9 s**, because the rungs ran one after
+another and a degraded OpenAlex spent nine seconds before OpenAIRE was asked.
+Three changes, in the order they matter:
+
+- **A per-request deadline** (`TIMEOUT`, 3.5 s, `AbortController`). A card is a
+  reader waiting with the popup open; no single service may hold it. 3.5 s is
+  well past both healthy p90s.
+- **503 no longer retries.** A 429 means "too fast" and clears in a second, so
+  waiting is how the card gets filled; a 503 means the service is unwell, and
+  1.2 s spent asking it again is 1.2 s the NEXT source could have spent
+  answering.
+- **The tail runs concurrently.** OpenAlex and OpenAIRE now go out together and
+  their candidates are pooled for the verifier, so a miss costs the SLOWER of
+  the two instead of the sum. Same two requests.
+
+**p90 4.9 s → 3.0 s**, max 4.9 s → 3.0 s, on the same references.
+
+### R30-2 - the pacer was quietly undoing the concurrency
+The anti-burst queue from R29-5 was GLOBAL, so the two tail requests went out
+359 ms apart - the very latency the concurrent tail exists to remove. It is now
+**per host**, which is also what a rate limit actually is: Crossref does not
+care how often OpenAlex is asked. Same 350 ms floor per service, and
+`cachecheck` now asserts the two tail requests start together (measured: 0 ms
+apart) rather than asserting a request count that no longer describes the
+design.
+
+### R30-3 - a failed source is not a "no match"
+Found while reading the latency numbers: if Crossref answered with nothing and
+the tail then timed out, `lookup` returned null and the cache remembered it -
+hiding the paper for the seven days a miss is stored. `lookup` now reports
+whether every rung ANSWERED, and only a complete lookup may be remembered as a
+no-match. Pinned in `cachecheck.mjs`.
+
+### R30-4 - the abstract (and the two things next to it)
+`abstract_inverted_index` was never in the OpenAlex field list, so OpenAlex
+abstracts were never even requested; Crossref carries only what the publisher
+deposited, which for conference papers is usually nothing (measured: not one of
+nine Crossref matches had one). So:
+
+- OpenAlex records now ask for the abstract and reconstruct it.
+- `fetchDetails(ref, record)` fills in BY DOI what a record arrived without -
+  exact, no matching needed - and the popup calls it AFTER rendering the card,
+  so it costs the reader nothing: the paper, its authors and its links are
+  already on screen. The record is updated in place and re-stored, so reopening
+  the paper has it immediately.
+- It fetches the abstract, the CITATION COUNT and an open-access PDF in the
+  same request, because they are three fields of one OpenAlex record. The
+  citation count was the one thing a Scholar card had that these sources did
+  not always carry (measured before this: 32 of 38 matches had one), and
+  closing that gap costs nothing extra. A PDF found here gets its pill added to
+  the actions row, which was built before the request answered.
+
+Measured over 14 references, 13 of them matched:
+
+| on the card | with the record | after `fetchDetails` |
+|---|---|---|
+| abstract | 3 | **12 (92%)** |
+| citation count | 13 | 13 (100%) |
+| open-access PDF | 6 | 7 (54%) |
+
+The detail request costs **91 ms at p50, 336 ms at worst**, while the reader is
+already looking at the card.
+
+(Google Scholar was never an alternative here: its result page carries a
+two-line ellipsed SNIPPET - the `.gs_rs` node the old scraper read - not an
+abstract. The abstract lives on the publisher page Scholar links to.)
+
+### R30-5 - the links in the entry
+The bibliography entry the card falls back to is now rendered with its URLs
+live (`linkParts`). It matters most exactly where there is no paper to look up:
+"Amarisoft. https://www.amarisoft.com/." IS the answer for that entry, and its
+link is the useful part.
+
+A URL that the PDF wrapped reaches the text layer with a space in it
+("https://github. com/jtpereyda/boofuzz"). The space is the page's, not the
+address's, so the LINK drops it while the text keeps showing what the document
+shows. Trailing sentence punctuation stays outside the link, a bare `www.` host
+gets a scheme, and something that is not a hostname ("TS 33.501 version 17.5.0")
+is left as prose. Five unit tests in `test/unit/popup.test.mjs`.
+
+### Verification
+- `npm test`: **173/173**, naming guard, patch check.
+- `test/cachecheck.mjs`: 15/15 - including the two new rules above (the tail
+  starts together; a failed tail is not remembered).
+- `test/e2e.mjs`: ALL CHECKS PASSED.
+- Latency, abstract and citation-count coverage: the numbers above, from
+  `lookupReference` + `fetchDetails` in an extension page over real entries.
+
+## Round 31 (R31) - the 429 was the cookie jar, not the IP (correcting R28-R30)
+
+User: "I think 429 is caused by headless chrome, try more realistic version."
+
+Right, and the conclusion it overturns was mine. R28-1 measured Scholar
+refusing us and concluded the block was on the IP and lasted an hour; R29 and
+R30 repeated that. **It was the request being cookieless.** Five shapes, one
+headful browser, twenty seconds apart, on the "blocked" IP:
+
+| shape | result |
+|---|---|
+| A navigation, fresh profile (no cookies) | captcha, "unusual traffic" |
+| landing on scholar.google.com | loads normally, sets its cookies |
+| **B same navigation, after that visit** | **9 results, no captcha** |
+| C extension fetch, `credentials: "omit"` (what shipped) | **429 + captcha** |
+| **D extension fetch, `credentials: "include"`** | **200, 10 results** |
+| E Node fetch, browser UA (what the earlier probes used) | 429 |
+
+And it sustains a bibliography: 15 distinct real queries, `credentials:
+"include"`, four seconds apart — **14 answered, p50 413 ms**, no captcha. (The
+fifteenth was a genuine zero-result query, HTTP 200.)
+
+### What was wrong, and where
+- "The block held for AT LEAST AN HOUR" — true only of COOKIELESS requests. The
+  same machine, same minute, with the browser's own cookies: answered.
+- "A reader clicking through a bibliography reaches that on their own" — a
+  reader's browser HAS Scholar's cookies (one visit is enough, and it is set by
+  simply opening Scholar). The blocked shape was ours, not theirs.
+- The R28 probe that compared `omit` with `include` and found no difference was
+  invalid twice over: it ran headless AND on a profile that had never visited
+  Scholar, so there were no cookies to include. It is in R28-1 as evidence; it
+  is not evidence.
+
+Corrected in `sources.mjs`, `README.md`, `REQUIREMENTS.md`, and inline in R28-1,
+R29 and R30.
+
+### What it does NOT change
+The reasons for R29's switch that survive the correction, unchanged:
+- The four sources answer with **structured metadata** — authors, year, DOI,
+  citation count, open-access PDF, abstract — where Scholar answers with a
+  result page to parse and a two-line ellipsed snippet.
+- They need **no cookie, no key, no account**, and their terms invite the use.
+  Scholar's terms prohibit automated access; doing it with the reader's cookies
+  makes every lookup attributable to their Google session and puts any
+  consequence on their account.
+- Coverage is **97%** of a real bibliography at **1.55 requests** per match,
+  measured, with an abstract on 92% and a citation count on 100%.
+
+So the lookup stays where it is. What changed is the honesty of the reason: it
+is not that Scholar cannot be read, it is that reading it costs the reader
+something the alternatives do not.
+
+### If it is wanted anyway
+A Scholar rung is now a known-workable option, and the decision is the
+maintainer's, not this round's. It would be: `credentials: "include"`, last in
+the ladder, behind an OFF-by-default setting that says plainly what it does —
+searches attributable to the reader's Google session, on a service that
+disallows it. What it would add over today: a citation count for the ~10% of
+matches whose record carries no DOI, and grey literature none of the four
+sources index. What it would cost: the scraping fragility R28 documented, and
+the reader's captcha risk.
+
+## Round 32 (R32) - Google Scholar as the default source, and disclosed
+
+Maintainer's call, on the reasoning that a lookup happening only when a reader
+CLICKS a citation is that reader's own search rather than automated access.
+Implemented as asked: Scholar first, the open databases as the fallback, both
+switchable, and the whole arrangement written down for the reader.
+
+### R32-1 - the source, and what makes it work
+`references/scholar.mjs` is back, as a source module rather than the whole
+lookup: `searchScholar` (one page, injected fetch so pacing/timeouts stay in
+sources.mjs), `readResults` (the `.gs_r`/`.gs_ri` parse), `scholarBibtex` (the
+cite dialog, for a match with no DOI), and the refusal test.
+
+Two properties make it usable, both about HOW the request is made:
+- **`credentials: "include"`.** Scholar refuses an anonymous request and
+  answers a cookie-bearing one (R31).
+- **One per click.** No crawl, no prefetch, no background pass.
+
+And one about the QUERY, measured: Scholar wants **the title alone**.
+"Attention is all you need" returns that paper first; "Attention is all you
+need Vaswani 2017" returns three unrelated recent papers and not the work at
+all - Scholar reads the extra terms as more topic, not narrower identity. This
+is the opposite of what Crossref's `query.bibliographic` wants, so the two
+rungs send different queries for the same reference. Safe because every
+candidate still goes through `bestMatch` (R24-1's rule): a bare title cannot
+promote the better-cited paper that merely contains those words.
+
+### R32-2 - a captcha is not a "no match"
+Scholar's refusal is usually **HTTP 200** with a body that says "Please show
+you're not a robot" while the page header still reports "About 34 results".
+Parsed naively that is zero results - which the ladder would read as "Scholar
+has nothing", cache as a no-match for seven days, and never retry. The refusal
+test now covers every wording seen (`gs_captcha`, "not a robot", "unusual
+traffic", "automated queries", `/sorry/index`), and a refusal falls through to
+the open databases and stores nothing. Unit-tested in
+`test/unit/scholarsource.test.mjs` (no DOM needed - the refusal is decided
+before the parse) and end-to-end in `cachecheck.mjs`.
+
+### R32-3 - what the fallback still does
+- Everything after Scholar is unchanged and is a complete lookup on its own:
+  arXiv by id, DOI, Crossref, then OpenAlex+OpenAIRE concurrently.
+- A Scholar match has **no DOI and no abstract** - `.gs_rs` is a query-biased
+  snippet, not an abstract. `fetchDetails` therefore looks the record up in
+  OpenAlex BY TITLE (verified against the reference before anything is copied),
+  and fills in the real abstract, the DOI, the citation count and an
+  open-access PDF after the card is on screen.
+- "Cite" is now a three-step ladder: the publisher-registered BibTeX by DOI,
+  then Scholar's own cite dialog for a Scholar match, then the locally
+  generated entry.
+
+### R32-4 - the settings, and the disclosure
+`scholarLookup` and `openSources`, both default ON, in Options → Reference
+lookups, each with a hint that says plainly what it means. With both off no
+lookup happens at all and the card shows the document's own entry.
+
+- **README gains a "Privacy: what leaves your computer" section**: the two
+  things that reach the network, a table of who sees a lookup and with what
+  cookies, the fact that a Scholar lookup is visible to Google the way that
+  reader's own searches are and is subject to Google's terms, what is cached
+  locally and how to clear it, and how to turn either half off.
+- **README gains "No affiliation, no warranty"**: not affiliated with,
+  endorsed by or connected to Google, arXiv, Crossref, OpenAlex, OpenAIRE,
+  Mozilla/PDF.js or any publisher; marks belong to their owners; provided AS IS
+  under Apache-2.0; the reader is responsible for their own use of the
+  third-party services, including their terms.
+- **THIRD_PARTY_NOTICES gains a "Reference lookup services" table**: each
+  service, its endpoint, a link to its terms, and what is fetched - with the
+  note that no code from them is bundled or redistributed.
+
+(What is deliberately NOT written anywhere: any claim that this arrangement is
+permitted by Google's terms, or that publishing carries no risk. That is a
+judgement for the maintainer, not something a README can assert.)
+
+### Verification
+- `npm test`: **176/176**, naming guard, patch check. New
+  `test/unit/scholarsource.test.mjs`.
+- `test/cachecheck.mjs`: **18/18**, updated for the new ladder - Scholar is the
+  first source asked, its captcha falls through to the databases, a DOI still
+  spends no search, the tail still goes out concurrently, and a card's three
+  lookups are still ONE request.
+- `test/e2e.mjs`, `test/optionscheck.mjs`: ALL CHECKS PASSED.
+- Live coverage over 20 real references: **95% matched** — but every match came
+  from the fallback, because this machine's address is currently captcha-walled
+  by Scholar (see below). The fallback carrying the whole feature while Scholar
+  refuses is exactly the behavior this round is meant to have.
+
+### The measurement this round could not make
+Scholar has been serving this address a captcha for every search - **including a
+normal tab navigation typed by a person** - since some point during this
+session's testing (~150 searches). So the Scholar rung's real-world hit rate is
+unmeasured here. What is known: earlier the same profile answered 14 of 15
+cookie-bearing queries at a reader's pace, and the parse and verification are
+covered by the offline tests. A fresh address should be used to measure it.
+
+## Round 33 (R33) - an abstract on a Scholar card, a private page cache, and a reader's pace for Scholar
+
+### R33-1 - Scholar cards get a real abstract
+Scholar's result page has no abstract to give: `.gs_rs` is a two-line,
+query-biased fragment with ellipses, and the page carries no DOI to ask anyone
+else about. So a Scholar match is completed the same way every other incomplete
+record is - `fetchDetails`, after the card is on screen - except that with no
+DOI it finds the record in OpenAlex **by title**, and VERIFIES it against the
+reference before copying anything across. The abstract, the DOI, the citation
+count and an open-access PDF all arrive from that one request.
+
+Pinned in `cachecheck.mjs`, deterministically, with no service involved: a
+Scholar match arrives with `snippetIsAbstract: false` and a snippet, and ends
+with the paper's own abstract and the DOI Scholar never gave.
+
+**And the converse, which was a real defect.** `snippetIsAbstract` was set only
+by scholar.mjs, so a Crossref or OpenAlex record - which arrives WITH its
+abstract - looked incomplete too, and every card would have spent a second
+request re-fetching what it already had. `preview()` now sets the flag whenever
+the source supplied an abstract, and `cachecheck` asserts that such a record
+asks for nothing more (`extra: 0`).
+
+### R33-2 - the pacing, and then its removal from the reader path
+This round first made the floor per-host in VALUE as well as in queue (350 ms
+for the APIs, 1500 ms for Scholar, jittered) — and then took it out of the
+reader's path entirely, which is the right answer and the maintainer's:
+
+**A reader's lookup gets no delay at all.** The click IS the rate limit:
+nothing here runs on its own, so there is no burst to smooth out, and a floor
+only makes the card slower for the person who asked for it. Measured in
+`cachecheck.mjs`: a lookup's four requests now start within 1 ms of each other,
+and that check exists so a floor cannot come back unnoticed.
+
+What remains costs a reader nothing — the cache (a repeat click is free), one
+lookup per reference however many times the card asks for it, the ladder
+stopping at the first verified match, the 3.5 s deadline, and the single retry
+on a 429. Requests to ONE service still queue behind each other, which adds no
+time and keeps the ladder's order readable; different services never wait on
+each other, which is what keeps the concurrent tail concurrent.
+
+The delay now lives only where the bursting actually happens — automated
+testing. `globalThis.__fxRequestGap` (set by `citelookup --gap=`, default 0 so
+a harness matches the product by default), the harnesses' own sleeps between
+references, and `scholarcache` recording at 6 s with jitter, stopping at the
+first refusal rather than pushing through it.
+
+### R33-3 - a private cache of real Scholar pages
+Scholar answers a limited number of searches from an address and then serves a
+captcha to everything - including a person's own tab - for hours. That makes the
+Scholar rung unmeasurable exactly when you want to measure it, which is what
+happened in R32.
+
+`test/lib/scholar-cache.mjs` + `test/scholarcache.mjs`:
+
+- **record** - one page per reference, headful, cookies warmed by a visit to
+  scholar.google.com first, at the pace above; saved raw under
+  `local/scholar-cache/`. `--wait=<minutes>` polls until Scholar is answering
+  again and records then.
+- **replay** - the shipping parse and verification over the recorded pages,
+  in an extension page, with NO network. This is the Scholar hit rate:
+  repeatable, offline, and free.
+- **status** - what is in the cache.
+
+`local/` is git-ignored in BOTH `.gitignore` and `.git/info/exclude`, the same
+belt-and-braces the private review corpus uses, so a recorded page cannot reach
+the repository by editing one file. The pages are Google's content fetched with
+the machine owner's own cookies: they stay on that machine, like a browser
+cache, and nothing derived from them is committed.
+
+### Verification
+- `npm test`: **176/176**, naming guard, patch check.
+- `test/cachecheck.mjs`: **21/21** - the three new Scholar-abstract checks and
+  the no-needless-request converse, on top of R32's ladder checks.
+- Recording is queued against the current block (`--wait=180`); the Scholar
+  rung's live hit rate is still the open measurement from R32, and `replay` is
+  how it gets taken once a page or two is in the cache.
+
+## Round 34 (R34) - two bibliographies in one PDF (user report)
 
 Reported on a private-corpus paper: citations were not linked, and the
 reference list was emphasized as body prose. Both symptoms, one cause.
 
-### R28-1 (HIGH) - only the LAST reference list was ever found
+### R34-1 (HIGH) - only the LAST reference list was ever found
 
 `findHeadingIndex` searched from the END of the document for a "References"
 heading, skipping y-clustered running heads (R19), and returned ONE index. That
@@ -2512,7 +3210,7 @@ System Card's `[1]` (Tamkin et al.) instead. After: 190 entries, both lists.
   an entry or a resolution.
 - `papers.mjs` corpus gate, `test/highlights.mjs`.
 
-## Round 29 (R29) - a highlight you can say something about (user request)
+## Round 35 (R35) - a highlight you can say something about (user request)
 
 Requested: highlights and COMMENTS, with the saved PDF readable by other tools.
 
