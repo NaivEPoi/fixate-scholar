@@ -2492,7 +2492,8 @@ export class TypographyEngine {
       }
       // Block classification (#classifyBlocks) owns content-type: anything not
       // body text — headings, captions, tables, figures, equations — is here.
-      if (skipSet.has(div)) return false;
+      // #classifyBlocks already recorded its own, more specific reason here.
+      if (skipSet.has(div)) return reject(div, "block");
       // Backup net for an over-sized heading/title the block pass let through.
       // Only the LARGER-than-body cut remains: a smaller-than-body cut would
       // drop legitimate small body text (footnotes, and appendices or notes set
@@ -2537,7 +2538,7 @@ export class TypographyEngine {
         if (inBand(y) && !bandOK.has(Math.round(y))) return reject(div, "margin-band");
         if (x - vx0 < pageW * 0.04) return reject(div, "left-margin");
         if (contentStart) {
-          if (pageNumber < contentStart.page) return false;
+          if (pageNumber < contentStart.page) return reject(div, "front-matter");
           // Front matter is what sits ABOVE the Abstract line — cut strictly
           // above it (more than half a line). In two-column layouts the other
           // column's first body line shares the Abstract lead's baseline
@@ -2549,10 +2550,10 @@ export class TypographyEngine {
             pageNumber === contentStart.page &&
             y >= contentStart.y + (contentStart.h || 9) * 0.6
           ) {
-            return false;
+            return reject(div, "front-matter");
           }
         }
-        if (inRefsBox(item)) return false;
+        if (inRefsBox(item)) return reject(div, "refs-region");
         // Running head or foot (document-wide repetition, setFurniture). The
         // margin cut above only reaches a one-line head: a three-line title
         // block repeated at the top of every odd page sat below it at 7pt and
