@@ -380,6 +380,21 @@
   margin-bottom: 5px;
 }
 
+/* Cited-by on the left, "via <source>" on the right: the record's own
+   provenance, so a reader can see which service the card came from. */
+.fx-scholar-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+
+.fx-scholar-via {
+  color: light-dark(#5f6368, #9aa0a6);
+  font-size: 11px;
+  margin-left: auto;
+}
+
 .fx-pill {
   display: inline-block;
   padding: 5px 12px;
@@ -390,6 +405,12 @@
 .fx-pill:hover {
   text-decoration: none;
   background: light-dark(#f1f3f4, #3c4043);
+}
+
+/* The paper page on the publisher/venue site — a destination, so it reads as
+   one: the host name, not a generic label. */
+.fx-pill-venue {
+  font-variant-numeric: tabular-nums;
 }
 
 .fx-pill-primary {

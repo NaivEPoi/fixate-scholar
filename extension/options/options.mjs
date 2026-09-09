@@ -1,4 +1,5 @@
 import { getSettings, setSettings } from "../viewer/settings-client.mjs";
+import { clearCached } from "../viewer/references/lookup-cache.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -13,12 +14,16 @@ $("boldWeight").value = settings.boldWeight;
 $("saccade").value = settings.saccade;
 $("intercept").checked = settings.intercept;
 $("flowCopy").checked = settings.flowCopy;
+$("scholarLookup").checked = settings.scholarLookup;
+$("openSources").checked = settings.openSources;
 $("annotationAuthor").value = settings.annotationAuthor;
 $("bypassOrigins").value = settings.bypassOrigins.join("\n");
 
 $("enabled").addEventListener("change", (e) => setSettings({ enabled: e.target.checked }));
 $("intercept").addEventListener("change", (e) => setSettings({ intercept: e.target.checked }));
 $("flowCopy").addEventListener("change", (e) => setSettings({ flowCopy: e.target.checked }));
+$("scholarLookup").addEventListener("change", (e) => setSettings({ scholarLookup: e.target.checked }));
+$("openSources").addEventListener("change", (e) => setSettings({ openSources: e.target.checked }));
 $("emphasisMode").addEventListener("change", (e) => {
   $("fractionRow").style.display = e.target.value === "fraction" ? "" : "none";
   setSettings({ emphasisMode: e.target.value });
@@ -41,4 +46,10 @@ $("bypassOrigins").addEventListener("change", (e) => {
     .map((s) => s.trim().replace(/^https?:\/\//, "").replace(/\/.*/, ""))
     .filter(Boolean);
   setSettings({ bypassOrigins: [...new Set(origins)] });
+});
+
+$("clearLookups").addEventListener("click", async () => {
+  await clearCached();
+  $("clearLookupsOut").textContent = "Cleared.";
+  setTimeout(() => ($("clearLookupsOut").textContent = ""), 2000);
 });

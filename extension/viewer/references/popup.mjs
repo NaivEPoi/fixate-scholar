@@ -1,24 +1,59 @@
 // Citation popup. Two modes:
 //  - hover: quick local preview of the reference entry text (auto-hides)
-//  - click: pinned card, like the Google Scholar reader — title linking to
-//    the paper, byline, abstract snippet, cited-by, and actions ([PDF], Cite
-//    → BibTeX, Related, Google Scholar, DOI), with a pager when one in-text
-//    citation resolves to several entries. Clicking a citation never scrolls
-//    the PDF to the bibliography. Dismissed by ✕, Escape, or clicking outside.
+//  - click: pinned card — title linking to the paper, byline, abstract
+//    snippet, cited-by, WHICH SOURCE answered, and actions ([PDF], Cite →
+//    BibTeX, Google Scholar, DOI), with a pager when one in-text citation
+//    resolves to several entries. Clicking a citation never scrolls the PDF to
+//    the bibliography. Dismissed by ✕, Escape, or clicking outside.
+//
+// The source line is not decoration: the card's contents come from arXiv,
+// Crossref, OpenAlex or OpenAIRE (sources.mjs), the four know different
+// things, and a reader judging whether to trust a card should be able to see
+// which one it came from.
+//
+// A card renders as soon as the record verifies, and fills in afterwards: the
+// abstract, the citation count and an open-access copy are one further request
+// (`fetchDetails`), and the reader should not wait for them to see the paper.
 
 import { bibAuthors } from "./parser.mjs";
-import {
-  fetchScholarPreview,
-  fetchScholarBibtex,
-  referenceQuery,
-  scholarSearchUrl,
-} from "./scholar.mjs";
+import { referenceQuery } from "./matching.mjs";
+import { fetchBibtex, fetchDetails, lookupReference, scholarSearchUrl } from "./sources.mjs";
+
+/** A URL as a PDF prints it, line wrap and all. A wrapped link reaches the
+ *  text layer with a space in it ("https://github. com/x/y") — the space is
+ *  the page's, not the address's, so the LINK drops it while the text keeps
+ *  showing what the document shows. Trailing sentence punctuation is not part
+ *  of the address either. */
+const ENTRY_URL = /\b(?:https?:\/\/|www\.)[^\s]*(?:\s(?=[^\s]*[/.][^\s]))?[^\s]*/gi;
+
+/**
+ * `text` split into plain runs and link runs: `[{text}, {text, href}, …]`.
+ *
+ * Exported for its unit test — the interesting cases (a wrapped URL, a URL
+ * ending a sentence, a bare `www.`) are all string handling, and none of them
+ * need a DOM to check.
+ */
+export function linkParts(text) {
+  const parts = [];
+  let at = 0;
+  for (const m of String(text).matchAll(ENTRY_URL)) {
+    const shown = m[0].replace(/[.,;)\]]+$/, "");
+    if (!shown) continue;
+    const href = shown.replace(/\s+/g, "");
+    if (!/[a-z0-9]\.[a-z]{2}/i.test(href)) continue; // not a hostname after all
+    if (m.index > at) parts.push({ text: text.slice(at, m.index) });
+    parts.push({ text: shown, href: /^www\./i.test(href) ? `https://${href}` : href });
+    at = m.index + shown.length;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at) });
+  return parts;
+}
 
 /** A BibTeX entry built from the locally parsed reference — the fallback when
- *  Scholar's own BibTeX can't be fetched, and (now that a lookup only returns a
- *  VERIFIED match) the normal result whenever Scholar has nothing convincing to
- *  offer. It has to stand on its own, so it carries the authors, title, year and
- *  DOI as parsed, with the entry verbatim in `note` so nothing is lost. */
+ *  there is no DOI to fetch the registered BibTeX for, which is the normal case
+ *  for a reference no source had a record of. It has to stand on its own, so it
+ *  carries the authors, title, year and DOI as parsed, with the entry verbatim
+ *  in `note` so nothing is lost. */
 function entryBibtex(entry, preview) {
   const surname = (entry.surname || "ref").replace(/[^A-Za-z]/g, "") || "ref";
   const key = (surname + (entry.year || "")).toLowerCase();
@@ -121,18 +156,47 @@ export class CitationPopup {
     } else if (this.#pinned) {
       body.append(this.#loadingNode());
       const shownIndex = this.#index;
-      fetchScholarPreview(entry).then((preview) => {
+      lookupReference(entry).then((preview) => {
         if (this.#el.hidden || this.#index !== shownIndex || !body.isConnected) return;
-        // No preview means Scholar was unreachable OR nothing on the result
-        // page was convincingly this reference. Either way the document's own
-        // entry is the truthful thing to show — labelled, so it is never
-        // mistaken for a lookup result.
+        // Three outcomes, and the label has to tell them apart. A verified
+        // match becomes a card. Otherwise the document's own entry is the
+        // truthful thing to show — but "no source had a record that is this
+        // reference" and "we could not reach them" are different statements,
+        // and showing the first when the second happened is what makes the
+        // feature look broken to someone who can see the paper themselves.
+        const card = preview && !preview.unavailable ? this.#recordCard(preview) : null;
         body.replaceChildren(
-          ...(preview
-            ? [this.#scholarCard(preview)]
-            : [this.#sourceNote("From this document's bibliography"), this.#rawEntry(entry)]),
+          ...(card
+            ? [card]
+            : [
+                this.#sourceNote(
+                  preview?.unavailable
+                    ? "Couldn't reach the reference sources — showing this document's entry"
+                    : "From this document's bibliography",
+                ),
+                this.#rawEntry(entry),
+              ]),
         );
         this.#position();
+        // What the record arrived without — its abstract, its citation count,
+        // an open-access copy. One more request, so it lands AFTER the card:
+        // the reader has the paper, its authors and its links already, and the
+        // rest fills in beneath.
+        if (card) {
+          fetchDetails(entry, preview).then((added) => {
+            if (!added || !card.isConnected || this.#index !== shownIndex) return;
+            card.replaceWith(this.#recordCard(preview));
+            // The actions row was built before this request answered, so an
+            // open-access copy found here still needs its pill.
+            const actions = this.#el.querySelector(".fx-cite-actions");
+            if (preview.pdfUrl && actions && !actions.querySelector(".fx-pill-primary")) {
+              actions.prepend(
+                this.#linkPill(`[PDF] ${preview.pdfHost}`, preview.pdfUrl, "fx-pill-primary"),
+              );
+            }
+            this.#position();
+          });
+        }
       });
     } else {
       body.append(this.#rawEntry(entry));
@@ -189,8 +253,17 @@ export class CitationPopup {
   #loadingNode() {
     const d = document.createElement("div");
     d.className = "fx-cite-loading";
-    d.textContent = "Looking up on Google Scholar…";
+    d.textContent = "Looking this reference up…";
     return d;
+  }
+
+  /** The paper's abstract. One node, whether it came with the record or landed
+   *  a moment later. */
+  #snippetNode(text) {
+    const snippet = document.createElement("div");
+    snippet.className = "fx-scholar-snippet";
+    snippet.textContent = text;
+    return snippet;
   }
 
   #sourceNote(text) {
@@ -203,7 +276,22 @@ export class CitationPopup {
   #rawEntry(entry) {
     const d = document.createElement("div");
     const raw = entry.raw || "";
-    d.textContent = raw.length > 360 ? raw.slice(0, 360) + "…" : raw;
+    // The entry as the document prints it — with its links live. An entry that
+    // is a tool or a dataset ("Amarisoft. https://www.amarisoft.com/.") has no
+    // paper to look up, so this text IS the answer, and its URL is the useful
+    // part of it.
+    for (const part of linkParts(raw.length > 360 ? raw.slice(0, 360) + "…" : raw)) {
+      if (!part.href) {
+        d.append(part.text);
+        continue;
+      }
+      const a = document.createElement("a");
+      a.textContent = part.text;
+      a.href = part.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      d.append(a);
+    }
     return d;
   }
 
@@ -214,7 +302,7 @@ export class CitationPopup {
     return d;
   }
 
-  #scholarCard(preview) {
+  #recordCard(preview) {
     const card = document.createElement("div");
     card.className = "fx-scholar-card";
     const title = document.createElement(preview.url ? "a" : "div");
@@ -232,12 +320,9 @@ export class CitationPopup {
       byline.textContent = preview.byline;
       card.append(byline);
     }
-    if (preview.snippet) {
-      const snippet = document.createElement("div");
-      snippet.className = "fx-scholar-snippet";
-      snippet.textContent = preview.snippet;
-      card.append(snippet);
-    }
+    if (preview.snippet) card.append(this.#snippetNode(preview.snippet));
+    const foot = document.createElement("div");
+    foot.className = "fx-scholar-foot";
     if (preview.citedBy) {
       const cited = document.createElement(preview.citedByUrl ? "a" : "span");
       cited.className = "fx-scholar-cited";
@@ -247,9 +332,53 @@ export class CitationPopup {
         cited.target = "_blank";
         cited.rel = "noopener noreferrer";
       }
-      card.append(cited);
+      foot.append(cited);
     }
+    // Which service answered. The three sources know different things — the
+    // registered metadata, the citation graph, the preprint — so this is part
+    // of reading the card, not a credit line.
+    if (preview.source) {
+      const via = document.createElement(preview.sourceUrl ? "a" : "span");
+      via.className = "fx-scholar-via";
+      via.textContent = `via ${preview.source}`;
+      via.title = `This record came from ${preview.source}`;
+      if (preview.sourceUrl) {
+        via.href = preview.sourceUrl;
+        via.target = "_blank";
+        via.rel = "noopener noreferrer";
+      }
+      foot.append(via);
+    }
+    if (foot.childElementCount) card.append(foot);
     return card;
+  }
+
+  /**
+   * The paper's own page on whoever published it — `{host, url}` — or null.
+   *
+   * A record's landing URL is a doi.org redirect most of the time, and that is
+   * already the DOI pill; what is worth its own button is the case where the
+   * record points straight at the venue (USENIX and NDSS register no DOIs, so
+   * OpenAIRE's link IS usenix.org), or at arXiv. The [PDF] pill is not a
+   * substitute: a conference paper page is not a PDF, and it is where the
+   * abstract, the slides and the artifact live.
+   */
+  #venueLink(preview) {
+    if (!preview?.url || preview.url === preview.pdfUrl) return null;
+    let host;
+    try {
+      host = new URL(preview.url).hostname.replace(/^www\./, "");
+    } catch {
+      return null;
+    }
+    if (host === "doi.org" || host === "dx.doi.org") return null;
+    return { host, url: preview.url };
+  }
+
+  /** A DOI pill. The slashes stay readable: only the parts that need escaping
+   *  are escaped, so the link reads as the DOI it is. */
+  #doiPill(doi) {
+    return this.#linkPill("DOI", `https://doi.org/${encodeURIComponent(doi).replaceAll("%2F", "/")}`);
   }
 
   #linkPill(text, href, extra = "") {
@@ -300,25 +429,27 @@ export class CitationPopup {
         actions.append(ref);
       }
 
-      // [PDF] (prepended, primary) and Related fill in once the preview lands.
-      fetchScholarPreview(entry).then((preview) => {
-        if (!actions.isConnected) return;
-        if (preview?.pdfUrl) {
+      // [PDF] (prepended, primary) fills in once the lookup lands — an
+      // open-access copy the record itself points at, not a guess. A DOI the
+      // lookup found and the entry did not print is worth a pill too.
+      lookupReference(entry).then((preview) => {
+        if (!actions.isConnected || !preview || preview.unavailable) return;
+        if (preview.pdfUrl) {
           actions.prepend(this.#linkPill(`[PDF] ${preview.pdfHost}`, preview.pdfUrl, "fx-pill-primary"));
         }
-        if (preview?.relatedUrl) {
-          actions.append(this.#linkPill("Related", preview.relatedUrl));
-        }
+        // The page the paper actually lives on, when the record names one:
+        // usenix.org/conference/…/presentation/… for a proceedings paper,
+        // arxiv.org/abs/… for a preprint. Labelled by host, so it says where
+        // it goes. A doi.org link is skipped — that is the DOI pill's job.
+        const venue = this.#venueLink(preview);
+        if (venue) actions.append(this.#linkPill(venue.host, venue.url, "fx-pill-venue"));
+        if (preview.doi && !entry.doi) actions.append(this.#doiPill(preview.doi));
       });
     }
 
     actions.append(this.#linkPill("Google Scholar", scholarSearchUrl(referenceQuery(entry))));
 
-    if (entry.doi) {
-      actions.append(
-        this.#linkPill("DOI", `https://doi.org/${encodeURIComponent(entry.doi).replaceAll("%2F", "/")}`),
-      );
-    }
+    if (entry.doi) actions.append(this.#doiPill(entry.doi));
     return actions;
   }
 
@@ -355,10 +486,16 @@ export class CitationPopup {
     el.append(panel);
     this.#position();
 
-    fetchScholarPreview(entry).then((preview) =>
-      fetchScholarBibtex(preview?.cid).then((bib) => {
+    // The publisher's own registered BibTeX, via the DOI — the entry's if it
+    // printed one, otherwise the DOI the lookup found. Falls back to a BibTeX
+    // built from the parsed entry, so "Cite" always yields something copyable.
+    lookupReference(entry).then((preview) =>
+      fetchBibtex(
+        entry.doi || (preview?.unavailable ? null : preview?.doi),
+        preview?.unavailable ? null : preview,
+      ).then((bib) => {
         if (!panel.isConnected) return;
-        ta.value = bib || entryBibtex(entry, preview);
+        ta.value = bib || entryBibtex(entry, preview?.unavailable ? null : preview);
         this.#position();
       }),
     );

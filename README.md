@@ -43,11 +43,14 @@ code, fonts, or assets.
   bracketed (`Church [1936]`, `Vergis et al. [1986]`, `van Emde Boas [1990]`) to their
   entries, and shows a hover preview of the entry.
   Citations and in-paper references (Figure/Table/Section/…) are marked in distinct,
-  high-contrast colors. Clicking a citation opens a pinned, Google-Scholar-reader-style
-  card — title linking to the paper, authors, abstract snippet, cited-by, and actions for
-  **[PDF]**, **Cite** (copyable BibTeX), **Related articles**, **Google Scholar**, and
-  **DOI** — with a pager for multi-citations like `[38, 24, 15]` that shows one card per
-  cited reference. It **never scrolls the PDF to the bibliography**, even for a citation
+  high-contrast colors. Clicking a citation opens a pinned reader-style card — title
+  linking to the paper, authors, abstract snippet, cited-by, **which source it came
+  from**, and actions for **[PDF]** (an open-access copy where one exists), **Cite**
+  (the publisher-registered BibTeX, fetched by DOI), **Google Scholar**, and **DOI** —
+  with a pager for multi-citations like `[38, 24, 15]` that shows one card per
+  cited reference. Every record is verified against the reference — title, first author,
+  year — before it is shown, so a card is either this paper or the document's own entry,
+  clearly labelled, and never a confident near-miss. It **never scrolls the PDF to the bibliography**, even for a citation
   whose entry couldn't be parsed (that shows an honest placeholder card instead).
 - **Copy a paragraph, get a paragraph**: a PDF stores typeset lines, so copying normally
   pastes the shape of the page — one fragment per line, hyphens and all
@@ -75,8 +78,89 @@ code, fonts, or assets.
   the fix a match rendered as an empty colored box, and searching stripped the bolding from
   every matched line for good.
 - Rendering is 100% local. The only network requests are fetching the PDF itself and,
-  when you *click* a citation, one Google Scholar search for that reference (same as
-  typing the query into Scholar yourself; cached per session, never automatic).
+  when you *click* a citation, one lookup for that reference — Google Scholar first,
+  then arXiv, Crossref, OpenAlex and OpenAIRE as fallbacks. Never automatic, never a
+  whole bibliography at once, and results are kept on your machine so reopening a
+  paper costs nothing. **The Scholar lookup carries your own Google cookies; the
+  others carry nothing.** Both are switchable in Options — see
+  [Privacy](#privacy-what-leaves-your-computer).
+
+## Privacy: what leaves your computer
+
+FixateScholar renders PDFs locally. Nothing is uploaded, no analytics, no
+telemetry, no account, no server of ours anywhere — there is no "our server" in
+this project at all. Two things reach the network, and only two.
+
+**1. The PDF itself.** The same request your browser would make for that URL.
+Local files never leave the machine.
+
+**2. One reference lookup, when you click a citation.** Not on hover, not on
+page load, not in the background, and never for a whole bibliography at once —
+one click by you is one lookup. What is sent is the reference's title, first
+author and year, as printed in the document's own bibliography. Results are
+cached on this computer (matches 30 days, misses 7) so reopening a paper sends
+nothing again, and **Options → Reference lookups → "Clear stored lookups"**
+empties that cache.
+
+### Who sees a lookup
+
+| Source | Default | What it receives | Cookies |
+|---|---|---|---|
+| **Google Scholar** | on | the search terms | **your own Google cookies** |
+| arXiv, Crossref, OpenAlex, OpenAIRE | on (fallback) | the search terms | none — anonymous |
+
+**Google Scholar is different, and you should know how.** It has no API, and it
+answers only requests that carry your browser's Google cookies — an anonymous
+request gets a captcha. So a lookup there is visible to Google the same way your
+own Scholar searches are, and if you are signed in to Google it is associated
+with that account. It is also subject to
+[Google's Terms of Service](https://policies.google.com/terms), which restrict
+automated access to their services; this extension only ever searches on your
+explicit click, but you are the one making the request, from your browser, with
+your session.
+
+The other four are public scholarly databases that take an anonymous request
+with no cookie, no key and no account. They see a title; they do not see you.
+
+### Your choices
+
+**Options → Reference lookups** has one checkbox per half:
+
+- **"Search Google Scholar first"** — turn it off to keep every lookup
+  anonymous. The open databases matched 97% of a real paper's references on
+  their own, so little is lost.
+- **"Use the open databases"** — turn it off to use only Scholar.
+- **Both off** — no lookup happens at all. Clicking a citation shows the
+  document's own bibliography entry, and nothing leaves your computer.
+
+### Stored on your computer
+
+Settings sync through your browser profile like any extension setting. The
+lookup cache uses `chrome.storage.local`, which does **not** sync: the record of
+what you looked up stays on the machine it happened on, ages out on its own, and
+is clearable from Options. Nothing about your reading — which papers, which
+pages, which citations — is recorded anywhere else.
+
+## No affiliation, no warranty
+
+FixateScholar is a free, open-source, independent project. **It is not
+affiliated with, endorsed by, sponsored by or connected to Google, Google
+Scholar, arXiv, Crossref, OpenAlex, OpenAIRE, Mozilla/PDF.js, or any publisher,
+university or venue whose content it displays.** All product names, trademarks
+and service marks belong to their respective owners and are used only to
+identify the services being queried (see `TRADEMARKS.md`).
+
+The extension queries those services as a user's browser does. It has no
+agreement with any of them; they may change, rate-limit, refuse, or discontinue
+access at any time, and any of that will simply make a citation card show the
+document's own bibliography entry instead.
+
+**Provided "AS IS", without warranty of any kind**, as stated in the Apache-2.0
+`LICENSE` that governs this software. You use it at your own risk, and you are
+responsible for your own use of the third-party services it can query —
+including compliance with their terms. If you would rather not query Google
+Scholar at all, turn it off in Options; the extension is fully functional
+without it.
 
 ## Install (from source)
 

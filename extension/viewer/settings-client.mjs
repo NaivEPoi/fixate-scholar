@@ -28,6 +28,20 @@ export const DEFAULTS = Object.freeze({
   // behavior — the page's line breaks, verbatim. Independent of `enabled`; the
   // reflow is about the text, not the typography.
   flowCopy: true,
+  // Where a clicked citation is looked up. Both are on by default and either
+  // can be turned off; with both off, a card shows the document's own entry
+  // and nothing leaves the machine.
+  //
+  // `scholarLookup` — Google Scholar first. It is the widest index and the one
+  // that has a citation count for everything, and it answers only a request
+  // carrying the reader's own Google cookies, so these lookups are visible to
+  // Google the way that reader's own searches are (README, "Privacy").
+  //
+  // `openSources` — arXiv, Crossref, OpenAlex and OpenAIRE, which need no
+  // cookie, no key and no account. Used when Scholar is off, refuses, or has
+  // nothing that verifies, and to fill in the abstract Scholar never provides.
+  scholarLookup: true,
+  openSources: true,
   // The name written as the author (/T) of highlights and comments saved into
   // the PDF. Empty leaves the field out, which is what PDF.js does on its own.
   annotationAuthor: "",

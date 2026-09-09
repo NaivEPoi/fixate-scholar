@@ -76,6 +76,30 @@
     page.</p>
   </label>
 
+  <h2>Reference lookups</h2>
+  <p class="hint">Clicking a citation looks that one reference up — nothing is
+  sent unless you click, and never for a whole bibliography at once. The card
+  names the service that answered. Results are kept on this computer so
+  reopening a paper costs no further lookups (matches for 30 days, misses for
+  7); nothing is synced anywhere.</p>
+  <label>
+    <input type="checkbox" id="scholarLookup"> Search Google Scholar first
+    <p class="hint">The widest index, and the only one with a citation count for
+    everything in it. <strong>It answers only requests that carry your own
+    Google cookies</strong>, so these lookups are visible to Google the way your
+    own Scholar searches are, and are subject to Google's terms. Turn this off
+    to keep every lookup anonymous.</p>
+  </label>
+  <label>
+    <input type="checkbox" id="openSources"> Use the open databases
+    <p class="hint">arXiv, Crossref, OpenAlex and OpenAIRE — no cookie, no
+    account, no key. Used when Google Scholar is off, is unavailable, or has
+    nothing that matches the reference, and to fetch the abstract that Scholar
+    does not provide. With both boxes off, a citation card shows the document's
+    own bibliography entry and nothing leaves this computer.</p>
+  </label>
+  <button type="button" id="clearLookups">Clear stored lookups</button>
+  <output id="clearLookupsOut"></output>
   <h2>Highlights &amp; comments</h2>
   <label>
     Your name on annotations
