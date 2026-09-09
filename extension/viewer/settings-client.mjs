@@ -28,6 +28,9 @@ export const DEFAULTS = Object.freeze({
   // behavior — the page's line breaks, verbatim. Independent of `enabled`; the
   // reflow is about the text, not the typography.
   flowCopy: true,
+  // The name written as the author (/T) of highlights and comments saved into
+  // the PDF. Empty leaves the field out, which is what PDF.js does on its own.
+  annotationAuthor: "",
 });
 
 const hasStorage = typeof chrome !== "undefined" && chrome.storage?.sync;

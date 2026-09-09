@@ -18,8 +18,35 @@ const YEAR = /\b(19|20)\d{2}[a-z]?\b/;
  * @returns {entries: Array<{label:string|null, number:number|null, raw:string,
  *           title:string, page:number, y:number}>} or empty list
  */
+export function parseReferenceSections(lines) {
+  const sections = findReferenceSections(lines).map((s) => ({
+    ...s,
+    entries: entriesFromBody(s.body),
+  }));
+  if (globalThis.__fxDebug) {
+    globalThis.__fxRefDebug = { ...(globalThis.__fxRefDebug ?? {}), sections: sections.length }; // test introspection
+  }
+  return sections;
+}
+
+/**
+ * Every section's entries in one flat list, each tagged with its `section`
+ * index. Document order matters: a bare "[3]" with no page context resolves to
+ * the FIRST section holding a [3], which is the article's own list rather than
+ * a supplement's — callers that know the citing page should narrow the pool by
+ * section first (citations.mjs #entriesForPage).
+ */
 export function parseReferences(lines) {
-  const { body } = findReferencesBody(lines);
+  const out = [];
+  const sections = parseReferenceSections(lines);
+  for (let i = 0; i < sections.length; i++) {
+    for (const e of sections[i].entries) out.push({ ...e, section: i });
+  }
+  return out;
+}
+
+/** Entries out of ONE section's body lines. */
+function entriesFromBody(body) {
   if (body.length < 2) return [];
 
   const numericStarts = body.filter((l) => NUMERIC_MARKER.test(l.text)).length;
@@ -45,8 +72,13 @@ export function parseReferences(lines) {
   return entries;
 }
 
-function findHeadingIndex(lines) {
-  // Search from the end — "References" may also appear in the TOC or body.
+function findHeadingIndexes(lines) {
+  // Every genuine "References" heading in the document, in reading order.
+  // Plural because one PDF can hold more than one bibliography: a journal
+  // proof carries the article and then its supplementary material, each with
+  // its own reference list, and a thesis chapter collection does the same.
+  //
+  // "References" may also appear in the TOC or body.
   // But in a two-sided book/report template the section title is ALSO set as
   // a running head on every page of the section (top margin, alternating
   // left/right), repeating right up to the section's own last page — a naive
@@ -55,7 +87,7 @@ function findHeadingIndex(lines) {
   // entries after the last running head got parsed).
   //
   // A running head is pinned to the SAME y on every page it appears on (it's
-  // set once in the page template); the true section heading is not — even
+  // set once in the page template); a true section heading is not — even
   // when it also happens to sit near a page's top margin (a chapter-opening
   // page with blank space above the title), its y is whatever the title's own
   // layout put it at, distinct from the header's fixed slot. So: cluster
@@ -66,7 +98,7 @@ function findHeadingIndex(lines) {
   // same string as the header, would false-positive as a repeat too.)
   const matches = [];
   for (let i = 0; i < lines.length; i++) if (HEADING.test(lines[i].text)) matches.push(i);
-  if (!matches.length) return -1;
+  if (!matches.length) return [];
   const byY = new Map();
   for (const i of matches) {
     const y = Math.round(lines[i].y);
@@ -74,12 +106,10 @@ function findHeadingIndex(lines) {
     byY.get(y).add(lines[i].page);
   }
   const runningY = new Set([...byY].filter(([, pages]) => pages.size >= 3).map(([y]) => y));
-  for (let k = matches.length - 1; k >= 0; k--) {
-    const i = matches[k];
-    if (runningY.has(Math.round(lines[i].y))) continue;
-    return i;
-  }
-  return matches.at(-1); // every match looks like a running head — fall back to the old behavior.
+  const real = matches.filter((i) => !runningY.has(Math.round(lines[i].y)));
+  // Every match looks like a running head — fall back to the old behavior
+  // (the last one) rather than losing the bibliography entirely.
+  return real.length ? real : matches.slice(-1);
 }
 
 /**
@@ -246,9 +276,35 @@ export function findFurniture(lines) {
   return boxes;
 }
 
+export function findReferenceSections(lines) {
+  const starts = findHeadingIndexes(lines);
+  const sections = [];
+  for (const start of starts) {
+    const body = sectionBody(lines, start);
+    // Two lines is the floor for a bibliography; below it the "heading" is a
+    // cross-reference in prose ("see the references"), not a section.
+    if (body.length >= 2) sections.push({ heading: lines[start], body });
+  }
+  return sections;
+}
+
+/**
+ * The PRIMARY reference section — the longest one, which is the article's own
+ * whenever a supplement's shorter list follows it. Callers that can only act on
+ * one bibliography (and every existing test) use this; callers that must cover
+ * the whole document — the region the typography engine leaves alone, and the
+ * entry pool citations resolve against — use findReferenceSections instead.
+ */
 export function findReferencesBody(lines) {
-  const start = findHeadingIndex(lines);
-  if (start === -1) return { heading: null, body: [] };
+  const sections = findReferenceSections(lines);
+  if (!sections.length) return { heading: null, body: [] };
+  let best = sections[0];
+  for (const s of sections) if (s.body.length >= best.body.length) best = s;
+  return best;
+}
+
+/** Body lines of the section whose heading is at `start`. */
+function sectionBody(lines, start) {
   const heading = lines[start];
   const edges = pageEdges(lines);
   const heads = runningHeadTexts(lines, edges);
@@ -307,7 +363,7 @@ export function findReferencesBody(lines) {
     }
     body.push(line);
   }
-  return { heading, body };
+  return body;
 }
 
 function splitByMarker(body, marker) {

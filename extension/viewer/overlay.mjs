@@ -114,6 +114,17 @@ const app = window.PDFViewerApplication;
 await app.initializedPromise;
 
 const settings = await getSettings();
+
+// The name saved highlights and comments are attributed to. PDF.js writes a
+// markup annotation's /T from the serialized editor's `user` field but never
+// sets it (vendor patch 8 reads it from here), so without this every note a
+// reviewer saves opens authorless in Acrobat, Preview or Foxit. Empty leaves
+// the field out entirely, which is PDF.js's own behavior.
+const publishAuthor = (s) => {
+  globalThis.fxAnnotationAuthor = s.annotationAuthor || "";
+};
+publishAuthor(settings);
+
 const engine = new TypographyEngine(app, settings);
 const references = new ReferencesFeature(app);
 
@@ -255,6 +266,7 @@ applyEnabled(settings.enabled);
 
 onSettingsChange(async (next) => {
   current = next;
+  publishAuthor(next);
   applyStyleVars(next);
   syncButton(next.enabled);
   syncFontButton(next.fontMode);

@@ -4,8 +4,7 @@
 
 import { extractLines } from "./extractor.mjs";
 import {
-  parseReferences,
-  findReferencesBody,
+  parseReferenceSections,
   findContentStart,
   findFurniture,
   findCitations,
@@ -17,6 +16,12 @@ import { CitationPopup } from "./popup.mjs";
 export class ReferencesFeature {
   #app;
   #entries = [];
+  // One entry pool per reference section, with the page its heading sits on.
+  // A journal proof carries the article and its supplementary material in one
+  // PDF, each with its own "REFERENCES" and its own [1]…[n] — so which entry
+  // "[3]" means depends on which side of the supplement's heading the citation
+  // is printed. See #entriesForPage.
+  #sections = [];
   // Does the document HAVE a bibliography, whatever came of parsing it? A
   // paper whose reference section was found but whose entries all failed to
   // group is still a paper whose "[12]" is a citation — see #shouldAnnotate.
@@ -54,6 +59,7 @@ export class ReferencesFeature {
 
   onDocumentLoaded(pdfDocument) {
     this.#entries = [];
+    this.#sections = [];
     this.#hasBibliography = false;
     this.#ready = (async () => {
       try {
@@ -66,7 +72,12 @@ export class ReferencesFeature {
         } catch (e) {
           console.warn("FixateScholar: line consumer failed", e);
         }
-        this.#entries = parseReferences(lines);
+        const sections = parseReferenceSections(lines);
+        this.#sections = sections.map((sec) => ({
+          page: sec.heading.page,
+          entries: sec.entries,
+        }));
+        this.#entries = sections.flatMap((sec) => sec.entries);
         globalThis.__fxRefCount = this.#entries.length; // test introspection
         globalThis.__fxRefNums = this.#entries.map((e) => e.number); // test introspection
         // Document-wide body height (char-weighted height mode over every
@@ -96,14 +107,16 @@ export class ReferencesFeature {
           // one-line head.
           const furniture = findFurniture(lines);
           if (furniture.size) await this.onFurniture?.(furniture);
-          const { heading, body } = findReferencesBody(lines);
           if (globalThis.__fxDebug) {
-            globalThis.__fxRefBody = body.map((l) => l.text); // test introspection
+            globalThis.__fxRefBody = sections.flatMap((sec) => sec.body.map((l) => l.text)); // test introspection
           }
-          this.#hasBibliography = !!(heading && body.length);
-          if (heading && body.length) {
+          this.#hasBibliography = sections.length > 0;
+          if (sections.length) {
+            // EVERY section's lines go into the region the engine leaves
+            // alone. Covering only one of them left the other reference list
+            // emphasized as body prose.
             const boxes = new Map();
-            for (const line of [heading, ...body]) {
+            for (const line of sections.flatMap((sec) => [sec.heading, ...sec.body])) {
               const pad = line.h * 0.7;
               if (!boxes.has(line.page)) boxes.set(line.page, []);
               boxes.get(line.page).push({
@@ -167,6 +180,23 @@ export class ReferencesFeature {
     }
   }
 
+  /**
+   * The entries a citation printed on `page` is numbered against: the first
+   * reference section at or after that page — an article's citations precede
+   * its bibliography, so the next list down the document is its own — falling
+   * back to the last section for anything printed after every list (an
+   * appendix, or the reference lines themselves).
+   *
+   * With one bibliography, which is every ordinary paper, this is just all the
+   * entries.
+   */
+  #entriesForPage(page) {
+    if (this.#sections.length < 2 || !page) return this.#entries;
+    const sec =
+      this.#sections.find((s) => s.page >= page) ?? this.#sections.at(-1);
+    return sec.entries;
+  }
+
   /** Ordered, de-duplicated card list for a citation's keys: each resolved
    *  entry, plus a stub for any key of a BRACKETED citation the extractor
    *  didn't parse (so the pager reflects every cited reference and the native
@@ -178,11 +208,12 @@ export class ReferencesFeature {
    *  alpha-keyed paper's unparsed citations with no hit-target at all, so
    *  reconcileLinks never saw them and a click fell through to the PDF's own
    *  link — scrolling away to the bibliography, the one thing this must not do. */
-  #buildCards(keys, bracketed) {
+  #buildCards(keys, bracketed, page) {
     const cards = [];
     const seen = new Set();
+    const entries = this.#entriesForPage(page);
     for (const key of keys) {
-      const matches = resolveCitation([key], this.#entries);
+      const matches = resolveCitation([key], entries);
       if (matches.length) {
         for (const e of matches) {
           const id = "e:" + (e.number ?? e.label);
@@ -259,7 +290,7 @@ export class ReferencesFeature {
       // neutralise the PDF's own link so a click opens our card instead of
       // scrolling to the bibliography. Unresolved AUTHOR-YEAR parentheticals
       // get no card (that pattern false-positives on ordinary parens).
-      const cards = this.#buildCards(cite.keys, bracketed);
+      const cards = this.#buildCards(cite.keys, bracketed, pageView.id);
       if (!cards.length) continue;
       for (const seg of intersecting(segments, cite.start, cite.end)) {
         // Don't annotate the bibliography's own entry "[N]" markers (the engine
