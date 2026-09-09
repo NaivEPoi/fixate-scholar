@@ -133,15 +133,41 @@ try {
   // Scroll a multi-word processed body line near the top of some page into the
   // viewport center, so two-column papers (page-1 top is title/authors) have a
   // clean line to drag. Records which page for the selection coords below.
-  await ev(`(() => {
-    const v = window.PDFViewerApplication.pdfViewer;
-    for (let i = 0; i < v.pagesCount; i++) {
-      const div = v.getPageView(i)?.textLayer?.div;
-      if (!div) continue;
-      const cand = [...div.querySelectorAll("span[data-fx-done]")].find((s) => s.textContent.trim().split(/\\s+/).length >= 6);
-      if (cand) { cand.scrollIntoView({ block: "center" }); return; }
+  //
+  // Only the pages PDF.js has rendered have a text layer, and a paper whose
+  // front matter carries no emphasis (a review copy with a cover sheet, an
+  // author-blind title page) renders nothing but unprocessed pages here. The
+  // scan then finds no candidate, and the run reported "nothing was verified"
+  // for that document on every sweep — a blind spot, not a product failure. So
+  // walk deeper into the document until a page actually offers a processed line.
+  let scrolled = false;
+  for (const target of [0, 4, 6, 8, 10, 12]) {
+    if (target) {
+      await ev(`(() => { window.PDFViewerApplication.page =
+        Math.min(${target}, window.PDFViewerApplication.pagesCount); return true; })()`);
+      // Give the newly rendered page time to be processed before looking at it.
+      let last = -1;
+      let stable = 0;
+      for (let i = 0; i < 30; i++) {
+        await sleep(500);
+        const b = await ev(`document.querySelectorAll('.textLayer span[data-fx-done]').length`).catch(() => 0);
+        if (b === last && b > 0) { if (++stable >= 3) break; } else { stable = 0; last = b; }
+      }
     }
-  })()`);
+    scrolled = await ev(`(() => {
+      const v = window.PDFViewerApplication.pdfViewer;
+      for (let i = 0; i < v.pagesCount; i++) {
+        const div = v.getPageView(i)?.textLayer?.div;
+        if (!div) continue;
+        const spans = [...div.querySelectorAll("span[data-fx-done]")];
+        const cand = spans.find((s) => s.textContent.trim().split(/\\s+/).length >= 6)
+          ?? spans.find((s) => s.textContent.trim().split(/\\s+/).length >= 2);
+        if (cand) { cand.scrollIntoView({ block: "center" }); return true; }
+      }
+      return false;
+    })()`).catch(() => false);
+    if (scrolled) break;
+  }
   await sleep(900);
   // Install a copy listener that records what would be written and whether
   // pdf.js intercepted (copyAll class).
@@ -156,13 +182,31 @@ try {
   const drag = await ev(`(() => {
     const v = window.PDFViewerApplication.pdfViewer;
     let done = [];
+    const seen = []; // what each rendered page offered, so a miss is diagnosable
     for (let i = 0; i < v.pagesCount; i++) {
       const div = v.getPageView(i)?.textLayer?.div;
       if (!div) continue;
-      const d = [...div.querySelectorAll("span[data-fx-done]")].filter((s) => { const r = s.getBoundingClientRect(); return r.top > 60 && r.bottom < window.innerHeight - 60 && r.width > 0 && s.textContent.trim().split(/\\s+/).length >= 4; });
+      const visible = (s) => { const r = s.getBoundingClientRect();
+        return r.top > 60 && r.bottom < window.innerHeight - 60 && r.width > 0; };
+      const words = (s) => s.textContent.trim().split(/\\s+/).length;
+      const spans = [...div.querySelectorAll("span[data-fx-done]")].filter(visible);
+      let d = spans.filter((s) => words(s) >= 4);
+      // Fall back to shorter spans rather than verifying nothing at all.
+      //
+      // Requiring FOUR words in ONE span is a property of how a document
+      // happens to be chopped into text items, not of anything this harness
+      // tests. One private-corpus paper splits its prose finely enough that no
+      // span on any page clears the bar, so the sweep reported "nothing was
+      // verified" for it on every run — a blind spot dressed up as a failure.
+      // Two words still spans a boundary, which is the thing under test.
+      if (d.length < 4) d = spans.filter((s) => words(s) >= 2);
+      if (d.length < 4) d = spans.filter((s) => words(s) >= 1);
+      seen.push({ page: i + 1, processed: div.querySelectorAll("span[data-fx-done]").length,
+                  visible: spans.length, w4: spans.filter((s) => words(s) >= 4).length,
+                  w2: spans.filter((s) => words(s) >= 2).length });
       if (d.length >= 4) { done = d; break; }
     }
-    if (done.length < 4) return null;
+    if (done.length < 4) return { none: true, seen };
     const endIdx = Math.min(done.length - 1, 5);
     const a = done[2].getBoundingClientRect();
     const b = done[endIdx].getBoundingClientRect();
@@ -175,7 +219,13 @@ try {
     // as a drag at all (caret placed, never extended).
     return { x0: Math.round(a.left + 2), y0: Math.round(a.top + a.height / 2), x1: Math.round(b.right - 2), y1: Math.round(b.top + b.height / 2), top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), left: a.left, right: b.right, covered };
   })()`);
-  if (!drag) { fail("no draggable processed line found — nothing was verified"); }
+  if (!drag || drag.none) {
+    // Say WHAT was on offer. "Nothing was verified" with no numbers is
+    // indistinguishable from a harness that is simply looking in the wrong
+    // place, which is how one document sat unverified across many sweeps.
+    const seen = drag?.seen ?? [];
+    fail(`no draggable processed line found — nothing was verified; rendered pages offered ${JSON.stringify(seen.slice(0, 4))}`);
+  }
   else {
     // Precondition: the drag origin must actually resolve to a text caret in a
     // text-layer span, so "selected nothing" can be told apart from "aimed at

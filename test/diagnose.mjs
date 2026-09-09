@@ -287,7 +287,23 @@ const url = URL_OVERRIDE ?? PAPERS[FILTER];
   const perPage = [];
   for (let p = 1; p <= pages; p++) {
     await ev(`window.PDFViewerApplication.page = ${p}`);
-    await sleep(1600);
+    // Wait for THIS page to stop changing instead of hoping 1600ms was enough.
+    // Every metric below is counted off the DOM, so probing a half-processed
+    // page reports a skipped run that is merely unfinished — the same fixed-sleep
+    // mistake that had the capture harnesses inventing "missing emphasis".
+    await sleep(700);
+    let last = "";
+    let stable = 0;
+    for (let i = 0; i < 60; i++) {
+      const cur = await ev(`(() => {
+        const pv = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});
+        if (!pv || !pv.textLayer) return "0/0";
+        return pv.textLayer.div.querySelectorAll("span[data-fx-done]").length + "/" +
+               pv.textLayer.div.querySelectorAll(".fx-b").length;
+      })()`).catch(() => "x");
+      if (cur === last) { if (++stable >= 5) break; } else { stable = 0; last = cur; }
+      await sleep(400);
+    }
     const res = await ev(PROBE).catch((e) => ({ error: String(e) }));
     if (Array.isArray(res)) {
       const cur = res.find((r) => r.page === p);

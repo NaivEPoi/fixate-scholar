@@ -3246,3 +3246,104 @@ and must open the note. `COMMENTS: PASS`, with reading mode confirmed live
 (3063 emphasized spans on the reopened page) and the button, not the overlay,
 answering `elementFromPoint`.
 `test/highlights.mjs` still passes with patch 8 applied.
+
+## R35 — the last line of every column, dropped in silence
+
+Found by the v1.0.8 release gate, pre-existing, and invisible to every check
+that existed at the time.
+
+`engine.mjs`'s candidate filter cut any item whose baseline fell in the top or
+bottom 6% of the page:
+
+```js
+if (y - vy0 < pageH * 0.06 || y - vy0 > pageH * 0.94) return false;
+```
+
+The intent is running heads and page numbers. The effect, on a paper with a
+tight bottom margin, is that the **last line of body text in every column** is
+discarded — on one document, 12 of its 20 pages. It never showed up because the
+cut runs before `#classifyBlocks`, the only stage that recorded a reason, so an
+affected line reported "no reason recorded": indistinguishable from a line the
+engine never saw. `skipRun` counts runs of three or more lines and a single
+trailing line never reached it.
+
+What separates a footer from a final body line is **isolation, not position**. A
+running head sits alone, a full margin from the text block; a final body line is
+one line pitch below its predecessor. The band still cuts, unless the baseline
+chains back to a baseline in the body region within one pitch — grown
+iteratively, so two body lines inside the band are both admitted while a footer
+block that only touches itself is not. Letterless and single-character runs
+(bare page numbers) are excluded from vouching, since they never carry emphasis
+themselves.
+
+Fixed: trailing gaps on the affected document went 12 pages → 0; the running
+header stays unprocessed; `papers.mjs` still reports `headerOk` and `footerOk`
+true on all 8 templates, which is the automated guard that the band was not
+simply relaxed away.
+
+### The diagnostic gap that hid it
+The candidate filter now labels its own rejections (`margin-band`, `over-body`,
+`special-or-short`, `script-attach`, `left-margin`, `script-size`) through a
+`reject()` helper, under `__fxDebug`, never overwriting a more specific
+block-pass reason. `test/whyskip.mjs` reports them, and its `trailing` count —
+unreasoned prose at or below everything the engine processed — is the regression
+guard for this class.
+
+## R36 — the gate was manufacturing findings faster than the product had defects
+
+Four harness defects, all pre-existing, each of which produced confident false
+reports during the v1.0.8 visual sweep. Roughly twenty claimed render defects
+were investigated; every one was a measurement artifact, by-design behaviour, or
+the manuscript's own typo.
+
+- **The shutter fired mid-processing.** `debug-shot.mjs` and `shot-region2.mjs`
+  waited for a *document-wide* `.fx-b` count to cross a threshold, then slept a
+  fixed interval — neither says anything about the page being photographed. A
+  whole batch of "emphasis missing from this paragraph" findings evaporated once
+  the capture waited properly. Both now settle on the target page's
+  `data-fx-done` *and* `.fx-b` counts: two counters, because a run is painted
+  after its span is marked done. `diagnose.mjs` had the same flat sleep and now
+  settles too.
+- **The sidebar ate a fifth of the page.** A PDF with `/PageMode /UseOutlines`
+  opens the outline sidebar, which keeps its layout width even when the toggle
+  reports it closed, pushing the right-hand column past the viewport edge. A
+  capture that silently loses a column is how a visual gate reports "clean" on a
+  page it only partly saw. Both harnesses now force it hidden with CSS and clip
+  to the page's own rect.
+- **`refbold` counted processing, not emphasis.** It flagged any `data-fx-done`
+  span inside the bibliography box, but a span the engine walked and left with
+  zero emphasis runs renders identically to an untouched one. One private paper
+  failed every sweep over a single ALL-CAPS caption span with no runs at all. It
+  now requires a `.fx-b` to fail, and reports processed-but-unemphasized spans
+  separately — visible, not fatal.
+- **`diag-drag` reported "nothing was verified" and did not say why.** It looked
+  only at pages PDF.js had already rendered and demanded four words in ONE span
+  — a property of how a document is chopped into text items, not of anything
+  under test. A paper whose front matter carries no emphasis rendered nothing but
+  unprocessed pages, so one document sat unverified across every sweep. It now
+  walks deeper until a page offers a processed line, falls back to shorter spans,
+  and prints what each rendered page offered. That diagnostic is what identified
+  the cause in one run.
+
+Two lessons worth keeping: a capture harness must settle on the thing it is
+photographing, and a check must measure what its name claims. Both failure modes
+are the "always-passes twin of a blind check" this file already warns about in
+`diagnose.mjs` — except these ones always *failed*, which is just as misleading
+and much more expensive.
+
+### New guards (`test/fontkeep.mjs`, `test/whyskip.mjs`, `test/wordshot.mjs`)
+`REQUIREMENTS.md` states that a span in a math, monospace, small-caps or
+bold-display face is never processed; nothing checked it, so "emphasis inside a
+code span" could only be argued from screenshots — and was, five times, wrongly
+every time (those tokens were set in the papers' BODY face, where the engine has
+no signal). `fontkeep.mjs` reads the font off each processed span and resolves it
+through `commonObjs`, which is the string the engine's own filter tests, with no
+span↔item index alignment to degrade silently. It fails on any violation AND
+when it resolves no fonts at all, so it cannot pass blind. Result: 0 violations
+across the public corpus (14 documents, ~19k processed spans) and the private
+corpus.
+
+`wordshot.mjs` is the answer to "name the exact word": it finds the word, reports
+what the engine did to it (`processed` / `keep` / the exact emphasis runs), and
+captures it zoomed. `processed=false keep=true` means absent emphasis is
+correct; `emph=0` falsifies "emphasis applied here" outright.

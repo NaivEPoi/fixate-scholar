@@ -102,9 +102,41 @@ try {
   await send("Page.enable"); await sleep(2500);
   await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`).catch(() => {});
   for (let i = 0; i < 40; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 60) break; }
+  // The outline sidebar keeps its layout width even when the toggle reports it
+  // closed, shoving the right-hand column past the viewport edge.
+  await ev(`(() => { const st = document.createElement("style");
+    st.textContent = "#sidebarContainer{display:none!important}#outerContainer.sidebarOpen #viewerContainer{inset-inline-start:0!important}";
+    document.head.appendChild(st); return true; })()`).catch(() => {});
   await ev(ZOOM ? `window.PDFViewerApplication.pdfViewer.currentScale = ${ZOOM}` : `window.PDFViewerApplication.pdfViewer.currentScaleValue = "page-fit"`).catch(() => {});
   await sleep(1200);
   await ev(`window.PDFViewerApplication.page = ${PAGE}`); await sleep(3000);
+  // Settle on THIS page's two counters before the shutter. The `b > 60` probe
+  // above is document-wide and says nothing about the page being photographed;
+  // followed only by a fixed sleep, it let the capture fire mid-emphasis. That
+  // is a matched-pair harness, so a half-processed fx-on frame invents exactly
+  // the defect the pair exists to detect: emphasis "missing" from a region.
+  // Both counters, because a run is painted after its span is marked done.
+  await settleOn(PAGE);
+
+  // Wait until the target page stops changing: `data-fx-done` spans AND `.fx-b`
+  // runs both unchanged across 8 polls, after a floor.
+  async function settleOn(page) {
+    let last = "";
+    let stable = 0;
+    for (let i = 0; i < 90; i++) {
+      const cur = await ev(`(() => {
+        const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page - 1});
+        if (!pv || !pv.textLayer) return "0/0";
+        return pv.textLayer.div.querySelectorAll("span[data-fx-done]").length + "/" +
+               pv.textLayer.div.querySelectorAll(".fx-b").length;
+      })()`).catch(() => "x");
+      if (cur === last && !String(cur).startsWith("0/")) {
+        if (++stable >= 8) return cur;
+      } else { stable = 0; last = cur; }
+      await sleep(600);
+    }
+    return last;
+  }
 
   // Region: either canvas-backing y range, or a band around --find text.
   if (FIND) {
@@ -118,6 +150,7 @@ try {
     })()`);
     if (!found) throw new Error("text not found: " + FIND);
     await sleep(2500); // canvas re-render after scroll settles
+    await settleOn(PAGE); // scrolling can bring unprocessed lines into view
   }
   const band = await ev(`(() => {
     const pv = window.PDFViewerApplication.pdfViewer.getPageView(${PAGE - 1});
