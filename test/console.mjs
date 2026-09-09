@@ -25,15 +25,18 @@ import { tmpdir } from "node:os";
 
 import { browserPath, extensionDir } from "./lib/env.mjs";
 
-// Upstream-warning allowlist — deliberately EMPTY.
+// Upstream-warning allowlist — two entries, each earned by a failing sweep.
 //
 // The vendored PDF.js can warn on real-world files for reasons that are not our
 // bug (malformed embedded fonts, rebuilt xref, unsupported features), so the gate
 // allows for such a list. It started with ten plausible patterns and every one of
 // them excused NOTHING: measured across the whole public corpus, `loud` (the
-// error/warning/exception count) is 0 on every document. Speculative entries are
-// pre-emptive permission to be noisy, which is precisely what an open "ignore
-// warnings" rule would be — so they are gone.
+// error/warning/exception count) is 0 on every document — and it still is, on
+// all 14. The two entries below were each earned the hard way: a private paper
+// failed the gate, and the message was then attributed to the vendored worker
+// with --fxoff before anything was allowed. Speculative entries are pre-emptive
+// permission to be noisy, which is precisely what an open "ignore warnings"
+// rule would be — so there are none.
 //
 // To add one: run the sweep, let it FAIL, then add the narrowest pattern that
 // matches the actual text, with a comment saying which document class it came
@@ -51,6 +54,18 @@ const UPSTREAM_ALLOW = [
   // mode never enabled. Seen on private-corpus PDFs exported from a word
   // processor rather than built by LaTeX (no public corpus paper triggers it).
   /Warning: TT: (undefined function|invalid function id)/,
+  // PDF.js declining to decode a stream the DOCUMENT declares as zero-length:
+  // `makeFilter` in the worker warns `Empty "<filter>" stream.` when
+  // `maybeLength === 0` (vendored pdf.worker.mjs, the `warn()` at the top of
+  // that function). Nothing in this extension reads or rewrites streams.
+  // Verified upstream by --fxoff on the private document that raised it: the
+  // same message, from the same worker, with reading mode NEVER enabled. The
+  // count is higher with reading mode on (24 vs 14) because a processed page is
+  // rendered more than once — the same upstream warning repeated, not a new one.
+  // Seen on a single private paper; no public corpus paper triggers it.
+  // Narrowed to FlateDecode deliberately: another filter name showing up should
+  // fail the gate and be looked at, not be pre-excused.
+  /Warning: Empty "FlateDecode" stream\./,
 ];
 
 const ARGV = process.argv.slice(2);
