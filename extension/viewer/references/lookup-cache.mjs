@@ -39,15 +39,27 @@ export function cleanDoi(doi) {
   return m ? m[1].replace(/[).,;]+$/, "").toLowerCase() : null;
 }
 
-/** Determine paper-author key if both title and first author are present. */
+/** Determine paper-author key if title (and optionally author) are present. */
 export function paperAuthorKey(record) {
-  if (!record || typeof record !== "object") return null;
-  const title = (record.title || "").trim().toLowerCase().replace(/[^\w\s]/g, "");
+  if (!record) return null;
+  if (typeof record === "string") {
+    if (
+      /^10\.\d{4,9}\/\S+/i.test(record.trim()) ||
+      /^https?:\/\/(?:dx\.)?doi\.org\/10\.\d{4,9}\/\S+/i.test(record.trim())
+    ) {
+      return null;
+    }
+    const clean = record.trim().toLowerCase().replace(/[^\w\s]/g, "");
+    return clean.length >= 3 ? `paper:${clean}` : null;
+  }
+  if (typeof record !== "object") return null;
+  const title = (record.title || record.name || record.raw || "").trim().toLowerCase().replace(/[^\w\s]/g, "");
   let author = "";
   if (record.surname) {
     author = record.surname;
   } else if (Array.isArray(record.authors) && record.authors.length > 0) {
-    author = record.authors[0];
+    const first = record.authors[0];
+    author = typeof first === "string" ? first : (first?.family || first?.name || "");
   } else if (typeof record.authors === "string" && record.authors.trim()) {
     author = record.authors.split(/[,;]/)[0];
   } else if (typeof record.byline === "string" && record.byline.trim()) {
@@ -57,6 +69,9 @@ export function paperAuthorKey(record) {
 
   if (title && author && title.length >= 3 && author.length >= 2) {
     return `paper:${title}:${author}`;
+  }
+  if (title && title.length >= 3) {
+    return `paper:${title}`;
   }
   return null;
 }
