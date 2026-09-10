@@ -94,6 +94,12 @@ test("mergeRecords fills missing fields without overwriting existing data", asyn
   assert.equal(merged.snippetIsAbstract, true);
   assert.equal(merged.pdfUrl, "https://arxiv.org/pdf/1706.03762");
   assert.equal(merged.citedBy, "Cited by 1000");
+
+  // Prototype pollution attempt
+  const malicious = JSON.parse('{"__proto__": {"polluted": true}, "constructor": {"polluted": true}}');
+  const safeMerged = mergeRecords(existing, malicious);
+  assert.equal(Object.prototype.polluted, undefined);
+  assert.equal(safeMerged.polluted, undefined);
 });
 
 test("writeCached aliases queries to canonical DOI and avoids duplicate records", async () => {

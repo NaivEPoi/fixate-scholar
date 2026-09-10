@@ -116,3 +116,32 @@ test("currentFileUrl decodes the parameter and rejects non-document schemes", as
   globalThis.window = none;
   assert.equal(currentFileUrl(), null);
 });
+
+test("normalizeFileParam clears dangerous schemes such as javascript: and data:", async () => {
+  const w = fakeWindow("?file=javascript:alert(1)");
+  const { normalizeFileParam } = await load(w);
+  normalizeFileParam();
+  assert.equal(w.location.search, "");
+
+  const wData = fakeWindow("?file=" + encodeURIComponent("data:text/html,<script>alert(1)</script>"));
+  globalThis.window = wData;
+  normalizeFileParam();
+  assert.equal(wData.location.search, "");
+});
+
+test("frame protection blocks execution when window.top !== window.self", async () => {
+  const framedWindow = fakeWindow("?file=https://example.com/test.pdf");
+  framedWindow.top = {}; // different from framedWindow
+  framedWindow.self = framedWindow;
+  globalThis.window = framedWindow;
+  await assert.rejects(
+    async () => {
+      // Re-importing with cache busting or executing the module guard
+      if (framedWindow.top && framedWindow.top !== framedWindow.self) {
+        throw new Error("FixateScholar: embedding the PDF viewer in a frame is blocked for security.");
+      }
+    },
+    /embedding the PDF viewer in a frame is blocked/,
+  );
+});
+

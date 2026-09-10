@@ -28,6 +28,8 @@ test("normalizeBypassUrl strips hash fragments and trims whitespace", () => {
   assert.equal(normalizeBypassUrl("https://example.com/test.pdf#page=2"), "https://example.com/test.pdf");
   assert.equal(normalizeBypassUrl("https://example.com/test.pdf?v=1#page=2"), "https://example.com/test.pdf?v=1");
   assert.equal(normalizeBypassUrl("file:///C:/test.pdf#page=3"), "file:///C:/test.pdf");
+  assert.equal(normalizeBypassUrl("javascript:alert(1)"), "");
+  assert.equal(normalizeBypassUrl("data:text/html,bad"), "");
 });
 
 test("urlsMatch matches identical, fragmented, and case-insensitive file URLs", () => {

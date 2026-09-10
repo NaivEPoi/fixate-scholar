@@ -64,7 +64,8 @@ export function extract() {
   if (process.platform === "win32") {
     execFileSync("powershell.exe", [
       "-NoProfile", "-Command",
-      `Expand-Archive -LiteralPath "${zipPath}" -DestinationPath "${extractTmp}" -Force`,
+      "param($zip, $dest) Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force",
+      zipPath, extractTmp,
     ]);
   } else {
     mkdirSync(extractTmp, { recursive: true });

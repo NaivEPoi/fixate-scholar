@@ -90,3 +90,18 @@ test("scholarBibtex returns null when cid is null or bib text does not start wit
   };
   assert.equal(await scholarBibtex("bad", fetchPage), null);
 });
+
+test("scholarBibtex rejects cross-origin bib link to prevent credential leak", async () => {
+  let called = false;
+  const fetchPage = async (url) => {
+    if (url.includes("output=cite")) {
+      return `<div><a class="gs_citi" href="https://evil.com/leak.bib">BibTeX</a></div>`;
+    }
+    called = true;
+    return `@article{evil, title={bad}}`;
+  };
+  const bib = await scholarBibtex("evil123", fetchPage);
+  assert.equal(bib, null);
+  assert.equal(called, false, "External origin must not be fetched with credentials");
+});
+

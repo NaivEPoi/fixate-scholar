@@ -1,4 +1,4 @@
-import { getSettings, setSettings } from "../viewer/settings-client.mjs";
+import { getSettings, setSettings, normalizeBypassUrl } from "../viewer/settings-client.mjs";
 import { clearCached } from "../viewer/references/lookup-cache.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -46,14 +46,21 @@ $("annotationAuthor").addEventListener("change", (e) =>
 $("bypassOrigins").addEventListener("change", (e) => {
   const origins = e.target.value
     .split("\n")
-    .map((s) => s.trim().replace(/^https?:\/\//, "").replace(/\/.*/, ""))
-    .filter(Boolean);
+    .map((s) =>
+      s
+        .trim()
+        .replace(/^https?:\/\//i, "")
+        .replace(/\/.*$/, "")
+        .replace(/:\d+$/, "")
+        .toLowerCase(),
+    )
+    .filter((s) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(s));
   setSettings({ bypassOrigins: [...new Set(origins)] });
 });
 $("bypassUrls").addEventListener("change", (e) => {
   const urls = e.target.value
     .split("\n")
-    .map((s) => s.trim())
+    .map((s) => normalizeBypassUrl(s))
     .filter(Boolean);
   setSettings({ bypassUrls: [...new Set(urls)] });
 });

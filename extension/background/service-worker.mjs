@@ -127,15 +127,30 @@ async function applyRules() {
 
 async function bypassOriginRules() {
   const { bypassOrigins = [] } = await chrome.storage.sync.get("bypassOrigins");
-  return bypassOrigins.slice(0, 100).map((origin, i) => ({
-    id: BYPASS_ORIGIN_BASE + i,
-    priority: 20,
-    condition: {
-      resourceTypes: ["main_frame"],
-      requestDomains: [origin.replace(/^https?:\/\//, "").replace(/\/.*/, "")],
-    },
-    action: { type: "allow" },
-  }));
+  return bypassOrigins
+    .map((origin) => {
+      if (!origin || typeof origin !== "string") return null;
+      const domain = origin
+        .trim()
+        .replace(/^https?:\/\//i, "")
+        .replace(/\/.*$/, "")
+        .replace(/:\d+$/, "")
+        .toLowerCase();
+      return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(domain)
+        ? domain
+        : null;
+    })
+    .filter(Boolean)
+    .slice(0, 100)
+    .map((domain, i) => ({
+      id: BYPASS_ORIGIN_BASE + i,
+      priority: 20,
+      condition: {
+        resourceTypes: ["main_frame"],
+        requestDomains: [domain],
+      },
+      action: { type: "allow" },
+    }));
 }
 
 function escapeRegex(str) {
@@ -145,20 +160,18 @@ function escapeRegex(str) {
 async function bypassUrlRules() {
   const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
   return bypassUrls
-    .filter((url) => /^https?:/i.test(url))
+    .map((url) => normalizeBypassUrl(url))
+    .filter((url) => /^https?:/i.test(url) && url.length <= 1024)
     .slice(0, 100)
-    .map((url, i) => {
-      const cleanUrl = normalizeBypassUrl(url);
-      return {
-        id: BYPASS_URL_BASE + i,
-        priority: 25,
-        condition: {
-          resourceTypes: ["main_frame"],
-          regexFilter: `^${escapeRegex(cleanUrl)}([?#].*)?$`,
-        },
-        action: { type: "allow" },
-      };
-    });
+    .map((cleanUrl, i) => ({
+      id: BYPASS_URL_BASE + i,
+      priority: 25,
+      condition: {
+        resourceTypes: ["main_frame"],
+        regexFilter: `^${escapeRegex(cleanUrl)}([?#].*)?$`,
+      },
+      action: { type: "allow" },
+    }));
 }
 
 export async function clearUserCache() {
@@ -189,6 +202,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "fx-open-link" && info.linkUrl) {
+    if (!/^(https?|file):/i.test(info.linkUrl)) return;
     await removeBypassUrl(info.linkUrl);
     chrome.tabs.create({
       url: `${VIEWER}?file=${encodeURIComponent(info.linkUrl)}`,
@@ -201,7 +215,7 @@ export { normalizeBypassUrl, urlsMatch };
 
 export async function addBypassUrl(url) {
   const clean = normalizeBypassUrl(url);
-  if (!clean) return;
+  if (!clean || !/^(https?|file):/i.test(clean)) return;
   const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
   if (!bypassUrls.some((u) => urlsMatch(u, clean))) {
     const next = [...bypassUrls, clean].slice(-100);
@@ -211,7 +225,7 @@ export async function addBypassUrl(url) {
 
 export async function removeBypassUrl(url) {
   const clean = normalizeBypassUrl(url);
-  if (!clean) return;
+  if (!clean || !/^(https?|file):/i.test(clean)) return;
   const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
   const next = bypassUrls.filter((u) => !urlsMatch(u, clean));
   if (next.length !== bypassUrls.length) {
@@ -248,8 +262,14 @@ chrome.webNavigation.onBeforeNavigate.addListener(
 // the browser's native viewer.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if ((msg?.type !== "fx-bypass-once" && msg?.type !== "fx-bypass-url") || !msg.url) return false;
+  // Security: only accept messages from this extension's own pages
+  if (sender.id !== chrome.runtime.id) return false;
+  if (!sender.url || !sender.url.startsWith(chrome.runtime.getURL(""))) return false;
+
+  const cleanUrl = normalizeBypassUrl(msg.url);
+  if (!cleanUrl || !/^(https?|file):/i.test(cleanUrl)) return false;
+
   (async () => {
-    const cleanUrl = normalizeBypassUrl(msg.url);
     await addBypassUrl(cleanUrl);
     await registerRules();
     const tabId = sender.tab?.id;

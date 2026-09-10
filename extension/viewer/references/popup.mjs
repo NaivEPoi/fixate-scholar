@@ -17,7 +17,7 @@
 
 import { bibAuthors } from "./parser.mjs";
 import { referenceQuery } from "./matching.mjs";
-import { fetchBibtex, fetchDetails, lookupReference, scholarSearchUrl } from "./sources.mjs";
+import { cleanDoi, fetchBibtex, fetchDetails, lookupReference, sanitizeHttpUrl, scholarSearchUrl } from "./sources.mjs";
 
 /** A URL as a PDF prints it, line wrap and all. A wrapped link reaches the
  *  text layer with a space in it ("https://github. com/x/y") — the space is
@@ -308,11 +308,12 @@ export class CitationPopup {
   #recordCard(preview) {
     const card = document.createElement("div");
     card.className = "fx-scholar-card";
-    const title = document.createElement(preview.url ? "a" : "div");
+    const cleanUrl = sanitizeHttpUrl(preview.url);
+    const title = document.createElement(cleanUrl ? "a" : "div");
     title.className = "fx-scholar-title";
     title.textContent = preview.title;
-    if (preview.url) {
-      title.href = preview.url;
+    if (cleanUrl) {
+      title.href = cleanUrl;
       title.target = "_blank";
       title.rel = "noopener noreferrer";
     }
@@ -327,11 +328,12 @@ export class CitationPopup {
     const foot = document.createElement("div");
     foot.className = "fx-scholar-foot";
     if (preview.citedBy) {
-      const cited = document.createElement(preview.citedByUrl ? "a" : "span");
+      const cleanCitedUrl = sanitizeHttpUrl(preview.citedByUrl);
+      const cited = document.createElement(cleanCitedUrl ? "a" : "span");
       cited.className = "fx-scholar-cited";
       cited.textContent = preview.citedBy;
-      if (preview.citedByUrl) {
-        cited.href = preview.citedByUrl;
+      if (cleanCitedUrl) {
+        cited.href = cleanCitedUrl;
         cited.target = "_blank";
         cited.rel = "noopener noreferrer";
       }
@@ -341,12 +343,13 @@ export class CitationPopup {
     // registered metadata, the citation graph, the preprint — so this is part
     // of reading the card, not a credit line.
     if (preview.source) {
-      const via = document.createElement(preview.sourceUrl ? "a" : "span");
+      const cleanSourceUrl = sanitizeHttpUrl(preview.sourceUrl);
+      const via = document.createElement(cleanSourceUrl ? "a" : "span");
       via.className = "fx-scholar-via";
       via.textContent = `via ${preview.source}`;
       via.title = `This record came from ${preview.source}`;
-      if (preview.sourceUrl) {
-        via.href = preview.sourceUrl;
+      if (cleanSourceUrl) {
+        via.href = cleanSourceUrl;
         via.target = "_blank";
         via.rel = "noopener noreferrer";
       }
@@ -367,28 +370,39 @@ export class CitationPopup {
    * abstract, the slides and the artifact live.
    */
   #venueLink(preview) {
-    if (!preview?.url || preview.url === preview.pdfUrl) return null;
+    const cleanUrl = sanitizeHttpUrl(preview?.url);
+    if (!cleanUrl || cleanUrl === preview?.pdfUrl) return null;
     let host;
     try {
-      host = new URL(preview.url).hostname.replace(/^www\./, "");
+      host = new URL(cleanUrl).hostname.replace(/^www\./, "");
     } catch {
       return null;
     }
-    if (host === "doi.org" || host === "dx.doi.org") return null;
-    return { host, url: preview.url };
+    if (!host || host === "doi.org" || host === "dx.doi.org") return null;
+    return { host, url: cleanUrl };
   }
 
   /** A DOI pill. The slashes stay readable: only the parts that need escaping
    *  are escaped, so the link reads as the DOI it is. */
   #doiPill(doi) {
-    return this.#linkPill("DOI", `https://doi.org/${encodeURIComponent(doi).replaceAll("%2F", "/")}`);
+    const clean = cleanDoi(doi);
+    return clean
+      ? this.#linkPill("DOI", `https://doi.org/${encodeURIComponent(clean).replaceAll("%2F", "/")}`)
+      : this.#linkPill("DOI", "");
   }
 
   #linkPill(text, href, extra = "") {
+    const cleanHref = sanitizeHttpUrl(href);
+    if (!cleanHref) {
+      const span = document.createElement("span");
+      span.className = `${this.#pinned ? "fx-pill" : ""} ${extra}`.trim();
+      span.textContent = text;
+      return span;
+    }
     const a = document.createElement("a");
     a.className = `${this.#pinned ? "fx-pill" : ""} ${extra}`.trim();
     a.textContent = text;
-    a.href = href;
+    a.href = cleanHref;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     return a;

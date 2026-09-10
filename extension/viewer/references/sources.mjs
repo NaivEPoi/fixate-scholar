@@ -63,6 +63,18 @@ const ROWS = 5; // candidates to ask each search for — the verifier reads them
 /** Nothing answered. Returned rather than thrown so the card can say so. */
 export const SOURCES_UNAVAILABLE = Object.freeze({ unavailable: "offline" });
 
+/** Validate that a URL is a valid http: or https: URL, returning its canonical href or null. */
+export function sanitizeHttpUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  try {
+    const u = new URL(url.trim());
+    if (u.protocol === "http:" || u.protocol === "https:") {
+      return u.href;
+    }
+  } catch {}
+  return null;
+}
+
 /** The card's Scholar pill — a link, no request. Built in scholar.mjs next to
  *  the search it mirrors, and re-exported so the popup has one import. */
 export { cleanDoi, paperAuthorKey, scholarSearchUrl };
@@ -798,7 +810,12 @@ export function openAlexAbstract(index) {
   if (!index || typeof index !== "object") return "";
   const words = [];
   for (const [word, positions] of Object.entries(index)) {
-    for (const p of positions) words[p] = word;
+    if (!Array.isArray(positions)) continue;
+    for (const p of positions) {
+      if (typeof p === "number" && Number.isInteger(p) && p >= 0 && p < 5000) {
+        words[p] = word;
+      }
+    }
   }
   return words.filter((w) => w !== undefined).join(" ").trim();
 }
@@ -960,10 +977,14 @@ function preview({
     [authors.slice(0, 6).join(", ") + (authors.length > 6 ? ", et al." : ""), venue, year]
       .filter(Boolean)
       .join(" - ");
+  const cleanLandingUrl = sanitizeHttpUrl(url || (doi ? `https://doi.org/${cleanDoi(doi)}` : null));
+  const cleanPdfUrl = sanitizeHttpUrl(pdfUrl);
+  const cleanCitedByUrl = sanitizeHttpUrl(citedByUrl);
+  const cleanSourceUrl = sanitizeHttpUrl(sourceUrl);
   let host = pdfHost;
-  if (!host && pdfUrl) {
+  if (!host && cleanPdfUrl) {
     try {
-      host = new URL(pdfUrl).hostname.replace(/^www\./, "");
+      host = new URL(cleanPdfUrl).hostname.replace(/^www\./, "");
     } catch {
       host = null;
     }
@@ -994,15 +1015,15 @@ function preview({
     snippet: finalSnippet,
     snippetIsAbstract: finalSnippetIsAbstract,
     citedBy: finalCitedBy,
-    citedByUrl,
-    url: url || (doi ? `https://doi.org/${cleanDoi(doi)}` : null),
-    pdfUrl,
+    citedByUrl: cleanCitedByUrl,
+    url: cleanLandingUrl,
+    pdfUrl: cleanPdfUrl,
     pdfHost: host,
     doi: cleanDoi(doi),
     cid: cid || null,
     bibtex: bibtex || null,
     source: source || "Fixate",
-    sourceUrl,
+    sourceUrl: cleanSourceUrl,
   };
 }
 
