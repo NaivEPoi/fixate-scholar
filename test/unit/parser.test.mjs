@@ -405,6 +405,39 @@ test("findCitations: numeric range expansion", () => {
   assert.deepEqual(found[0].keys, ["1", "2", "3"]);
 });
 
+test("findCitations: separate bracket range expansion like [6]-[11]", () => {
+  // Hyphen, en-dash, em-dash, double-hyphen, and spaced variants
+  const c1 = findCitations("As shown in [6]-[11] previously.");
+  assert.equal(c1.length, 1);
+  assert.deepEqual(c1[0].keys, ["6", "7", "8", "9", "10", "11"]);
+  assert.equal("As shown in [6]-[11] previously.".slice(c1[0].start, c1[0].end), "[6]-[11]");
+
+  const c2 = findCitations("Prior art [6]–[11] established this.");
+  assert.equal(c2.length, 1);
+  assert.deepEqual(c2[0].keys, ["6", "7", "8", "9", "10", "11"]);
+
+  const c3 = findCitations("See [6] - [11] for details.");
+  assert.equal(c3.length, 1);
+  assert.deepEqual(c3[0].keys, ["6", "7", "8", "9", "10", "11"]);
+
+  const c4 = findCitations("References [6]--[11] demonstrate this.");
+  assert.equal(c4.length, 1);
+  assert.deepEqual(c4[0].keys, ["6", "7", "8", "9", "10", "11"]);
+
+  // Chained with single citations or other ranges
+  const c5 = findCitations("See [1], [6]-[11], and [15].");
+  assert.equal(c5.length, 3);
+  assert.deepEqual(c5[0].keys, ["1"]);
+  assert.deepEqual(c5[1].keys, ["6", "7", "8", "9", "10", "11"]);
+  assert.deepEqual(c5[2].keys, ["15"]);
+
+  // Range with locator in second bracket
+  const c6 = findCitations("Detailed in [6]-[11, §3.2].");
+  assert.equal(c6.length, 1);
+  assert.deepEqual(c6[0].keys, ["6", "7", "8", "9", "10", "11"]);
+  assert.equal("Detailed in [6]-[11, §3.2].".slice(c6[0].start, c6[0].end), "[6]-[11, §3.2]");
+});
+
 test("findCitations: numeric with a locator into the cited work", () => {
   // "[9, §5.2.2.1]", "[24, Section 5.2]", "[26, Lemma 1]" — only the number is
   // the key; the whole bracket (incl. locator) is the matched span.

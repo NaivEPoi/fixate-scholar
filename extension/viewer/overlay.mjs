@@ -331,11 +331,40 @@ app.eventBus.on("pagerendered", (evt) => {
 // in-paper cross-reference — "Figure 3", "Table 8", "Section 5" — must keep
 // its native jump, so those links stay clickable. External links (DOI, URLs)
 // are untouched. Idempotent and order-independent (annotatePage also calls it).
+async function colorizeHighlightAnnotations(pageView) {
+  const div = pageView?.div || pageView?.annotationLayer?.div;
+  if (!div || !pageView.pdfPage) return;
+  const hls = div.querySelectorAll(".highlightAnnotation");
+  if (!hls.length) return;
+  try {
+    const annots = await pageView.pdfPage.getAnnotations();
+    const map = new Map();
+    for (const a of annots) {
+      if (a.subtype === "Highlight" && a.id) {
+        map.set(a.id, a);
+      }
+    }
+    for (const hl of hls) {
+      const id = hl.dataset.annotationId;
+      const annot = map.get(id);
+      if (annot?.color && typeof annot.color[0] === "number") {
+        const [r, g, b] = [annot.color[0], annot.color[1], annot.color[2]];
+        hl.style.setProperty("--fx-highlight-color", `rgb(${r} ${g} ${b} / 0.45)`);
+      }
+    }
+  } catch {
+    /* fallback to default yellow from overlay.css */
+  }
+}
+
 app.eventBus.on("annotationlayerrendered", (evt) => {
   const pageView = evt.pageNumber
     ? app.pdfViewer.getPageView(evt.pageNumber - 1)
     : evt.source;
-  if (pageView?.div) references.reconcileLinks(pageView);
+  if (pageView?.div) {
+    references.reconcileLinks(pageView);
+    colorizeHighlightAnnotations(pageView);
+  }
 });
 
 // Our typography masks the canvas glyphs and shows the text-layer spans in the
@@ -405,3 +434,45 @@ app.eventBus.on("documenterror", () => {
   banner.append(link);
   document.getElementById("outerContainer")?.prepend(banner);
 });
+
+// Direct save to local files (file://) when editing. When saveLocalFile is on,
+// saving an edited local file writes directly back to the local file rather
+// than triggering a new browser download copy.
+if (app.downloadManager && typeof app.downloadManager.download === "function") {
+  const origDownload = app.downloadManager.download.bind(app.downloadManager);
+  app.downloadManager.download = async function fxLocalDownload(data, url, filename) {
+    const fileUrl =
+      (typeof url === "string" && url) ||
+      currentFileUrl() ||
+      app._downloadUrl ||
+      app.url ||
+      "";
+    const isLocal = fileUrl.startsWith("file:");
+    if (isLocal && current.saveLocalFile !== false && data) {
+      if (typeof window.showSaveFilePicker === "function") {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: filename || "document.pdf",
+            types: [
+              {
+                description: "PDF Document",
+                accept: { "application/pdf": [".pdf"] },
+              },
+            ],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(data);
+          await writable.close();
+          return;
+        } catch (err) {
+          if (err?.name === "AbortError") {
+            // User cancelled the save dialog
+            return;
+          }
+        }
+      }
+    }
+    return origDownload(data, url, filename);
+  };
+}
+

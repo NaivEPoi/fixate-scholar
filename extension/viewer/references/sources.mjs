@@ -76,13 +76,44 @@ export { scholarSearchUrl };
 export function lookupReference(ref) {
   const key = referenceQuery(ref);
   if (!key || !isSearchable(ref)) return Promise.resolve(null);
+  // If ref itself already has everything displayed to user, no network lookup is needed:
+  if (isDisplayComplete(ref)) {
+    return Promise.resolve(preview(ref));
+  }
   if (!cache.has(key)) {
     // The Map is per page — it also collapses the three calls one card makes
     // (body, actions, Cite) into one lookup. The stored cache is what makes
     // reopening a paper free.
     const promise = (async () => {
-      const remembered = await readCached(key);
-      if (remembered !== undefined) return remembered;
+      // 1. Check cid first if available (use cid before Canonical Key)
+      let remembered;
+      if (ref?.cid) {
+        remembered = await readCached(`cid:${ref.cid}`);
+      }
+
+      // 2. Check direct query in cache
+      if (remembered === undefined) {
+        remembered = await readCached(key);
+      }
+
+      // 3. Check canonical keys in cache (DOI, paper title+author)
+      const doi = cleanDoi(ref?.doi);
+      if (remembered === undefined && doi) {
+        remembered = await readCached(`doi:${doi}`);
+      }
+      const pKey = paperAuthorKey(ref);
+      if (remembered === undefined && pKey) {
+        remembered = await readCached(pKey);
+      }
+
+      if (remembered !== undefined) {
+        if (doi && !remembered.doi) remembered.doi = doi;
+        if (ref?.cid && !remembered.cid) remembered.cid = ref.cid;
+        // If query differs from canonical key, ensure alias exists
+        await writeCached(key, remembered);
+        return remembered;
+      }
+
       const { result, complete } = await lookup(ref);
       // Only a lookup where every source ANSWERED may be remembered as a
       // no-match. If one timed out or failed, "not found" is a statement about
@@ -126,6 +157,9 @@ export function lookupReference(ref) {
  * both halves off there is no rung, and the card shows the document's own entry.
  */
 async function lookup(ref) {
+  if (isDisplayComplete(ref)) {
+    return { result: preview(ref), complete: true };
+  }
   let asked = 0;
   let answered = 0;
   const rungs = [];
@@ -141,7 +175,7 @@ async function lookup(ref) {
     const id = arxivId(ref?.raw ?? ref?.title ?? "");
     if (id) rungs.push(["arxiv-id", () => byArxivId(id)]);
     const doi = cleanDoi(ref?.doi);
-    if (doi) rungs.push(["doi", () => byDoi(doi)]);
+    if (doi) rungs.push(["doi", () => byDoi(doi, ref)]);
     rungs.push(
       ["crossref-search", () => searchCrossref(ref)],
       // The tail runs TOGETHER, not one after the other. Crossref answers most
@@ -177,6 +211,7 @@ async function lookup(ref) {
         : bestMatch(candidates, ref);
     trail.push(`${name}:${candidates.length}${match ? ":match" : ""}`);
     if (match) {
+      if (!match.doi && ref?.doi) match.doi = cleanDoi(ref.doi);
       note(trail, "match");
       return { result: match, complete: true };
     }
@@ -386,7 +421,21 @@ export function cleanDoi(doi) {
   return m ? m[1].replace(/[).,;]+$/, "").toLowerCase() : null;
 }
 
-async function byDoi(doi) {
+async function byDoi(doi, ref = null) {
+  if (isDisplayComplete(ref)) {
+    return { exact: true, candidates: [preview(ref)] };
+  }
+  // Use cid before Canonical Key
+  if (ref?.cid) {
+    const cachedCid = await readCached(`cid:${ref.cid}`);
+    if (isDisplayComplete(cachedCid)) {
+      return { exact: true, candidates: [cachedCid] };
+    }
+  }
+  const cached = await readCached(`doi:${doi}`);
+  if (isDisplayComplete(cached)) {
+    return { exact: true, candidates: [cached] };
+  }
   // OpenAlex first: it knows the DOI metadata AND the citation count and any
   // open-access copy, so one request fills the whole card.
   try {
@@ -394,6 +443,10 @@ async function byDoi(doi) {
     if (work) return { exact: true, candidates: [work] };
   } catch {
     // fall through to Crossref — a DOI it registered is a DOI it can describe
+  }
+  // Do not send request to Crossref when everything displayed to user is available
+  if (isDisplayComplete(ref) || isDisplayComplete(cached)) {
+    return { exact: true, candidates: [ref ? preview(ref) : cached].filter(Boolean) };
   }
   const item = (await json(`https://api.crossref.org/works/${encodeURIComponent(doi)}`)).message;
   return { exact: true, candidates: [crossrefWork(item)].filter(Boolean) };
@@ -407,6 +460,39 @@ async function byDoi(doi) {
  * stripped, rather than a bare title.
  */
 async function searchCrossref(ref) {
+  // Do not send request to Crossref when everything displayed to user is available
+  if (isDisplayComplete(ref)) {
+    return { exact: true, candidates: [preview(ref)] };
+  }
+  // Use cid before Canonical Key
+  if (ref?.cid) {
+    const cached = await readCached(`cid:${ref.cid}`);
+    if (isDisplayComplete(cached)) {
+      return { exact: true, candidates: [cached] };
+    }
+  }
+  const doi = cleanDoi(ref?.doi);
+  if (doi) {
+    const cached = await readCached(`doi:${doi}`);
+    if (isDisplayComplete(cached)) {
+      return { exact: true, candidates: [cached] };
+    }
+  }
+  const pKey = paperAuthorKey(ref);
+  if (pKey) {
+    const cached = await readCached(pKey);
+    if (isDisplayComplete(cached)) {
+      return { exact: true, candidates: [cached] };
+    }
+  }
+  const qKey = referenceQuery(ref);
+  if (qKey) {
+    const cached = await readCached(qKey);
+    if (isDisplayComplete(cached)) {
+      return { exact: true, candidates: [cached] };
+    }
+  }
+
   const q = queryText(ref?.raw || ref?.title || "") || referenceQuery(ref);
   if (!q) return [];
   const url =
@@ -756,6 +842,17 @@ const SNIPPET = 320;
  * re-stored, so reopening the paper already has them.
  */
 export async function fetchDetails(ref, record) {
+  // If everything we need is ready, do not send additional queries:
+  if (
+    record &&
+    !record.unavailable &&
+    record.snippetIsAbstract &&
+    record.citedBy &&
+    record.pdfUrl &&
+    record.doi
+  ) {
+    return false;
+  }
   const wantsAbstract = record && !record.unavailable && !record.snippetIsAbstract;
   const wants =
     record && !record.unavailable && (wantsAbstract || !record.citedBy || !record.pdfUrl);
@@ -808,6 +905,45 @@ export async function fetchDetails(ref, record) {
   }
 }
 
+/**
+ * Checks whether all information displayed to the user on the citation card is available:
+ * - title
+ * - authors or byline
+ * - abstract or snippet
+ * - citation count (citedBy)
+ * - open-access PDF URL (pdfUrl) or DOI (doi)
+ *
+ * When a record is display complete, no requests to Crossref should be sent.
+ */
+export function isDisplayComplete(record) {
+  if (!record || typeof record !== "object" || record.unavailable) return false;
+  const hasTitle = Boolean(record.title && typeof record.title === "string" && record.title.trim());
+  const hasByline = Boolean(
+    (record.byline && typeof record.byline === "string" && record.byline.trim()) ||
+    (Array.isArray(record.authors) && record.authors.length > 0)
+  );
+  const hasSnippet = Boolean(
+    (record.snippet && typeof record.snippet === "string" && record.snippet.trim()) ||
+    (record.abstract && typeof record.abstract === "string" && record.abstract.trim())
+  );
+  const hasCitedBy = Boolean(
+    (record.citedBy && typeof record.citedBy === "string" && record.citedBy.trim()) ||
+    Number.isFinite(record.citedByCount)
+  );
+  const hasPdf = Boolean(record.pdfUrl && typeof record.pdfUrl === "string" && record.pdfUrl.trim());
+  const hasDoi = Boolean(cleanDoi(record.doi));
+
+  if (!hasTitle || !hasByline || !hasSnippet) return false;
+
+  // If citedBy is present, and either pdfUrl or DOI (or both) are present:
+  if (hasCitedBy && (hasPdf || hasDoi)) return true;
+
+  // If both pdfUrl and DOI are present along with title, byline, snippet:
+  if (hasPdf && hasDoi) return true;
+
+  return false;
+}
+
 /** The one shape the card renders, whichever source produced it. */
 function preview({
   title,
@@ -822,75 +958,307 @@ function preview({
   citedByUrl = null,
   source,
   sourceUrl = null,
+  byline = null,
+  snippet = null,
+  snippetIsAbstract = null,
+  citedBy = null,
+  pdfHost = null,
+  cid = null,
+  bibtex = null,
 }) {
-  // "M D Ryan, B Smyth - Formal Models and Techniques, 2011": the same line a
-  // reader expects under a title, and the line the verifier reads for the
-  // author and the year when a source gives no structured ones.
-  const byline = [authors.slice(0, 6).join(", ") + (authors.length > 6 ? ", et al." : ""), venue, year]
-    .filter(Boolean)
-    .join(" - ");
-  let host = null;
-  try {
-    host = pdfUrl ? new URL(pdfUrl).hostname.replace(/^www\./, "") : null;
-  } catch {
-    host = null; // a malformed link is not worth failing a card over
+  const computedByline =
+    byline ||
+    [authors.slice(0, 6).join(", ") + (authors.length > 6 ? ", et al." : ""), venue, year]
+      .filter(Boolean)
+      .join(" - ");
+  let host = pdfHost;
+  if (!host && pdfUrl) {
+    try {
+      host = new URL(pdfUrl).hostname.replace(/^www\./, "");
+    } catch {
+      host = null;
+    }
   }
+  const finalSnippet =
+    snippet !== null && snippet !== undefined
+      ? snippet
+      : abstract.length > SNIPPET
+        ? abstract.slice(0, SNIPPET).trimEnd() + "…"
+        : abstract;
+  const finalSnippetIsAbstract =
+    snippetIsAbstract !== null && snippetIsAbstract !== undefined
+      ? Boolean(snippetIsAbstract)
+      : !!abstract;
+  const finalCitedBy =
+    citedBy !== null && citedBy !== undefined
+      ? citedBy
+      : Number.isFinite(citedByCount)
+        ? `Cited by ${citedByCount}`
+        : null;
+
   return {
     title,
     authors,
     year,
     venue,
-    byline,
-    snippet: abstract.length > SNIPPET ? abstract.slice(0, SNIPPET).trimEnd() + "…" : abstract,
-    // These four sources hand over the paper's OWN abstract, so a card built
-    // from one needs no second request to get a better snippet. (Scholar sets
-    // this false: its `.gs_rs` is a query-biased fragment, not an abstract.)
-    snippetIsAbstract: !!abstract,
-    citedBy: Number.isFinite(citedByCount) ? `Cited by ${citedByCount}` : null,
+    byline: computedByline,
+    snippet: finalSnippet,
+    snippetIsAbstract: finalSnippetIsAbstract,
+    citedBy: finalCitedBy,
     citedByUrl,
-    url,
+    url: url || (doi ? `https://doi.org/${cleanDoi(doi)}` : null),
     pdfUrl,
     pdfHost: host,
-    doi,
-    source,
+    doi: cleanDoi(doi),
+    cid: cid || null,
+    bibtex: bibtex || null,
+    source: source || "Fixate",
     sourceUrl,
   };
 }
 
 /**
- * BibTeX for a matched record, from the DOI itself: Crossref's content
- * negotiation returns the publisher's own registered metadata as BibTeX. That
- * is better than what this feature used to show (Scholar's cite dialog, keyed
- * by a cluster id, so a wrong match produced a wrong BibTeX), and it needs no
- * second identifier.
- *
- * Null when there is no DOI or the transform fails — the caller falls back to
- * a BibTeX built from the parsed entry, which always yields something copyable.
+ * Extract a stable lookup/cache key based on the paper's name (title) and author.
  */
-export function fetchBibtex(doi, record = null) {
-  const clean = cleanDoi(doi ?? record?.doi);
-  const cid = record?.cid ?? null;
-  const key = clean ?? (cid ? `cid:${cid}` : null);
+export function paperAuthorKey(target) {
+  if (!target) return null;
+  if (typeof target === "string") {
+    if (
+      /^10\.\d{4,9}\/\S+/i.test(target.trim()) ||
+      /^https?:\/\/(?:dx\.)?doi\.org\/10\.\d{4,9}\/\S+/i.test(target.trim())
+    ) {
+      return null;
+    }
+    const clean = queryText(target).trim().toLowerCase();
+    return clean ? `paper:${clean}` : null;
+  }
+  const title = queryText(target.title || target.raw || target.name || "").trim().toLowerCase();
+  let author = "";
+  if (target.surname) {
+    author = queryText(target.surname).trim().toLowerCase();
+  } else if (Array.isArray(target.authors) && target.authors.length > 0) {
+    author = queryText(target.authors[0]).trim().toLowerCase();
+  } else if (typeof target.authors === "string" && target.authors.trim()) {
+    author = queryText(target.authors.split(/[,;]/)[0]).trim().toLowerCase();
+  } else if (typeof target.byline === "string" && target.byline.trim()) {
+    author = queryText(target.byline.split(/[-–—,;]/)[0]).trim().toLowerCase();
+  }
+  if (title && author) return `paper:${title}:${author}`;
+  if (title) return `paper:${title}`;
+  return null;
+}
+
+/**
+ * Extract a DOI from BibTeX text if present (many publisher BibTeXs on Scholar
+ * include a `doi = {...}` or `url = {https://doi.org/...}`).
+ */
+export function extractBibtexDoi(bib) {
+  if (!bib) return null;
+  const m =
+    /\bdoi\s*=\s*[{"]?(10\.\d{4,9}\/[^\s}",]+)/i.exec(bib) ||
+    /https?:\/\/(?:dx\.)?doi\.org\/(10\.\d{4,9}\/[^\s}",]+)/i.exec(bib);
+  return m ? cleanDoi(m[1]) : null;
+}
+
+/**
+ * Resolve a DOI for a reference or record that lacks one (e.g. from Google Scholar).
+ * Google Scholar search result cards do not include structured DOIs. We resolve
+ * DOIs via:
+ *   1. Crossref bibliographic search — official DOI registration authority (~150M works).
+ *   2. OpenAlex search by title — 250M+ scholarly works index.
+ */
+export async function resolveDoi(target) {
+  if (!target) return null;
+  // Use cid before Canonical Key
+  if (target?.cid) {
+    const cached = await readCached(`cid:${target.cid}`);
+    if (cached?.doi) return cleanDoi(cached.doi);
+  }
+  const direct = cleanDoi(target.doi);
+  if (direct) return direct;
+  if (!isSearchable(target)) return null;
+
+  // Check persistent storage cache
+  const pKey = paperAuthorKey(target);
+  if (pKey) {
+    const cached = await readCached(pKey);
+    if (cached?.doi) return cleanDoi(cached.doi);
+  }
+  const qKey = referenceQuery(target);
+  if (qKey) {
+    const cached = await readCached(qKey);
+    if (cached?.doi) return cleanDoi(cached.doi);
+  }
+
+  // Do not send request to Crossref when everything displayed to user is available
+  if (isDisplayComplete(target)) {
+    return null;
+  }
+
+  // 1. Crossref bibliographic match
+  try {
+    const got = await searchCrossref(target);
+    const match = bestMatch(got?.candidates ?? [], target);
+    if (match?.doi) return cleanDoi(match.doi);
+  } catch {}
+
+  // 2. OpenAlex match
+  try {
+    const work = await openAlexByTitle(target, target);
+    if (work?.doi) return cleanDoi(work.doi);
+  } catch {}
+
+  return null;
+}
+
+/**
+ * BibTeX for a matched record:
+ * - If CID is present: uses `cid:${cid}` as primary key (uses cid before Canonical Key).
+ * - If DOI is present: uses `doi:${clean}` as the key.
+ * - If DOI is missing: uses other field (paper name+author or refKey) as the key.
+ * - If everything we need (BibTeX) is already ready, does not send additional queries.
+ * - By default, queries Google Scholar cite dialog using `cid`.
+ *   If Scholar returns BibTeX, extracts any embedded DOI and returns immediately without
+ *   sending additional queries to Crossref or OpenAlex.
+ * - If Scholar is unavailable/fails, falls back to Crossref content negotiation ONLY if
+ *   DOI is present. If DOI is missing, avoids speculative search queries and returns null
+ *   so caller synthesizes local BibTeX cleanly.
+ */
+export function fetchBibtex(doi, record = null, ref = null) {
+  let explicitDoi = null;
+  let target = null;
+  if (typeof doi === "string") {
+    if (
+      /^10\.\d{4,9}\/\S+/i.test(doi.trim()) ||
+      /^https?:\/\/(?:dx\.)?doi\.org\/10\.\d{4,9}\/\S+/i.test(doi.trim())
+    ) {
+      explicitDoi = doi;
+    } else {
+      target = doi;
+    }
+  } else if (typeof doi === "object" && doi !== null) {
+    target = doi;
+  }
+  target = ref || record || target;
+  let clean = cleanDoi(explicitDoi ?? target?.doi ?? record?.doi ?? ref?.doi);
+  let cid = record?.cid ?? target?.cid ?? null;
+  const paperKey = paperAuthorKey(target);
+  const refKey = target ? referenceQuery(target) : null;
+  // Use cid before Canonical Key:
+  const key =
+    (cid ? `cid:${cid}` : null) ??
+    (clean ? `doi:${clean}` : null) ??
+    (paperKey ? `paper:${paperKey}` : null) ??
+    (refKey ? `ref:${refKey}` : null);
+
   if (!key) return Promise.resolve(null);
+
+  // If everything we need is already ready in record, return immediately (0 requests):
+  if (record?.bibtex && typeof record.bibtex === "string" && record.bibtex.startsWith("@")) {
+    return Promise.resolve(record.bibtex);
+  }
+
   if (!bibCache.has(key)) {
     const promise = (async () => {
-      // The publisher's own registered entry, when there is a DOI to ask about.
-      if (clean) {
-        const bibUrl = `https://api.crossref.org/works/${encodeURIComponent(clean)}/transform/application/x-bibtex`;
-        const text = await paced(bibUrl, async () => {
-          const res = await fetch(bibUrl, {
-            credentials: "omit",
-            headers: { accept: "application/x-bibtex" },
-            signal: deadline(),
-          });
-          if (!res.ok) throw new Error(`bibtex HTTP ${res.status}`);
-          return (await res.text()).trim();
-        });
-        if (text.startsWith("@")) return text;
+      // Check persistent storage cache: use cid before Canonical Key
+      let remembered;
+      if (cid) {
+        remembered = await readCached(`cid:${cid}`);
       }
-      // A Google Scholar match has no DOI, and Scholar's own cite dialog does
-      // have a BibTeX for it. Only reached when the reader opened "Cite".
-      if (cid) return scholarBibtex(cid, scholarPage);
+      if (!remembered || typeof remembered !== "string" || !remembered.startsWith("@")) {
+        remembered = await readCached(key);
+      }
+      if ((!remembered || typeof remembered !== "string" || !remembered.startsWith("@")) && clean) {
+        const byDoi = await readCached(`doi:${clean}`);
+        if (typeof byDoi === "string" && byDoi.startsWith("@")) remembered = byDoi;
+        else if (byDoi?.bibtex && typeof byDoi.bibtex === "string" && byDoi.bibtex.startsWith("@")) remembered = byDoi.bibtex;
+      }
+      if (remembered && typeof remembered === "string" && remembered.startsWith("@")) {
+        if (record) record.bibtex = remembered;
+        return remembered;
+      }
+
+      // 1. Google Scholar BibTeX by default (when enabled).
+      try {
+        const { scholarLookup = true } = await lookupSettings();
+        if (scholarLookup) {
+          if (!cid && target && isSearchable(target)) {
+            const got = await searchScholarSource(target);
+            const candidates = got?.candidates ?? [];
+            const match = bestMatch(candidates, target);
+            if (match?.cid) {
+              cid = match.cid;
+              if (record) record.cid = cid;
+              if (typeof target === "object" && target) target.cid = cid;
+            }
+          }
+          if (cid) {
+            const text = await scholarBibtex(cid, scholarPage);
+            if (text && text.startsWith("@")) {
+              // Extract DOI if Scholar's BibTeX includes one
+              const extractedDoi = extractBibtexDoi(text);
+              if (extractedDoi) {
+                if (!clean) clean = extractedDoi;
+                if (record) record.doi = extractedDoi;
+                if (ref) ref.doi = extractedDoi;
+                if (typeof target === "object" && target) target.doi = extractedDoi;
+              }
+              if (record) record.bibtex = text;
+              if (ref) ref.bibtex = text;
+
+              // Write to cache under key, DOI, and CID
+              await writeCached(key, text);
+              if (clean && key !== `doi:${clean}`) {
+                await writeCached(`doi:${clean}`, text);
+              }
+              if (cid && key !== `cid:${cid}`) {
+                await writeCached(`cid:${cid}`, text);
+              }
+
+              // Everything we need is ready — do not send additional queries!
+              return text;
+            }
+          }
+        }
+      } catch {
+        // Scholar unavailable, refused, or failed — fall back to other sources
+      }
+
+      // 2. Fallback: publisher-registered entry via Crossref content negotiation.
+      // If DOI is missing, do not send speculative queries to hunt for it; return null so caller synthesizes local BibTeX cleanly.
+      // Do not send request to Crossref when bibtex is already ready or record already has it
+      if (record?.bibtex && typeof record.bibtex === "string" && record.bibtex.startsWith("@")) {
+        return record.bibtex;
+      }
+      if (clean) {
+        try {
+          const bibUrl = `https://api.crossref.org/works/${encodeURIComponent(clean)}/transform/application/x-bibtex`;
+          const text = await paced(bibUrl, async () => {
+            const res = await fetch(bibUrl, {
+              credentials: "omit",
+              headers: { accept: "application/x-bibtex" },
+              signal: deadline(),
+            });
+            if (!res.ok) throw new Error(`bibtex HTTP ${res.status}`);
+            return (await res.text()).trim();
+          });
+          if (text && text.startsWith("@")) {
+            if (record) record.bibtex = text;
+            if (ref) ref.bibtex = text;
+            await writeCached(key, text);
+            if (clean && key !== `doi:${clean}`) {
+              await writeCached(`doi:${clean}`, text);
+            }
+            if (cid && key !== `cid:${cid}`) {
+              await writeCached(`cid:${cid}`, text);
+            }
+            return text;
+          }
+        } catch {
+          // Crossref unavailable or failed
+        }
+      }
+
       return null;
     })().catch(() => {
       bibCache.delete(key);

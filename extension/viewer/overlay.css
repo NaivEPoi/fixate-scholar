@@ -34,6 +34,18 @@
 }
 
 :root {
+  /* Default all plugin GUI surfaces to dark color scheme */
+  color-scheme: dark;
+  --body-bg-color: #202124;
+  --main-color: #fbfbfe;
+  --toolbar-icon-bg-color: #ffffff;
+  --toolbar-icon-hover-bg-color: #ffffff;
+  --field-bg-color: #2b2a33;
+  --field-color: #e8e8e8;
+  --field-border-color: #52525e;
+  --doorhanger-bg-color: #242428;
+  --dialog-bg-color: #242428;
+
   /* These match the rendered PDF page (canvas), which is independent of the
      browser color scheme — pages are white unless the document says otherwise. */
   --fx-text-color: #1a1a1a;
@@ -207,6 +219,207 @@
   background: none !important;
 }
 
+/* Existing highlights are drawn by PDF.js directly onto the canvas, which is
+   covered by FixateScholar's reading-mode white masks (.fx-mask). Stock PDF.js
+   leaves .highlightAnnotation transparent because it relies on the canvas
+   drawing. In reading mode, give .highlightAnnotation a default translucent
+   yellow fill with multiply blend mode so highlights remain visible over the
+   white mask and under/around the text layer.
+   pointer-events: none allows drag text selection over highlighted spans
+   without the unselectable annotation section intercepting pointer events. */
+#viewerContainer.fx-on .annotationLayer .highlightAnnotation {
+  background-color: var(--fx-highlight-color, rgb(255 235 59 / 0.45));
+  mix-blend-mode: multiply;
+  pointer-events: none;
+}
+
+/* Pop-up comment button attached to highlight annotations */
+:is(.annotationLayer, .annotationEditorLayer) .annotationCommentButton {
+  color-scheme: dark;
+  background-color: #242428 !important;
+  border: 1px solid #52525e !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45) !important;
+  border-radius: 6px 6px 6px 0 !important;
+  pointer-events: auto !important;
+  cursor: pointer !important;
+}
+
+:is(.annotationLayer, .annotationEditorLayer) .annotationCommentButton::before {
+  background-color: #e8e8e8 !important;
+}
+
+:is(.annotationLayer, .annotationEditorLayer) .annotationCommentButton:hover {
+  background-color: #3c4043 !important;
+  border-color: #8ab4f8 !important;
+}
+
+:is(.annotationLayer, .annotationEditorLayer) .annotationCommentButton:hover::before {
+  background-color: #8ab4f8 !important;
+}
+
+:is(.annotationLayer, .annotationEditorLayer) .annotationCommentButton:active,
+:is(.annotationLayer, .annotationEditorLayer) .annotationCommentButton.selected {
+  background-color: #394457 !important;
+  border-color: #8ab4f8 !important;
+}
+
+/* Floating selection toolbar with highlight & comment buttons */
+.editToolbar {
+  color-scheme: dark;
+  background-color: #242428 !important;
+  border: 1px solid #52525e !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45) !important;
+  border-radius: 6px !important;
+  color: #e8e8e8 !important;
+  z-index: 100 !important;
+  pointer-events: auto !important;
+}
+
+.editToolbar .divider {
+  border-left: 1px solid #52525e !important;
+}
+
+.editToolbar .basic::before {
+  background-color: #e8e8e8 !important;
+}
+
+.editToolbar > :not(.divider) {
+  cursor: pointer !important;
+}
+
+.editToolbar > :not(.divider):hover {
+  background-color: #3c4043 !important;
+  border-radius: 4px !important;
+}
+
+.editToolbar > :not(.divider):hover::before,
+.editToolbar .basic:hover::before {
+  background-color: #8ab4f8 !important;
+}
+
+/* Comment popups and comment manager dialog */
+.commentPopup,
+#commentManagerDialog {
+  color-scheme: dark;
+  background: #242428 !important;
+  color: #e8e8e8 !important;
+  border: 1px solid #52525e !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5) !important;
+  border-radius: 8px !important;
+}
+
+.commentPopup .commentPopupTime {
+  color: #9aa0a6 !important;
+}
+
+.commentPopup .commentPopupText,
+.commentPopup .commentPopupText * {
+  color: #e8e8e8 !important;
+}
+
+.commentPopup .commentPopupButtons button {
+  background-color: #3c4043 !important;
+  color: #e8e8e8 !important;
+  border: 1px solid #52525e !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+}
+
+.commentPopup .commentPopupButtons button:hover {
+  background-color: #52525e !important;
+  border-color: #8ab4f8 !important;
+}
+
+#commentManagerDialog #commentManagerToolbar {
+  cursor: move !important;
+}
+
+#commentManagerDialog #commentManagerTitle {
+  color: #f1f3f4 !important;
+  font-weight: 600 !important;
+}
+
+#commentManagerDialog #commentManagerTextInput {
+  background: #1e1e22 !important;
+  color: #e8e8e8 !important;
+  border: 1px solid #52525e !important;
+  border-radius: 4px !important;
+  padding: 8px !important;
+  font-family: inherit !important;
+  box-sizing: border-box !important;
+}
+
+#commentManagerDialog #commentManagerTextInput:focus {
+  outline: 2px solid #8ab4f8 !important;
+  border-color: transparent !important;
+}
+
+#commentManagerDialog button {
+  background-color: #3c4043 !important;
+  color: #e8e8e8 !important;
+  border: 1px solid #52525e !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+}
+
+#commentManagerDialog button:hover {
+  background-color: #52525e !important;
+}
+
+#commentManagerDialog #commentManagerSaveButton {
+  background-color: #0b57d0 !important;
+  color: #ffffff !important;
+  border-color: #3b78e7 !important;
+}
+
+#commentManagerDialog #commentManagerSaveButton:hover {
+  background-color: #1a73e8 !important;
+}
+
+#commentManagerDialog #commentManagerCloseButton {
+  border: none !important;
+  background: none !important;
+}
+
+#commentManagerDialog #commentManagerCloseButton::before {
+  background-color: #e8e8e8 !important;
+}
+
+#commentManagerDialog #commentManagerCloseButton:hover::before {
+  background-color: #ffffff !important;
+}
+
+#editorCommentsSidebar {
+  color-scheme: dark;
+  background-color: #202124 !important;
+  color: #e8e8e8 !important;
+  border-left: 1px solid #52525e !important;
+}
+
+#editorCommentsSidebarHeader {
+  border-bottom: 1px solid #52525e !important;
+}
+
+#editorCommentsSidebarTitle {
+  color: #f1f3f4 !important;
+}
+
+.sidebarComment {
+  background-color: #242428 !important;
+  border: 1px solid #3c4043 !important;
+  color: #e8e8e8 !important;
+  border-radius: 6px !important;
+}
+
+.sidebarComment:hover {
+  background-color: #2f3036 !important;
+  border-color: #52525e !important;
+}
+
+.sidebarComment .sidebarCommentText {
+  color: #e8e8e8 !important;
+}
+
 /* Visible text selection. Stock PDF.js makes the text-layer glyphs transparent
    (the real glyphs are on the canvas) and therefore sets
    `.textLayer ::selection { background: transparent }` so a drag doesn't paint a
@@ -259,17 +472,29 @@
   pointer-events: none !important;
 }
 
+/* Floating toolbar and annotation editor toolbars must sit above the reading
+   mode masks and citation hit-targets. */
+.textLayer:has(.editToolbar) {
+  z-index: 10 !important;
+}
+
+.editToolbar {
+  z-index: 100 !important;
+  pointer-events: auto !important;
+}
+
 .fx-cite-popup {
   position: absolute;
   z-index: 10000;
   max-width: 420px;
   padding: 10px 12px;
-  font: 12px/1.45 system-ui, sans-serif;
-  color: light-dark(#1a1a1a, #e8e8e8);
-  background: light-dark(#ffffff, #2a2a2e);
-  border: 1px solid light-dark(#c0c0c6, #52525e);
+  font: 12px/1.45 system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
+  color: #e8e8e8;
+  background: #242428;
+  border: 1px solid #52525e;
   border-radius: 6px;
-  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
 
 .fx-cite-popup .fx-cite-actions {
@@ -281,7 +506,7 @@
 }
 
 .fx-cite-popup a {
-  color: light-dark(#0b57d0, #8ab4f8);
+  color: #8ab4f8;
   text-decoration: none;
   cursor: pointer;
 }
@@ -296,6 +521,7 @@
   gap: 10px;
   margin-bottom: 8px;
   font-weight: 600;
+  color: #f1f3f4;
 }
 
 .fx-cite-pager {
@@ -304,7 +530,7 @@
   align-items: center;
   gap: 4px;
   font-weight: 400;
-  color: light-dark(#5f6368, #9aa0a6);
+  color: #9aa0a6;
 }
 
 .fx-cite-pager button,
@@ -313,14 +539,15 @@
   background: none;
   cursor: pointer;
   font: inherit;
-  color: inherit;
+  color: #e8e8e8;
   padding: 2px 6px;
   border-radius: 4px;
 }
 
 .fx-cite-pager button:hover:not(:disabled),
 .fx-cite-close:hover {
-  background: light-dark(#eee, #444);
+  background: #3c4043;
+  color: #ffffff;
 }
 
 .fx-cite-pager button:disabled {
@@ -341,19 +568,19 @@
 }
 
 .fx-cite-loading {
-  color: light-dark(#5f6368, #9aa0a6);
+  color: #9aa0a6;
   font-style: italic;
 }
 
 .fx-cite-unresolved {
-  color: light-dark(#5f6368, #9aa0a6);
+  color: #9aa0a6;
   font-style: italic;
 }
 
 /* Says which of the two the card body is showing, so a fallback to the
    document's own entry never reads as a (wrong) Scholar result. */
 .fx-cite-source {
-  color: light-dark(#5f6368, #9aa0a6);
+  color: #9aa0a6;
   font-size: 11px;
   font-style: italic;
   margin-bottom: 4px;
@@ -365,10 +592,11 @@
   font-weight: 600;
   line-height: 1.35;
   margin-bottom: 3px;
+  color: #f1f3f4;
 }
 
 .fx-scholar-byline {
-  color: light-dark(#006621, #7fbf8e);
+  color: #7fbf8e;
   margin-bottom: 5px;
 }
 
@@ -378,6 +606,7 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   margin-bottom: 5px;
+  color: #dadce0;
 }
 
 /* Cited-by on the left, "via <source>" on the right: the record's own
@@ -390,7 +619,7 @@
 }
 
 .fx-scholar-via {
-  color: light-dark(#5f6368, #9aa0a6);
+  color: #9aa0a6;
   font-size: 11px;
   margin-left: auto;
 }
@@ -398,13 +627,16 @@
 .fx-pill {
   display: inline-block;
   padding: 5px 12px;
-  border: 1px solid light-dark(#c0c0c6, #52525e);
+  border: 1px solid #52525e;
   border-radius: 16px;
+  color: #e8e8e8;
+  background: #2b2a33;
 }
 
 .fx-pill:hover {
   text-decoration: none;
-  background: light-dark(#f1f3f4, #3c4043);
+  background: #3c4043;
+  border-color: #8ab4f8;
 }
 
 /* The paper page on the publisher/venue site — a destination, so it reads as
@@ -414,14 +646,15 @@
 }
 
 .fx-pill-primary {
-  background: light-dark(#e8f0fe, #394457);
-  border-color: transparent;
+  background: #394457;
+  color: #8ab4f8;
+  border-color: #4a5c78;
 }
 
 /* "Cite" pill is a <button>; match the link pills. */
 .fx-pill.fx-pill-action {
   font: inherit;
-  color: light-dark(#0b57d0, #8ab4f8);
+  color: #8ab4f8;
 }
 
 /* BibTeX panel under the card */
@@ -434,9 +667,9 @@
   box-sizing: border-box;
   resize: vertical;
   font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: light-dark(#1a1a1a, #e8e8e8);
-  background: light-dark(#f6f8fa, #1e1e22);
-  border: 1px solid light-dark(#c0c0c6, #52525e);
+  color: #e8e8e8;
+  background: #1e1e22;
+  border: 1px solid #52525e;
   border-radius: 5px;
   padding: 6px 8px;
 }
@@ -452,7 +685,12 @@
   cursor: pointer;
   padding: 4px 12px;
   border-radius: 14px;
-  border: 1px solid light-dark(#c0c0c6, #52525e);
-  background: light-dark(#f1f3f4, #3c4043);
-  color: inherit;
+  border: 1px solid #52525e;
+  background: #3c4043;
+  color: #e8e8e8;
+}
+
+.fx-cite-bib-bar button:hover {
+  background: #52525e;
+  border-color: #8ab4f8;
 }

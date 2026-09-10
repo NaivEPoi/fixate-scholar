@@ -3,6 +3,8 @@
 // responseHeaders conditions), with a webNavigation fallback for file:// and
 // a context-menu fallback for anything else.
 
+import { clearCached } from "../viewer/references/lookup-cache.mjs";
+
 const VIEWER = chrome.runtime.getURL("vendor/pdfjs/web/viewer.html");
 
 // Rule ids. 2xx = redirects, 3xx+ = per-origin user bypass,
@@ -133,13 +135,23 @@ async function bypassOriginRules() {
   }));
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+export async function clearUserCache() {
+  try {
+    await clearCached();
+  } catch {}
+}
+
+chrome.runtime.onInstalled.addListener(async (details) => {
   registerRules();
   chrome.contextMenus.create({
     id: "fx-open-link",
     title: "Open link in FixateScholar",
     contexts: ["link"],
   });
+  // Clear user cache when a new version is installed/updated to prevent breaking changes across versions.
+  if (!details || details.reason === "install" || details.reason === "update") {
+    await clearUserCache();
+  }
 });
 chrome.runtime.onStartup.addListener(registerRules);
 registerRules();

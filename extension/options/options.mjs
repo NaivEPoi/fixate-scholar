@@ -16,6 +16,7 @@ $("intercept").checked = settings.intercept;
 $("flowCopy").checked = settings.flowCopy;
 $("scholarLookup").checked = settings.scholarLookup;
 $("openSources").checked = settings.openSources;
+$("saveLocalFile").checked = settings.saveLocalFile !== false;
 $("annotationAuthor").value = settings.annotationAuthor;
 $("bypassOrigins").value = settings.bypassOrigins.join("\n");
 
@@ -24,6 +25,7 @@ $("intercept").addEventListener("change", (e) => setSettings({ intercept: e.targ
 $("flowCopy").addEventListener("change", (e) => setSettings({ flowCopy: e.target.checked }));
 $("scholarLookup").addEventListener("change", (e) => setSettings({ scholarLookup: e.target.checked }));
 $("openSources").addEventListener("change", (e) => setSettings({ openSources: e.target.checked }));
+$("saveLocalFile").addEventListener("change", (e) => setSettings({ saveLocalFile: e.target.checked }));
 $("emphasisMode").addEventListener("change", (e) => {
   $("fractionRow").style.display = e.target.value === "fraction" ? "" : "none";
   setSettings({ emphasisMode: e.target.value });
