@@ -1,4 +1,4 @@
-import { getSettings, setSettings } from "../viewer/settings-client.mjs";
+import { getSettings, setSettings, urlsMatch } from "../viewer/settings-client.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -50,12 +50,14 @@ try {
   if (tabUrl.protocol === "chrome-extension:" && tabUrl.searchParams.get("file")) {
     origin = new URL(tabUrl.searchParams.get("file")).hostname;
   }
-  // A native-viewer PDF tab (http(s)/file URL ending in .pdf): offer a
-  // one-click open in FixateScholar, the on-demand path when interception is
-  // off or the site is bypassed. We can't see the Content-Type from here, so
-  // this catches extension-named PDFs; extensionless ones still use the
-  // right-click "Open in FixateScholar" menu.
-  if (/^(https?|file):$/.test(tabUrl.protocol) && /\.pdf($|[?#])/i.test(tabUrl.pathname + tabUrl.search)) {
+  // A native-viewer PDF tab (http(s)/file URL ending in .pdf) or a known
+  // bypassed PDF URL: offer a one-click open in FixateScholar, the on-demand
+  // path when interception is off or the site/URL is bypassed.
+  const isKnownBypassedPdf = (settings.bypassUrls || []).some((u) => urlsMatch(u, tab?.url ?? ""));
+  if (
+    isKnownBypassedPdf ||
+    (/^(https?|file):$/.test(tabUrl.protocol) && /\.pdf($|[?#])/i.test(tabUrl.pathname + tabUrl.search))
+  ) {
     pdfUrl = tab.url;
   }
 } catch {
@@ -91,6 +93,13 @@ $("intercept").addEventListener("change", (e) => {
 if (pdfUrl) {
   $("openHereRow").style.display = "";
   $("openHere").addEventListener("click", async () => {
+    const { bypassUrls = [] } = await getSettings();
+    if (bypassUrls.length) {
+      const next = bypassUrls.filter((u) => !urlsMatch(u, pdfUrl));
+      if (next.length !== bypassUrls.length) {
+        await setSettings({ bypassUrls: next });
+      }
+    }
     await chrome.tabs.update(tab.id, { url: `${VIEWER}?file=${encodeURIComponent(pdfUrl)}` });
     window.close();
   });

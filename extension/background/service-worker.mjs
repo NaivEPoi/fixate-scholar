@@ -4,15 +4,17 @@
 // a context-menu fallback for anything else.
 
 import { clearCached } from "../viewer/references/lookup-cache.mjs";
+import { normalizeBypassUrl, urlsMatch } from "../viewer/settings-client.mjs";
 
 const VIEWER = chrome.runtime.getURL("vendor/pdfjs/web/viewer.html");
 
 // Rule ids. 2xx = redirects, 3xx+ = per-origin user bypass,
-// 9xx = transient bypass-once.
+// 5xx+ = per-URL user bypass, 9xx = transient bypass-once.
 const RULE_REDIRECT_PDF = 201;
 const RULE_REDIRECT_OCTET = 202;
 const RULE_REDIRECT_PDF_URL = 203;
 const BYPASS_ORIGIN_BASE = 300;
+const BYPASS_URL_BASE = 500;
 const BYPASS_ONCE_BASE = 900;
 
 // registerRules() is triggered from several events (onInstalled, onStartup, the
@@ -103,6 +105,7 @@ async function applyRules() {
       },
     },
     ...(await bypassOriginRules()),
+    ...(await bypassUrlRules()),
   ];
   // removeRuleIds must be a SUPERSET of the ids we add: updateSessionRules
   // removes the listed ids before adding, so naming an id we re-add makes it a
@@ -135,6 +138,29 @@ async function bypassOriginRules() {
   }));
 }
 
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function bypassUrlRules() {
+  const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
+  return bypassUrls
+    .filter((url) => /^https?:/i.test(url))
+    .slice(0, 100)
+    .map((url, i) => {
+      const cleanUrl = normalizeBypassUrl(url);
+      return {
+        id: BYPASS_URL_BASE + i,
+        priority: 25,
+        condition: {
+          resourceTypes: ["main_frame"],
+          regexFilter: `^${escapeRegex(cleanUrl)}([?#].*)?$`,
+        },
+        action: { type: "allow" },
+      };
+    });
+}
+
 export async function clearUserCache() {
   try {
     await clearCached();
@@ -157,12 +183,13 @@ chrome.runtime.onStartup.addListener(registerRules);
 registerRules();
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && (changes.bypassOrigins || changes.intercept))
+  if (area === "sync" && (changes.bypassOrigins || changes.bypassUrls || changes.intercept))
     registerRules();
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "fx-open-link" && info.linkUrl) {
+    await removeBypassUrl(info.linkUrl);
     chrome.tabs.create({
       url: `${VIEWER}?file=${encodeURIComponent(info.linkUrl)}`,
       index: tab ? tab.index + 1 : undefined,
@@ -170,18 +197,31 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
 });
 
-// One-shot bypass URLs for the file:// path. DNR allow rules can't stop the
-// webNavigation rewrite below, so it consults this set. storage.session
-// survives service-worker restarts within the browser session.
-async function addBypassOnceUrl(url) {
-  const { bypassOnceUrls = [] } = await chrome.storage.session.get("bypassOnceUrls");
-  await chrome.storage.session.set({ bypassOnceUrls: [...new Set([...bypassOnceUrls, url])].slice(-20) });
+export { normalizeBypassUrl, urlsMatch };
+
+export async function addBypassUrl(url) {
+  const clean = normalizeBypassUrl(url);
+  if (!clean) return;
+  const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
+  if (!bypassUrls.some((u) => urlsMatch(u, clean))) {
+    const next = [...bypassUrls, clean].slice(-100);
+    await chrome.storage.sync.set({ bypassUrls: next });
+  }
 }
-async function takeBypassOnceUrl(url) {
-  const { bypassOnceUrls = [] } = await chrome.storage.session.get("bypassOnceUrls");
-  if (!bypassOnceUrls.includes(url)) return false;
-  await chrome.storage.session.set({ bypassOnceUrls: bypassOnceUrls.filter((u) => u !== url) });
-  return true;
+
+export async function removeBypassUrl(url) {
+  const clean = normalizeBypassUrl(url);
+  if (!clean) return;
+  const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
+  const next = bypassUrls.filter((u) => !urlsMatch(u, clean));
+  if (next.length !== bypassUrls.length) {
+    await chrome.storage.sync.set({ bypassUrls: next });
+  }
+}
+
+async function isBypassedUrl(url) {
+  const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
+  return bypassUrls.some((u) => urlsMatch(u, url));
 }
 
 // file://*.pdf — DNR can't see file: responses; rewrite the navigation.
@@ -190,10 +230,9 @@ chrome.webNavigation.onBeforeNavigate.addListener(
     if (details.frameId !== 0) return;
     if (!/^file:.*\.pdf$/i.test(details.url)) return;
     // "Open in native viewer" re-navigates to the same file: URL — the DNR
-    // allow rule cannot suppress this listener, so it checks the one-shot
-    // set itself. Without this the button bounced local PDFs straight back
-    // into FixateScholar (the "native button doesn't work" report).
-    if (await takeBypassOnceUrl(details.url)) return;
+    // allow rule cannot suppress this listener, so it checks whether the URL
+    // has been bypassed.
+    if (await isBypassedUrl(details.url)) return;
     const { intercept = true } = await chrome.storage.sync.get("intercept");
     if (!intercept) return;
     if (!(await chrome.extension.isAllowedFileSchemeAccess())) return;
@@ -204,37 +243,17 @@ chrome.webNavigation.onBeforeNavigate.addListener(
   { url: [{ schemes: ["file"], pathSuffix: ".pdf" }] },
 );
 
-// "Open in native viewer": a transient allow rule for one exact URL, then
-// re-navigate. The rule is removed when the navigation completes.
+// "Open in native viewer": escape to the browser's native viewer.
+// Persists the bypass for this URL so subsequent reopens/reloads also stay in
+// the browser's native viewer.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg?.type !== "fx-bypass-once" || !msg.url) return false;
+  if ((msg?.type !== "fx-bypass-once" && msg?.type !== "fx-bypass-url") || !msg.url) return false;
   (async () => {
-    if (/^file:/i.test(msg.url)) {
-      // file: navigations are intercepted by webNavigation, not DNR.
-      await addBypassOnceUrl(msg.url);
-    } else {
-      // removeRuleIds includes the id being added: a repeated click within
-      // the 30s cleanup window replaces the rule instead of throwing
-      // "does not have a unique ID" (which silently dropped the bypass and
-      // bounced the tab back into the viewer).
-      const id = BYPASS_ONCE_BASE + (Date.now() % 90);
-      await chrome.declarativeNetRequest.updateSessionRules({
-        removeRuleIds: [id],
-        addRules: [
-          {
-            id,
-            priority: 30,
-            condition: { resourceTypes: ["main_frame"], urlFilter: msg.url },
-            action: { type: "allow" },
-          },
-        ],
-      });
-      setTimeout(() => {
-        chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] });
-      }, 30_000);
-    }
+    const cleanUrl = normalizeBypassUrl(msg.url);
+    await addBypassUrl(cleanUrl);
+    await registerRules();
     const tabId = sender.tab?.id;
-    if (tabId !== undefined) await chrome.tabs.update(tabId, { url: msg.url });
+    if (tabId !== undefined) await chrome.tabs.update(tabId, { url: cleanUrl });
     sendResponse({ ok: true });
   })();
   return true;

@@ -15,6 +15,8 @@ export const DEFAULTS = Object.freeze({
   boldWeight: 650,
   fontMode: "original", // "original" | "atkinson" | "inter" | "literata"
   bypassOrigins: [],
+  // Individual PDF URLs escaped to the browser's native PDF viewer.
+  bypassUrls: [],
   // Master switch for PDF interception. When false the extension registers no
   // redirect rules, so PDFs open in the browser's native viewer — letting the
   // built-in PDF tools (incl. Gemini "ask about this PDF") and other PDF
@@ -71,3 +73,29 @@ export function onSettingsChange(cb) {
     cb(await getSettings());
   });
 }
+
+export function normalizeBypassUrl(url) {
+  if (!url || typeof url !== "string") return "";
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    return u.href;
+  } catch {
+    return url.split("#")[0].trim();
+  }
+}
+
+export function urlsMatch(a, b) {
+  const na = normalizeBypassUrl(a);
+  const nb = normalizeBypassUrl(b);
+  if (na === nb) return true;
+  if (na.startsWith("file:") && nb.startsWith("file:")) {
+    try {
+      return decodeURI(na).toLowerCase() === decodeURI(nb).toLowerCase();
+    } catch {
+      return na.toLowerCase() === nb.toLowerCase();
+    }
+  }
+  return false;
+}
+

@@ -19,6 +19,7 @@ $("openSources").checked = settings.openSources;
 $("saveLocalFile").checked = settings.saveLocalFile !== false;
 $("annotationAuthor").value = settings.annotationAuthor;
 $("bypassOrigins").value = settings.bypassOrigins.join("\n");
+$("bypassUrls").value = (settings.bypassUrls || []).join("\n");
 
 $("enabled").addEventListener("change", (e) => setSettings({ enabled: e.target.checked }));
 $("intercept").addEventListener("change", (e) => setSettings({ intercept: e.target.checked }));
@@ -48,6 +49,13 @@ $("bypassOrigins").addEventListener("change", (e) => {
     .map((s) => s.trim().replace(/^https?:\/\//, "").replace(/\/.*/, ""))
     .filter(Boolean);
   setSettings({ bypassOrigins: [...new Set(origins)] });
+});
+$("bypassUrls").addEventListener("change", (e) => {
+  const urls = e.target.value
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  setSettings({ bypassUrls: [...new Set(urls)] });
 });
 
 $("clearLookups").addEventListener("click", async () => {
