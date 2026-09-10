@@ -65,9 +65,28 @@ export function normalizeFileParam() {
   const search = window.location.search;
   if (!search.startsWith(MARKER)) return;
   const raw = search.slice(MARKER.length);
+  if (!raw) return;
+
+  // Reject dangerous protocols (e.g. javascript:, data:, vbscript:)
+  const unescaped = (() => {
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  })();
+  const colon = unescaped.indexOf(":");
+  if (colon !== -1) {
+    const proto = unescaped.slice(0, colon).toLowerCase().trim();
+    if (!["http", "https", "file", "blob", "chrome-extension"].includes(proto)) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+      return;
+    }
+  }
+
   // A blob: URL is minted by this page and is already exact; escaping it would
   // only make the address unreadable.
-  if (!raw || raw.startsWith("blob:") || isEncoded(raw)) return;
+  if (raw.startsWith("blob:") || isEncoded(raw)) return;
   const escaped = escapeForQuery(raw);
   if (escaped === raw) return;
   // The fragment stays on `location` rather than being folded into the
@@ -96,6 +115,17 @@ export function currentFileUrl() {
   return url && /^(https?|file):/.test(url) ? url : null;
 }
 
+// Frame busting / clickjacking defense: FixateScholar viewer is only intended to
+// run as a top-level document, never embedded in a third-party iframe.
+if (typeof window !== "undefined" && window.top && window.top !== window.self) {
+  try {
+    window.stop?.();
+    if (document.documentElement) document.documentElement.textContent = "";
+  } catch {}
+  throw new Error("FixateScholar: embedding the PDF viewer in a frame is blocked for security.");
+}
+
 // Runs on import, which is the point: the module tag sits ahead of viewer.mjs.
 // Guarded only so the unit tests can import the functions under Node.
 if (typeof window !== "undefined") normalizeFileParam();
+

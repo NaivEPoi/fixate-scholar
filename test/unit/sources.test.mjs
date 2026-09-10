@@ -16,6 +16,7 @@ import {
   resolveDoi,
   scholarSearchUrl,
   openAireWork,
+  sanitizeHttpUrl,
   stripJats,
 } from "../../extension/viewer/references/sources.mjs";
 import { bestMatch, scoreResult } from "../../extension/viewer/references/matching.mjs";
@@ -397,5 +398,26 @@ test("do not send request to crossref when everything displayed to user is avail
     globalThis.fetch = origFetch;
   }
 });
+
+test("sanitizeHttpUrl strictly permits only valid http and https URLs", () => {
+  assert.equal(sanitizeHttpUrl("https://example.com/paper.pdf"), "https://example.com/paper.pdf");
+  assert.equal(sanitizeHttpUrl("http://example.org/test"), "http://example.org/test");
+  assert.equal(sanitizeHttpUrl("javascript:alert(1)"), null);
+  assert.equal(sanitizeHttpUrl("data:text/html,bad"), null);
+  assert.equal(sanitizeHttpUrl("blob:chrome-extension://abc/123"), null);
+  assert.equal(sanitizeHttpUrl("file:///C:/secret.pdf"), null);
+  assert.equal(sanitizeHttpUrl(""), null);
+  assert.equal(sanitizeHttpUrl(null), null);
+});
+
+test("openAlexAbstract bounds check prevents array exhaustion and prototype pollution", () => {
+  assert.equal(
+    openAlexAbstract({ Hello: [0], world: [1], evil: [100000000], negative: [-1] }),
+    "Hello world",
+  );
+  assert.equal(openAlexAbstract({ word: "not-an-array" }), "");
+  assert.equal(openAlexAbstract(null), "");
+});
+
 
 

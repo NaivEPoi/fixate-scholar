@@ -99,6 +99,7 @@ export function mergeRecords(existing, incoming) {
   if (!incoming || typeof incoming !== "object") return existing ?? null;
   const merged = { ...existing };
   for (const [k, v] of Object.entries(incoming)) {
+    if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
     if (v === null || v === undefined || v === "") continue;
     if (k === "snippet" && incoming.snippetIsAbstract && !merged.snippetIsAbstract) {
       merged.snippet = v;
@@ -152,7 +153,7 @@ export async function readCached(query) {
     if (entry.alias) {
       let currentAlias = entry.alias;
       const visited = new Set([query]);
-      while (currentAlias && !visited.has(currentAlias)) {
+      while (currentAlias && !visited.has(currentAlias) && visited.size < 20) {
         visited.add(currentAlias);
         const canonKey = cacheKey(currentAlias);
         const canonGot = await store.get(canonKey);

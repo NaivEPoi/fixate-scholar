@@ -23,7 +23,8 @@ rmSync(zipPath, { force: true });
 if (process.platform === "win32") {
   execFileSync("powershell.exe", [
     "-NoProfile", "-Command",
-    `Compress-Archive -Path "${extDir}\\*" -DestinationPath "${zipPath}"`,
+    "param($src, $dst) Compress-Archive -Path (Join-Path $src '*') -DestinationPath $dst -Force",
+    extDir, zipPath,
   ]);
 } else {
   execFileSync("zip", ["-qr", zipPath, "."], { cwd: extDir });

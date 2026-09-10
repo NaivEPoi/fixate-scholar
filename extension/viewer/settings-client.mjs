@@ -77,11 +77,16 @@ export function onSettingsChange(cb) {
 export function normalizeBypassUrl(url) {
   if (!url || typeof url !== "string") return "";
   try {
-    const u = new URL(url);
+    const u = new URL(url.trim());
+    if (u.protocol !== "http:" && u.protocol !== "https:" && u.protocol !== "file:") {
+      return "";
+    }
     u.hash = "";
     return u.href;
   } catch {
-    return url.split("#")[0].trim();
+    const trimmed = url.split("#")[0].trim();
+    if (!/^(https?|file):/i.test(trimmed)) return "";
+    return trimmed;
   }
 }
 

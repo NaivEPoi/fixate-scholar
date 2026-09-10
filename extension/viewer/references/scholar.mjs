@@ -94,8 +94,17 @@ function readResult(node) {
   const root = node.closest?.(".gs_r") ?? node;
   const result = root.querySelector(".gs_ri") ?? root;
   // DOMParser resolves relative hrefs against the extension origin — resolve
-  // against Scholar explicitly instead.
-  const abs = (a) => (a?.getAttribute("href") ? new URL(a.getAttribute("href"), BASE).href : null);
+  // against Scholar explicitly instead. Ensure scheme is strictly http or https.
+  const abs = (a) => {
+    const href = a?.getAttribute("href");
+    if (!href) return null;
+    try {
+      const u = new URL(href, BASE);
+      return u.protocol === "http:" || u.protocol === "https:" ? u.href : null;
+    } catch {
+      return null;
+    }
+  };
   const titleA = result.querySelector(".gs_rt a");
   // An entry Scholar has no page for renders as "[CITATION] Title" with no
   // link; the type tag is not part of the title.
@@ -152,7 +161,14 @@ export async function scholarBibtex(cid, fetchPage) {
   const bibA = links.find((a) => /bibtex/i.test(a.textContent)) ?? links[0];
   const href = bibA?.getAttribute("href");
   if (!href) return null;
-  const text = (await fetchPage(new URL(href, BASE).href)).trim();
+  let targetUrl;
+  try {
+    targetUrl = new URL(href, BASE);
+    if (targetUrl.origin !== new URL(BASE).origin) return null;
+  } catch {
+    return null;
+  }
+  const text = (await fetchPage(targetUrl.href)).trim();
   return text.startsWith("@") ? text : null;
 }
 
