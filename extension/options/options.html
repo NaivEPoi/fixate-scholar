@@ -4,21 +4,90 @@
   <meta charset="utf-8">
   <title>FixateScholar settings</title>
   <style>
+    :root {
+      color-scheme: dark;
+    }
     body {
       max-width: 560px;
       margin: 24px auto;
       padding: 0 16px;
-      font: 14px/1.5 system-ui, sans-serif;
-      color: light-dark(#1a1a1a, #e8e8e8);
-      background: light-dark(#ffffff, #202124);
+      font: 14px/1.5 system-ui, -apple-system, sans-serif;
+      color: #e8e8e8;
+      background: #202124;
     }
-    h1 { font-size: 18px; }
-    h2 { font-size: 15px; margin-top: 24px; }
-    label { display: block; margin: 10px 0; }
-    .hint { color: light-dark(#5f6368, #9aa0a6); font-size: 12px; margin: 2px 0 0; }
-    textarea { width: 100%; min-height: 90px; font: 13px/1.4 monospace; }
+    h1 {
+      font-size: 18px;
+      color: #f1f3f4;
+      margin-bottom: 16px;
+    }
+    h2 {
+      font-size: 15px;
+      color: #f1f3f4;
+      margin-top: 24px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #3c4043;
+    }
+    label {
+      display: block;
+      margin: 12px 0;
+      color: #e8e8e8;
+    }
+    .hint {
+      color: #9aa0a6;
+      font-size: 12px;
+      margin: 3px 0 0;
+      line-height: 1.45;
+    }
+    textarea {
+      width: 100%;
+      min-height: 90px;
+      font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: #e8e8e8;
+      background: #1e1e22;
+      border: 1px solid #52525e;
+      border-radius: 4px;
+      padding: 6px 8px;
+      box-sizing: border-box;
+    }
+    textarea:focus-visible,
+    select:focus-visible,
+    input:focus-visible {
+      outline: 2px solid #8ab4f8;
+      border-color: transparent;
+    }
+    select {
+      background: #2b2a33;
+      color: #e8e8e8;
+      border: 1px solid #52525e;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font: inherit;
+    }
+    input[type="number"],
+    input[type="text"] {
+      background: #2b2a33;
+      color: #e8e8e8;
+      border: 1px solid #52525e;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font: inherit;
+    }
     input[type="number"] { width: 70px; }
-    output { font-weight: 600; }
+    input[type="text"] { width: 220px; }
+    input[type="checkbox"] {
+      accent-color: #8ab4f8;
+      cursor: pointer;
+    }
+    input[type="range"] {
+      accent-color: #8ab4f8;
+    }
+    output {
+      font-weight: 600;
+      color: #8ab4f8;
+    }
+    strong {
+      color: #f1f3f4;
+    }
   </style>
 </head>
 <body>
@@ -101,6 +170,10 @@
   <button type="button" id="clearLookups">Clear stored lookups</button>
   <output id="clearLookupsOut"></output>
   <h2>Highlights &amp; comments</h2>
+  <label>
+    <input type="checkbox" id="saveLocalFile"> Save changes directly to local PDF files
+    <p class="hint">When editing a local file (file://), save changes directly to the original file by default instead of downloading a new copy. If unsupported or cancelled, falls back to standard download.</p>
+  </label>
   <label>
     Your name on annotations
     <input type="text" id="annotationAuthor" placeholder="(none)" style="width:min(320px,100%)">

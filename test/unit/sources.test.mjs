@@ -7,8 +7,13 @@ import {
   arxivId,
   cleanDoi,
   crossrefWork,
+  extractBibtexDoi,
+  fetchBibtex,
+  isDisplayComplete,
+  lookupReference,
   openAlexAbstract,
   openAlexWork,
+  resolveDoi,
   scholarSearchUrl,
   openAireWork,
   stripJats,
@@ -197,3 +202,200 @@ test("a registered SHORT title matches, but only with the author and year to bac
   assert.equal(bestMatch([other], ref), null);
   assert.equal(scoreResult(short, ref).prefix, true);
 });
+
+test("fetchBibtex returns null when no key can be derived", async () => {
+  assert.equal(await fetchBibtex(null, null, null), null);
+});
+
+test("fetchBibtex queries Google Scholar cite dialog by default when cid is present", async () => {
+  const origFetch = globalThis.fetch;
+  const origDOMParser = globalThis.DOMParser;
+  try {
+    globalThis.DOMParser = class {
+      parseFromString(html) {
+        return {
+          querySelectorAll(selector) {
+            if (selector === "a.gs_citi") {
+              return [
+                {
+                  textContent: "BibTeX",
+                  getAttribute: () => "/scholar.bib?q=info:mock123:scholar.google.com/&output=citation",
+                },
+              ];
+            }
+            return [];
+          },
+        };
+      }
+    };
+    const calls = [];
+    globalThis.fetch = async (url) => {
+      calls.push(String(url));
+      if (String(url).includes("output=cite")) {
+        return { ok: true, text: async () => `<a class="gs_citi" href="/scholar.bib?q=info:mock123">BibTeX</a>` };
+      }
+      if (String(url).includes("scholar.bib")) {
+        return { ok: true, text: async () => `@article{mock,\n  title={Mock Paper}\n}` };
+      }
+      return { ok: false, status: 404 };
+    };
+
+    const bib = await fetchBibtex("10.1234/some.doi", { cid: "mock123", doi: "10.1234/some.doi" });
+    assert.match(bib, /^@article\{mock/);
+    assert(calls.some((u) => u.includes("scholar.google.com/scholar?q=info:mock123")), "Scholar cite dialog called first");
+  } finally {
+    globalThis.fetch = origFetch;
+    globalThis.DOMParser = origDOMParser;
+  }
+});
+
+test("fetchBibtex falls back to Crossref DOI when Scholar fails or returns no bibtex", async () => {
+  const origFetch = globalThis.fetch;
+  const origDOMParser = globalThis.DOMParser;
+  try {
+    globalThis.DOMParser = class {
+      parseFromString() {
+        return { querySelectorAll: () => [] };
+      }
+    };
+    const calls = [];
+    globalThis.fetch = async (url) => {
+      calls.push(String(url));
+      if (String(url).includes("scholar.google.com")) {
+        return { ok: false, status: 503 };
+      }
+      if (String(url).includes("api.crossref.org")) {
+        return { ok: true, text: async () => `@article{crossref,\n  title={Crossref Paper}\n}` };
+      }
+      return { ok: false, status: 404 };
+    };
+
+    const bib = await fetchBibtex("10.9999/fallback.doi", { cid: "mock_fail", doi: "10.9999/fallback.doi" });
+    assert.match(bib, /^@article\{crossref/);
+    assert(calls.some((u) => u.includes("api.crossref.org")), "Crossref fallback called when Scholar fails");
+  } finally {
+    globalThis.fetch = origFetch;
+    globalThis.DOMParser = origDOMParser;
+  }
+});
+
+test("extractBibtexDoi parses DOIs from BibTeX fields", () => {
+  assert.equal(
+    extractBibtexDoi("@article{ex1,\n  title={A},\n  doi={10.1145/359657.359659}\n}"),
+    "10.1145/359657.359659",
+  );
+  assert.equal(
+    extractBibtexDoi("@article{ex2,\n  title={B},\n  url={https://doi.org/10.1007/s10207-020-00508-8}\n}"),
+    "10.1007/s10207-020-00508-8",
+  );
+  assert.equal(
+    extractBibtexDoi('@article{ex3,\n  title={C},\n  doi = "10.1016/j.jss.2021.111000",\n}'),
+    "10.1016/j.jss.2021.111000",
+  );
+  assert.equal(extractBibtexDoi("@article{ex4,\n  title={No DOI}\n}"), null);
+  assert.equal(extractBibtexDoi(null), null);
+});
+
+test("resolveDoi discovers DOI via Crossref bibliographic search when target has no DOI", async () => {
+  const origFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("api.crossref.org")) {
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              items: [
+                {
+                  DOI: "10.1145/359657.359659",
+                  title: ["Applied pi calculus"],
+                  author: [{ family: "Ryan" }],
+                  issued: { "date-parts": [[2011]] },
+                },
+              ],
+            },
+          }),
+        };
+      }
+      return { ok: false, status: 404 };
+    };
+
+    const target = { title: "Applied pi calculus", surname: "Ryan", year: 2011 };
+    const doi = await resolveDoi(target);
+    assert.equal(doi, "10.1145/359657.359659");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("isDisplayComplete identifies records with all user-displayed fields", () => {
+  const complete = {
+    title: "Attention Is All You Need",
+    byline: "A Vaswani, N Shazeer - 2017",
+    snippet: "The dominant sequence transduction models...",
+    citedBy: "Cited by 120000",
+    pdfUrl: "https://proceedings.neurips.cc/paper/file.pdf",
+    doi: "10.5555/3295222.3295349",
+  };
+  assert.equal(isDisplayComplete(complete), true);
+
+  const scholarComplete = {
+    title: "Attention Is All You Need",
+    authors: ["Vaswani"],
+    year: 2017,
+    snippet: "The dominant sequence transduction models...",
+    citedBy: "Cited by 120000",
+    pdfUrl: "https://proceedings.neurips.cc/paper/file.pdf",
+  };
+  assert.equal(isDisplayComplete(scholarComplete), true);
+
+  const missingSnippet = { ...complete, snippet: "" };
+  assert.equal(isDisplayComplete(missingSnippet), false);
+
+  const missingTitle = { ...complete, title: "" };
+  assert.equal(isDisplayComplete(missingTitle), false);
+
+  const bareRef = {
+    title: "Attention Is All You Need",
+    authors: ["Vaswani"],
+    year: 2017,
+    doi: "10.5555/3295222.3295349",
+  };
+  assert.equal(isDisplayComplete(bareRef), false);
+  assert.equal(isDisplayComplete(null), false);
+});
+
+test("do not send request to crossref when everything displayed to user is available", async () => {
+  const origFetch = globalThis.fetch;
+  const calls = [];
+  try {
+    globalThis.fetch = async (url) => {
+      calls.push(String(url));
+      return { ok: false, status: 500 };
+    };
+
+    const completeTarget = {
+      title: "Attention Is All You Need",
+      byline: "A Vaswani, N Shazeer - 2017",
+      snippet: "The dominant sequence transduction models...",
+      citedBy: "Cited by 120000",
+      pdfUrl: "https://proceedings.neurips.cc/paper/file.pdf",
+      doi: "10.5555/3295222.3295349",
+    };
+
+    // resolveDoi skips Crossref when target is display-complete
+    const doi = await resolveDoi(completeTarget);
+    assert.equal(doi, "10.5555/3295222.3295349");
+    assert.equal(calls.filter((u) => u.includes("api.crossref.org")).length, 0, "No Crossref requests when display-complete");
+
+    // lookupReference skips network lookup when ref is display-complete
+    const preview = await lookupReference(completeTarget);
+    assert.equal(preview.title, "Attention Is All You Need");
+    assert.equal(preview.doi, "10.5555/3295222.3295349");
+    assert.equal(calls.length, 0, "Zero network calls made");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+

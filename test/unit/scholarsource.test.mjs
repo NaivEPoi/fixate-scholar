@@ -41,3 +41,52 @@ test("the search link the card shows is a link, not a lookup", () => {
     "https://scholar.google.com/scholar?hl=en&q=Applied%20pi%20calculus%20Ryan%202011",
   );
 });
+
+if (!globalThis.DOMParser) {
+  globalThis.DOMParser = class {
+    parseFromString(html) {
+      return {
+        querySelectorAll(selector) {
+          if (selector === "a.gs_citi") {
+            const matches = [
+              ...html.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*class=["'][^"']*gs_citi[^"']*["'][^>]*>(.*?)<\/a>/gi),
+              ...html.matchAll(/<a[^>]*class=["'][^"']*gs_citi[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi),
+            ];
+            return matches.map((m) => ({
+              textContent: m[2],
+              getAttribute: (attr) => (attr === "href" ? m[1] : null),
+            }));
+          }
+          return [];
+        },
+      };
+    }
+  };
+}
+
+const { scholarBibtex } = await import("../../extension/viewer/references/scholar.mjs");
+
+test("scholarBibtex fetches bibtex from Scholar cite dialog", async () => {
+  const fetchPage = async (url) => {
+    if (url.includes("output=cite")) {
+      return `<div><a class="gs_citi" href="/scholar.bib?q=info:test1234:scholar.google.com/&output=citation">BibTeX</a></div>`;
+    }
+    if (url.includes("scholar.bib")) {
+      return `@article{vaswani2017,\n  title={Attention is all you need}\n}`;
+    }
+    throw new Error("unexpected URL: " + url);
+  };
+  const bib = await scholarBibtex("test1234", fetchPage);
+  assert.equal(bib, `@article{vaswani2017,\n  title={Attention is all you need}\n}`);
+});
+
+test("scholarBibtex returns null when cid is null or bib text does not start with @", async () => {
+  assert.equal(await scholarBibtex(null, async () => ""), null);
+  const fetchPage = async (url) => {
+    if (url.includes("output=cite")) {
+      return `<div><a class="gs_citi" href="/scholar.bib?q=info:bad">BibTeX</a></div>`;
+    }
+    return "Not a valid bibtex";
+  };
+  assert.equal(await scholarBibtex("bad", fetchPage), null);
+});

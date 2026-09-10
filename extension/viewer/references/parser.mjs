@@ -709,6 +709,10 @@ export function findInternalRefs(text) {
 // §/¶/p./pp. or a capital word so ordinary prose "[9, and ...]" is not swept up.
 const NUMERIC_CITE =
   /\[(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)(?:\s*,\s*(?:§|¶|pp?\.|[A-Z])[^\]]{0,55})?\]/g;
+// A numeric citation range written across separate brackets: "[6]-[11]",
+// "[6]–[11]", "[6] - [11]", "[6]--[11]".
+const NUMERIC_BRACKET_RANGE =
+  /\[\s*(\d{1,3})\s*\]\s*(?:[–—\u2212\u2015-]|--)\s*\[\s*(\d{1,3})(?:\s*,\s*(?:§|¶|pp?\.|[A-Z])[^\]]{0,55})?\s*\]/g;
 const AUTHOR_YEAR_CITE = /\(([^()]{2,120}?(?:19|20)\d{2}[a-z]?(?:\s*[;,]\s*(?:p+\.\s*[\d–-]+|[^();]*?(?:19|20)\d{2}[a-z]?))*)\)/g;
 
 // NARRATIVE author-year (natbib \citet): the author names are running PROSE and
@@ -756,6 +760,14 @@ export function findCitations(text) {
     if (keys.includes("0")) continue;
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
   }
+  for (const m of text.matchAll(NUMERIC_BRACKET_RANGE)) {
+    const a = parseInt(m[1], 10);
+    const b = parseInt(m[2], 10);
+    if (a === 0 || b === 0 || a >= b) continue;
+    const keys = [];
+    for (let n = a; n <= Math.min(b, a + 25); n++) keys.push(String(n));
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
+  }
   for (const m of text.matchAll(AUTHOR_YEAR_CITE)) {
     const keys = [];
     for (const part of m[1].split(";")) {
@@ -785,7 +797,7 @@ export function findCitations(text) {
       .map((y) => `${surname}-${y}`);
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
   }
-  out.sort((a, b) => a.start - b.start);
+  out.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
   // Drop overlaps: the annotator wraps each range in the span's text, so two
   // ranges covering the same characters would nest and corrupt the markup.
   // Earliest (then longest) wins.
@@ -804,10 +816,10 @@ export function findCitations(text) {
 function expandNumericList(list) {
   const keys = [];
   for (const part of list.split(/[,;]/)) {
-    const range = /^\s*(\d{1,3})\s*[–—-]\s*(\d{1,3})\s*$/.exec(part);
+    const range = /^\s*(\d{1,3})\s*(?:[–—\u2212\u2015-]|--)\s*(\d{1,3})\s*$/.exec(part);
     if (range) {
       const [a, b] = [parseInt(range[1], 10), parseInt(range[2], 10)];
-      for (let n = a; n <= Math.min(b, a + 12); n++) keys.push(String(n));
+      for (let n = a; n <= Math.min(b, a + 25); n++) keys.push(String(n));
     } else {
       const n = /^\s*(\d{1,3})\s*$/.exec(part);
       if (n) keys.push(n[1]);

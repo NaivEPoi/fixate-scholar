@@ -194,6 +194,9 @@ export class CitationPopup {
                 this.#linkPill(`[PDF] ${preview.pdfHost}`, preview.pdfUrl, "fx-pill-primary"),
               );
             }
+            if (preview.doi && !entry.doi && actions && !actions.querySelector("a[href*='doi.org']")) {
+              actions.append(this.#doiPill(preview.doi));
+            }
             this.#position();
           });
         }
@@ -486,13 +489,13 @@ export class CitationPopup {
     el.append(panel);
     this.#position();
 
-    // The publisher's own registered BibTeX, via the DOI — the entry's if it
-    // printed one, otherwise the DOI the lookup found. Falls back to a BibTeX
-    // built from the parsed entry, so "Cite" always yields something copyable.
+    // BibTeX from Google Scholar by default, falling back to publisher-registered
+    // metadata via DOI (Crossref) and then to locally parsed entry synthesis.
     lookupReference(entry).then((preview) =>
       fetchBibtex(
         entry.doi || (preview?.unavailable ? null : preview?.doi),
         preview?.unavailable ? null : preview,
+        entry,
       ).then((bib) => {
         if (!panel.isConnected) return;
         ta.value = bib || entryBibtex(entry, preview?.unavailable ? null : preview);

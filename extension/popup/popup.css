@@ -1,15 +1,21 @@
+:root {
+  color-scheme: dark;
+}
+
 body {
   width: 260px;
   margin: 0;
   padding: 12px 14px;
-  font: 13px/1.4 system-ui, sans-serif;
-  color: light-dark(#1a1a1a, #e8e8e8);
-  background: light-dark(#ffffff, #2a2a2e);
+  font: 13px/1.4 system-ui, -apple-system, sans-serif;
+  color: #e8e8e8;
+  background: #202124;
 }
 
 h1 {
   font-size: 14px;
+  font-weight: 600;
   margin: 0 0 10px;
+  color: #f1f3f4;
 }
 
 .row {
@@ -28,17 +34,66 @@ h1 {
 .row span {
   display: flex;
   justify-content: space-between;
+  color: #e8e8e8;
+}
+
+select {
+  background: #2b2a33;
+  color: #e8e8e8;
+  border: 1px solid #52525e;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font: inherit;
+}
+
+select:focus-visible {
+  outline: 2px solid #8ab4f8;
+  border-color: transparent;
+}
+
+input[type="checkbox"] {
+  accent-color: #8ab4f8;
+  cursor: pointer;
 }
 
 input[type="range"] {
   width: 100%;
+  accent-color: #8ab4f8;
+}
+
+output {
+  font-weight: 600;
+  color: #8ab4f8;
+}
+
+#openHere {
+  background: #3c4043;
+  color: #e8e8e8;
+  border: 1px solid #52525e;
+  border-radius: 4px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+
+#openHere:hover {
+  background: #52525e;
+  border-color: #8ab4f8;
 }
 
 .footer {
-  margin: 4px 0 0;
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid #3c4043;
 }
 
 .footer a {
-  color: light-dark(#0b57d0, #8ab4f8);
+  color: #8ab4f8;
   text-decoration: none;
+  font-size: 12px;
+}
+
+.footer a:hover {
+  text-decoration: underline;
 }

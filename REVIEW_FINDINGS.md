@@ -12,12 +12,15 @@ Status: **review complete; F1-F5 all FIXED & validated. Round 3 (F6/F7) below.**
 > R35** at the end. No content was changed by that renumbering — only the
 > headings. Read R34/R35 as having landed alongside R28–R33, not after them.
 
-Latest: **Round 33 (R33) — a real abstract on a Scholar card (OpenAlex by
+Latest: **Round 37 (R37) — highlight floating toolbar & comment GUI (`enableHighlightFloatingButton`), highlight visibility under fx-on (`mix-blend-mode: multiply` + `pointer-events: none`), separate bracket citation range expansion (`[6]-[11]`), direct local file saving for `file://` PDFs, and Google Scholar BibTeX by default for Cite.**
+Before it: **Round 36 (R36)** — harness defects resolved and new guards (`fontkeep.mjs`, `whyskip.mjs`, `wordshot.mjs`).
+Before it: **Round 35 (R35)** — the last line of every column, dropped in silence.
+Before it: **Round 33 (R33) — a real abstract on a Scholar card (OpenAlex by
 title, verified), NO artificial delay on a reader's lookup (the click is the
 rate limit; the gap moved to the test harnesses), and a git-ignored local cache
 of real Scholar pages so the source can be measured offline instead of waiting
 out a captcha.** Alongside it: **R34** (two bibliographies in one PDF) and
-**R35** (comments on highlights).
+highlight comments.
 Before it: **Round 32 (R32) — Google Scholar as the DEFAULT source (one search per
 click, with the reader own cookies, title-only query), the open databases as
 the fallback, both switchable — plus a Privacy section, a no-affiliation /
@@ -3347,3 +3350,68 @@ corpus.
 what the engine did to it (`processed` / `keep` / the exact emphasis runs), and
 captures it zoomed. `processed=false keep=true` means absent emphasis is
 correct; `emph=0` falsifies "emphasis applied here" outright.
+
+## R37 — highlight toolbar & fx-on visibility, citation range expansion, direct local save, Scholar BibTeX by default
+
+Introduced in v1.0.9:
+
+- **Floating highlight & comment GUI on selection (`enableHighlightFloatingButton`).**
+  PDF.js supports a floating action toolbar triggered on text selection that provides instant access to color-coded highlight options and comment creation. This preference (`enableHighlightFloatingButton`) was turned on via vendored patch 9 in `scripts/pdfjs-patches.mjs`.
+
+- **Highlight visibility and pointer interaction in `fx-on` mode.**
+  In stock PDF.js, `/Highlight` annotations are drawn to canvas while their DOM `.annotationLayer .highlightAnnotation` wrappers remain transparent. In `fx-on` reading mode, white `.fx-mask` rectangles cover the canvas glyphs to replace them with enhanced typography, inadvertently masking canvas-rendered highlights.
+  Fix:
+  1. `.annotationLayer .highlightAnnotation` is styled with `background-color: var(--fx-highlight-color, rgb(255 235 59 / 0.45))` and `mix-blend-mode: multiply`.
+  2. In `overlay.mjs`, `colorizeHighlightAnnotations(pageView)` extracts annotation RGB colors and sets `--fx-highlight-color` on each annotation element.
+  3. However, `.highlightAnnotation` with default pointer events intercepted mouse drag events, preventing text selection over highlighted text. Fixing this required `pointer-events: none` on `.highlightAnnotation` while keeping `.annotationCommentButton` with `pointer-events: auto !important` so comments remain interactive.
+
+- **Citation range expansion for separate bracketed ranges (`[6]-[11]`).**
+  Previously, only hyphenated/dash ranges inside a single pair of brackets (such as `[6-11]`) were parsed as ranges. When authors wrote separate bracketed ranges like `[6]-[11]` (or using en-dash/em-dash variants `[6]–[11]`), the regex parsed only the two endpoints `[6]` and `[11]`, omitting cards and hit targets for the intermediate citations `[7], [8], [9], [10]`.
+  Fix:
+  Added `NUMERIC_BRACKET_RANGE` regex to `references/parser.mjs` matching `\[(\d+)\]\s*[\u2013\u2014-]\s*\[(\d+)\]`. When matched, all intermediate integers in the range are generated into citation keys, hit targets, and reference cards.
+
+- **Direct local file saving for `file://` PDFs.**
+  When reading local PDFs via `file://`, the default viewer download button initiated standard browser downloads, producing redundant copies (`file (1).pdf`) in the user's Downloads directory.
+  Fix:
+  In `overlay.mjs`, `fxLocalDownload` intercepts downloads for `file://` URLs and invokes the File System Access API (`window.showSaveFilePicker` with `createWritable()`) to overwrite the local file directly in place. Configurable via the `saveLocalFile` setting (default `true`) in `options.html` / `options.mjs`, falling back cleanly to standard browser download on cancel or if unsupported.
+
+- **Google Scholar BibTeX by default for Cite action.**
+  The Cite dialog previously queried Crossref by default whenever a DOI was present, even when the card was matched from Google Scholar.
+  Fix:
+  `fetchBibtex` in `references/sources.mjs` now queries Google Scholar's BibTeX endpoint by default (using `record.cid`, or looking up the work on Scholar when enabled). If Scholar is unavailable, refused, disabled in settings, or has no match, it falls back cleanly to publisher-registered metadata via DOI (Crossref content negotiation), and finally to local entry synthesis (`entryBibtex`).
+
+- **Flexible Cache Identity Without Requiring DOIs & Request Minimization.**
+  The cache does **not** require a DOI to operate:
+  1. If a DOI is available, it is used as the canonical key `doi:${clean}`.
+  2. If a DOI is missing, paper identity is cleanly derived from its title and first author (`paper:${title}:${author}`), cluster ID (`cid:${cid}`), or citation query.
+  3. **No duplicate entries**: When multiple queries target the same paper (e.g. initial citation string, followed by details enrichment or Cite action), `lookup-cache.mjs` stores the canonical record once and uses lightweight alias pointers for other queries rather than duplicating payload data.
+  4. **Progressive field merging**: `mergeRecords()` merges incoming query results into existing records, progressively filling missing fields (`doi`, `snippetIsAbstract`, `abstract`, `pdfUrl`, `citedBy`, `bibtex`) without overwriting existing data.
+  5. **Network request minimization**: If all required fields are already populated in memory or cache, `fetchDetails()` and `fetchBibtex()` immediately return without dispatching speculative or redundant network requests.
+
+- **Automatic User Cache Clearing on Extension Install and Update.**
+  Because citation structures, schema formats, or cache keys can evolve between versions, stale cached lookups in `chrome.storage.local` could cause inconsistencies.
+  Fix:
+  In `background/service-worker.mjs`, `chrome.runtime.onInstalled` now invokes `clearUserCache()` (via `references/lookup-cache.mjs` `clearCached()`) whenever `details.reason` is `"install"` or `"update"`. This purges all `fx.cite.*` lookup entries and `fx.cite.index` from `chrome.storage.local`, ensuring a clean state across version upgrades while preserving user settings in `chrome.storage.sync`.
+
+- **Strict Suppression of Crossref Queries When Display Fields Are Available.**
+  When all information displayed to the user on the card (`title`, `authors`/`byline`, `snippet`/`abstract`, `citedBy`, `pdfUrl`, and/or `doi`) is already available (from Google Scholar, local storage cache, open access repositories, or the document's own parsed entry), outgoing requests to Crossref are strictly suppressed.
+  1. `sources.mjs` exports `isDisplayComplete(record)` to verify if all visual elements of the card (title, byline, abstract/snippet, cited-by count, and open-access PDF or DOI) are satisfied.
+  2. `lookupReference(ref)` checks `isDisplayComplete(ref)` and inspects the cache using canonical keys (`doi:`, `paper:`, `cid:`) in addition to the raw query string; if a display-complete record exists, it is returned immediately with 0 network calls.
+  3. `searchCrossref()`, `byDoi()`, and `resolveDoi()` check `isDisplayComplete()` and inspect persistent storage before dispatching network requests to `api.crossref.org`, completely avoiding unnecessary calls.
+  4. `fetchBibtex()` checks existing `record.bibtex` and cached entries under both the query key and `doi:${clean}`; if BibTeX is already known or if Scholar supplies it, Crossref content negotiation is never invoked.
+
+- **Prioritizing CID Before Canonical Key in Reference Lookup and Cache.**
+  Google Scholar cluster IDs (`cid`) are the most specific identifier for works retrieved via Scholar.
+  1. `lookup-cache.mjs`: `canonicalKeyFor(query, record)` checks `if (record.cid) return \`cid:\${record.cid}\`` before checking DOI and title+author (`paper:\${title}:\${author}`).
+  2. In `writeCached()`, all candidate keys (`query`, `cid`, `doi`, `paper:`) and alias pointers are gathered; if an established canonical record or alias exists in storage, it is adopted and merged into `finalResult`. All alternate keys are aliased to the canonical record, preventing duplicate records.
+  3. `sources.mjs`: `lookupReference()`, `byDoi()`, `searchCrossref()`, `resolveDoi()`, and `fetchBibtex()` check `cid:\${cid}` in cache before querying canonical DOI or paper keys.
+
+- **Unified Dark Background GUI Style Across the Plugin.**
+  To provide a consistent, cohesive visual experience across all surfaces of the extension:
+  1. **Extension Toolbar Popup** (`popup.css`): Defaulted to dark backgrounds (`#202124`) with `color-scheme: dark`, light text (`#e8e8e8`), dark select inputs (`#2b2a33`), and `#8ab4f8` accent highlights.
+  2. **Options Page** (`options.html`): Defaulted to dark backgrounds (`#202124`) with `color-scheme: dark`, high-contrast headings (`#f1f3f4`), dark text inputs, dark textareas (`#1e1e22`), and subtle section dividers (`#3c4043`).
+  3. **Citation Popup Cards** (`overlay.css` `.fx-cite-popup`): Styled with dark background (`#242428`), border (`#52525e`), shadow (`0 4px 16px rgba(0, 0, 0, 0.45)`), readable green byline (`#7fbf8e`), and dark action pills (`#2b2a33` / `#394457`).
+  4. **Pop-up Comment Button & Selection Floating Toolbar** (`overlay.css`): `.annotationCommentButton` and `.editToolbar` previously inherited inconsistent light-mode defaults. Styled `.annotationCommentButton` with a modern dark container (`#242428`), border (`#52525e`), icon mask (`#e8e8e8`), and active/hover states (`#3c4043`, `#8ab4f8`). The floating selection toolbar (`.editToolbar`), comment popup notes (`.commentPopup`), and the comment editing modal (`#commentManagerDialog`) all share the same dark palette and styling.
+
+
+

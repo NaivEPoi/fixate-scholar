@@ -138,6 +138,19 @@ export const PATCHES = [
       popupRef: this._initialData?.popupRef || ""`,
     marker: "fixate-scholar-patch-8",
   },
+  {
+    // Turn PDF.js's highlight floating button (highlight & comment toolbar) ON.
+    // When text is selected in the viewer, a floating toolbar appears with
+    // a highlight button and a comment button, allowing the user to highlight
+    // or immediately attach a comment to the highlighted selection.
+    file: "web/viewer.mjs",
+    anchor: `  enableHighlightFloatingButton: {
+    value: false,`,
+    replacement: `  enableHighlightFloatingButton: {
+    /* fixate-scholar-patch-9: floating highlight and comment buttons on selection */
+    value: true,`,
+    marker: "fixate-scholar-patch-9",
+  },
 ];
 
 /** Apply one patch in `vendorDir`. Idempotent; throws if the anchor is gone. */

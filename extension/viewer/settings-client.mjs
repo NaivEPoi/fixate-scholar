@@ -45,6 +45,9 @@ export const DEFAULTS = Object.freeze({
   // The name written as the author (/T) of highlights and comments saved into
   // the PDF. Empty leaves the field out, which is what PDF.js does on its own.
   annotationAuthor: "",
+  // When editing a local PDF (file://), save changes directly back to the local
+  // file rather than saving as a new download copy.
+  saveLocalFile: true,
 });
 
 const hasStorage = typeof chrome !== "undefined" && chrome.storage?.sync;
