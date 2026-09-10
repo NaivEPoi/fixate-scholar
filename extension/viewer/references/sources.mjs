@@ -45,7 +45,7 @@
 // answered at all — offline). The card says which, because "we could not ask"
 // must not read as "this paper does not exist".
 
-import { readCached, writeCached } from "./lookup-cache.mjs";
+import { cleanDoi, paperAuthorKey, readCached, writeCached } from "./lookup-cache.mjs";
 import { ScholarRefused, scholarBibtex, scholarSearchUrl, searchScholar } from "./scholar.mjs";
 import {
   bestMatch,
@@ -65,7 +65,7 @@ export const SOURCES_UNAVAILABLE = Object.freeze({ unavailable: "offline" });
 
 /** The card's Scholar pill — a link, no request. Built in scholar.mjs next to
  *  the search it mirrors, and re-exported so the popup has one import. */
-export { scholarSearchUrl };
+export { cleanDoi, paperAuthorKey, scholarSearchUrl };
 
 /**
  * @param ref a parsed bibliography entry ({title, surname, year, doi, raw}).
@@ -414,13 +414,6 @@ export function arxivEntries(xml) {
 }
 
 // ── OpenAlex, and Crossref, by DOI ─────────────────────────────────────────
-/** A DOI as parsed out of an entry, with the punctuation a sentence leaves on
- *  it. Lowercased: DOIs are case-insensitive and both APIs index them so. */
-export function cleanDoi(doi) {
-  const m = /\b(10\.\d{4,9}\/[^\s"'<>]+)/.exec(String(doi ?? ""));
-  return m ? m[1].replace(/[).,;]+$/, "").toLowerCase() : null;
-}
-
 async function byDoi(doi, ref = null) {
   if (isDisplayComplete(ref)) {
     return { exact: true, candidates: [preview(ref)] };
@@ -443,10 +436,6 @@ async function byDoi(doi, ref = null) {
     if (work) return { exact: true, candidates: [work] };
   } catch {
     // fall through to Crossref — a DOI it registered is a DOI it can describe
-  }
-  // Do not send request to Crossref when everything displayed to user is available
-  if (isDisplayComplete(ref) || isDisplayComplete(cached)) {
-    return { exact: true, candidates: [ref ? preview(ref) : cached].filter(Boolean) };
   }
   const item = (await json(`https://api.crossref.org/works/${encodeURIComponent(doi)}`)).message;
   return { exact: true, candidates: [crossrefWork(item)].filter(Boolean) };
@@ -1017,36 +1006,6 @@ function preview({
   };
 }
 
-/**
- * Extract a stable lookup/cache key based on the paper's name (title) and author.
- */
-export function paperAuthorKey(target) {
-  if (!target) return null;
-  if (typeof target === "string") {
-    if (
-      /^10\.\d{4,9}\/\S+/i.test(target.trim()) ||
-      /^https?:\/\/(?:dx\.)?doi\.org\/10\.\d{4,9}\/\S+/i.test(target.trim())
-    ) {
-      return null;
-    }
-    const clean = queryText(target).trim().toLowerCase();
-    return clean ? `paper:${clean}` : null;
-  }
-  const title = queryText(target.title || target.raw || target.name || "").trim().toLowerCase();
-  let author = "";
-  if (target.surname) {
-    author = queryText(target.surname).trim().toLowerCase();
-  } else if (Array.isArray(target.authors) && target.authors.length > 0) {
-    author = queryText(target.authors[0]).trim().toLowerCase();
-  } else if (typeof target.authors === "string" && target.authors.trim()) {
-    author = queryText(target.authors.split(/[,;]/)[0]).trim().toLowerCase();
-  } else if (typeof target.byline === "string" && target.byline.trim()) {
-    author = queryText(target.byline.split(/[-–—,;]/)[0]).trim().toLowerCase();
-  }
-  if (title && author) return `paper:${title}:${author}`;
-  if (title) return `paper:${title}`;
-  return null;
-}
 
 /**
  * Extract a DOI from BibTeX text if present (many publisher BibTeXs on Scholar
@@ -1148,7 +1107,7 @@ export function fetchBibtex(doi, record = null, ref = null) {
   const key =
     (cid ? `cid:${cid}` : null) ??
     (clean ? `doi:${clean}` : null) ??
-    (paperKey ? `paper:${paperKey}` : null) ??
+    paperKey ??
     (refKey ? `ref:${refKey}` : null);
 
   if (!key) return Promise.resolve(null);
