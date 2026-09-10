@@ -98,6 +98,10 @@ const PAPERS = {
   "AFC-Diss": "https://yilud.me/afc_testing_DISS.pdf",
   "ACL": "https://yilud.me/2026.acl-long.2136.pdf",
   "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
+  "Regression 2510.27394": "https://arxiv.org/pdf/2510.27394",
+  "Regression 2603.06158": "https://arxiv.org/pdf/2603.06158",
+  "Regression 2511.09227": "https://arxiv.org/pdf/2511.09227",
+  "Regression 2511.00919": "https://arxiv.org/pdf/2511.00919",
 };
 const FILTER = URL_ARG
   ? (ARGV.find((a) => a.startsWith("--label="))?.slice(8) ?? "url")
@@ -208,19 +212,48 @@ try {
     return r.result?.value;
   };
   if (!FXOFF) await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
-  await sleep(2000);
-  const total = (await ev(`window.PDFViewerApplication?.pagesCount ?? 0`)) || 0;
+  await sleep(1500);
+
+  let total = 0;
+  for (let i = 0; i < 300; i++) {
+    total = (await ev(`window.PDFViewerApplication?.pagesCount ?? 0`)) || 0;
+    if (total > 0) break;
+    await sleep(500);
+  }
+  if (total === 0) throw new Error("document failed to load (pagesCount remained 0)");
+
   const last = ALL ? total : Math.min(PAGES, total);
   for (let p = 1; p <= last; p++) {
     await ev(`window.PDFViewerApplication.page = ${p}`);
     await sleep(1200);
   }
+
+  // DOM assertion state after walking all visited pages
+  let domState = null;
+  if (!FXOFF) {
+    domState = await ev(`(() => ({
+      bolded: document.querySelectorAll('.textLayer .fx-b').length,
+      processedSpans: document.querySelectorAll('.textLayer span[data-fx-done]').length,
+      totalSpans: document.querySelectorAll('.textLayer span').length,
+      refsCount: globalThis.__fxRefCount ?? 0,
+      refPages: (globalThis.__fxRefPages ?? []).length,
+      citesCount: document.querySelectorAll('.fx-cite-hit').length,
+      fxOn: !!document.querySelector('#viewerContainer.fx-on'),
+    }))()`);
+  }
+
   // Toggle off and on: restore + re-process is where late errors surface.
+  let reprocessState = null;
   if (!FXOFF) {
     await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: false }, r))`);
     await sleep(1500);
     await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
     await sleep(2500);
+    reprocessState = await ev(`(() => ({
+      bolded: document.querySelectorAll('.textLayer .fx-b').length,
+      processedSpans: document.querySelectorAll('.textLayer span[data-fx-done]').length,
+      fxOn: !!document.querySelector('#viewerContainer.fx-on'),
+    }))()`);
   }
 
   if (SELFTEST) {
@@ -254,8 +287,24 @@ try {
   const loud = real.filter((m) => /error|warning|exception|severe/i.test(m.level));
   const allowed = loud.length - bad.length;
   console.log(
-    `${FILTER}: pages=${last}/${total} captured=${real.length} loud=${loud.length} allowed-upstream=${allowed} PROBLEMS=${bad.length}`,
+    `${FILTER}: pages=${last}/${total} captured=${real.length} loud=${loud.length} allowed-upstream=${allowed} PROBLEMS=${bad.length}` +
+    (domState ? ` [DOM: bolded=${domState.bolded} processedSpans=${domState.processedSpans} refs=${domState.refsCount} cites=${domState.citesCount} fxOn=${domState.fxOn}]` : "") +
+    (reprocessState ? ` [Reprocess: bolded=${reprocessState.bolded} fxOn=${reprocessState.fxOn}]` : ""),
   );
+  if (ARGV.includes("--json")) {
+    console.log(`JSON_RESULT: ${JSON.stringify({
+      label: FILTER,
+      pages: total,
+      visited: last,
+      captured: real.length,
+      loud: loud.length,
+      allowed,
+      problems: bad.length,
+      badMessages: bad,
+      domState,
+      reprocessState,
+    })}`);
+  }
   // A very low capture count on a long document is either a genuinely silent
   // console or a half-wired harness, and the two look identical in a summary
   // line — so show what little WAS captured, at any level, rather than leaving
