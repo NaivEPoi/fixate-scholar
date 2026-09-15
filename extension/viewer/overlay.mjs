@@ -250,6 +250,12 @@ function applyStyleVars(s) {
 async function applyEnabled(on) {
   await engine.setEnabled(on);
   references.reannotateRendered();
+  if (on) {
+    const pageViews = app.pdfViewer?._pages || [];
+    for (const pv of pageViews) {
+      if (pv.renderingState !== 0) colorizeHighlightAnnotations(pv);
+    }
+  }
 }
 
 const syncButton = addToolbarToggle(app, settings.enabled, (on) => {
@@ -349,7 +355,69 @@ async function colorizeHighlightAnnotations(pageView) {
       const annot = map.get(id);
       if (annot?.color && typeof annot.color[0] === "number") {
         const [r, g, b] = [annot.color[0], annot.color[1], annot.color[2]];
-        hl.style.setProperty("--fx-highlight-color", `rgb(${r} ${g} ${b} / 0.45)`);
+        const opacity =
+          typeof annot.opacity === "number" && annot.opacity < 1
+            ? annot.opacity
+            : 1;
+        hl.style.setProperty(
+          "--fx-highlight-color",
+          opacity < 1 ? `rgb(${r} ${g} ${b} / ${opacity})` : `rgb(${r} ${g} ${b})`,
+        );
+      }
+
+      // Close horizontal seams between multiline quad rectangles.
+      // In PDF.js, _createQuadrilaterals builds <rect> elements inside <clipPath>.
+      // The quads have leading gaps between lines, which in reading mode reveal
+      // the white canvas mask underneath as horizontal stripes.
+      // Expanding each line's rects down to meet/slightly overlap the next line
+      // bridges the gap seamlessly without double-multiplying (as shapes inside
+      // a clipPath are unioned).
+      const clipPath = hl.querySelector("clipPath");
+      if (clipPath) {
+        const rects = [...clipPath.querySelectorAll("rect")];
+        if (rects.length > 1) {
+          const lines = [];
+          const sorted = rects
+            .map((r) => ({
+              el: r,
+              x: parseFloat(r.getAttribute("x")),
+              y: parseFloat(r.getAttribute("y")),
+              w: parseFloat(r.getAttribute("width")),
+              h: parseFloat(r.getAttribute("height")),
+            }))
+            .sort((a, b) => a.y - b.y);
+
+          for (const r of sorted) {
+            const match = lines.find((l) => Math.abs(l.y - r.y) < 0.05);
+            if (match) {
+              match.rects.push(r);
+              match.bottom = Math.max(match.bottom, r.y + r.h);
+            } else {
+              lines.push({ y: r.y, bottom: r.y + r.h, rects: [r] });
+            }
+          }
+
+          for (let i = 0; i < lines.length - 1; i++) {
+            const cur = lines[i];
+            const next = lines[i + 1];
+            const gap = next.y - cur.bottom;
+            if (gap > 0 && gap < 0.15) {
+              for (const r of cur.rects) {
+                r.el.setAttribute("height", next.y + 0.005 - r.y);
+              }
+            }
+          }
+
+          // Expand the top line up to y=0 if it is close to the top of the annotation box,
+          // so the typography mask padding above the text does not cut off the top of the highlight.
+          if (lines.length > 0 && lines[0].y > 0 && lines[0].y < 0.05) {
+            const topOffset = lines[0].y;
+            for (const r of lines[0].rects) {
+              r.el.setAttribute("y", 0);
+              r.el.setAttribute("height", r.h + topOffset);
+            }
+          }
+        }
       }
     }
   } catch {
