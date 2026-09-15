@@ -12,7 +12,8 @@ Status: **review complete; F1-F5 all FIXED & validated. Round 3 (F6/F7) below.**
 > R35** at the end. No content was changed by that renumbering — only the
 > headings. Read R34/R35 as having landed alongside R28–R33, not after them.
 
-Latest: **Round 37 (R37) — highlight floating toolbar & comment GUI (`enableHighlightFloatingButton`), highlight visibility under fx-on (`mix-blend-mode: multiply` + `pointer-events: none`), separate bracket citation range expansion (`[6]-[11]`), direct local file saving for `file://` PDFs, and Google Scholar BibTeX by default for Cite.**
+Latest: **Round 38 (R38) — highlight appearance parity with fx-on/off (full opacity multiply blend, multiline clipPath seam elimination, top padding adjustment, toggle sync), and cross-platform packaging.**
+Before it: **Round 37 (R37) — highlight floating toolbar & comment GUI (`enableHighlightFloatingButton`), highlight visibility under fx-on (`mix-blend-mode: multiply` + `pointer-events: none`), separate bracket citation range expansion (`[6]-[11]`), direct local file saving for `file://` PDFs, and Google Scholar BibTeX by default for Cite.**
 Before it: **Round 36 (R36)** — harness defects resolved and new guards (`fontkeep.mjs`, `whyskip.mjs`, `wordshot.mjs`).
 Before it: **Round 35 (R35)** — the last line of every column, dropped in silence.
 Before it: **Round 33 (R33) — a real abstract on a Scholar card (OpenAlex by
@@ -3413,5 +3414,26 @@ Introduced in v1.0.9:
   3. **Citation Popup Cards** (`overlay.css` `.fx-cite-popup`): Styled with dark background (`#242428`), border (`#52525e`), shadow (`0 4px 16px rgba(0, 0, 0, 0.45)`), readable green byline (`#7fbf8e`), and dark action pills (`#2b2a33` / `#394457`).
   4. **Pop-up Comment Button & Selection Floating Toolbar** (`overlay.css`): `.annotationCommentButton` and `.editToolbar` previously inherited inconsistent light-mode defaults. Styled `.annotationCommentButton` with a modern dark container (`#242428`), border (`#52525e`), icon mask (`#e8e8e8`), and active/hover states (`#3c4043`, `#8ab4f8`). The floating selection toolbar (`.editToolbar`), comment popup notes (`.commentPopup`), and the comment editing modal (`#commentManagerDialog`) all share the same dark palette and styling.
 
+## R38 — highlight appearance parity with fx-on/off, and cross-platform packaging
 
+Introduced in v1.1.2:
 
+- **Highlight Appearance Parity Between `fx-on` and `fx-off` Modes.**
+  - **Symptom**: In `fx-on` mode, text highlights appeared washed-out/milky (`[253, 255, 214]`), with horizontal white seams between multiline text rows and the top edge clipped. In `fx-off` mode, highlights were vibrant, saturated yellow (`[252, 255, 164]`) and completely seamless.
+  - **Root Cause**:
+    1. *Color & Multiply Blending*: Stock PDF.js renders highlights directly onto the canvas with `blendMode: Multiply` using full opacity RGB `[255, 255, 152]`. In `fx-on`, `overlay.css` and `colorizeHighlightAnnotations` applied a `0.45` alpha divisor (`rgb(r g b / 0.45)`). Because `mix-blend-mode: multiply` composites alpha against the white canvas background before multiplying, semi-transparency desaturates yellow into a milky pale tint.
+    2. *Horizontal White Seams*: For multiline highlights, PDF.js generates an SVG `<clipPath>` containing separate `<rect>` elements per text quad. Because of font leading/line-height, adjacent text lines have a vertical gap of 1–2 CSS pixels. In `fx-on`, white `.fx-mask` rectangles cover canvas glyphs; inside that 1–2px leading gap where `clipPath` clipped out the highlight, the white mask showed through as a stripe.
+    3. *Top-Edge Truncation*: Typography mask vertical padding above the text baseline encroached onto the upper quad rectangle of the annotation box, clipping the top edge.
+    4. *Toggle Desynchronization*: Toggling `fx` from OFF to ON did not re-colorize existing highlight annotations on already-rendered pages.
+  - **Fix**:
+    1. Switched fallback color to `#ffff98` and removed the `/ 0.45` alpha divisor in `extension/viewer/overlay.css` and `colorizeHighlightAnnotations(pv)` in `extension/viewer/overlay.mjs`. Annotations use full opacity unless explicitly configured with `annot.opacity < 1`. Full opacity with `mix-blend-mode: multiply` preserves black text while multiplying background white into full-saturation yellow (`[255, 255, 152]`), matching stock PDF.js pixel-for-pixel.
+    2. Grouped SVG `<rect>` elements in `clipPath` by text baseline and bridged vertical leading gaps to meet the next line (`next.y + 0.005 - r.y`). Because clip-paths perform a boolean union of their child shapes, extending the rect eliminates the gap without double-multiplying color.
+    3. Expanded the topmost quad rectangle up to `y = 0` when `y < 0.05` to prevent mask padding from clipping the upper boundary.
+    4. In `applyEnabled(on)`, re-invoked `colorizeHighlightAnnotations(pv)` on all rendered page views when toggling `fx` on.
+
+- **Cross-Platform Extension Packaging (`scripts/package.mjs`).**
+  - **Symptom**: `npm run package` failed on Windows with `Join-Path : Cannot bind argument to parameter 'Path' because it is null` (`ParameterArgumentValidationError`). On POSIX platforms without native `zip` installed, packaging failed with `ENOENT`.
+  - **Root Cause**: Windows PowerShell 5.1 `-Command "param($src, $dst) ..."` does not bind positional CLI arguments to scriptblock `param()`.
+  - **Fix**:
+    1. On Windows (`win32`), passed source directory and destination zip paths through process environment variables (`$env:SRC`, `$env:DST`) directly into `Compress-Archive`. This is fully portable across PowerShell versions and completely immune to quoting or path spacing issues.
+    2. On POSIX (`darwin`, `linux`), implemented robust multi-tier fallbacks: native `zip -qr` CLI first, falling back to Python 3/Python standard library `zipfile` module (`python3 -m zipfile -c`), and bsdtar.

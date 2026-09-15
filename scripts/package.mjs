@@ -21,12 +21,54 @@ mkdirSync(distDir, { recursive: true });
 rmSync(zipPath, { force: true });
 
 if (process.platform === "win32") {
-  execFileSync("powershell.exe", [
-    "-NoProfile", "-Command",
-    "param($src, $dst) Compress-Archive -Path (Join-Path $src '*') -DestinationPath $dst -Force",
-    extDir, zipPath,
-  ]);
+  execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      "Compress-Archive -Path (Join-Path $env:SRC '*') -DestinationPath $env:DST -Force",
+    ],
+    {
+      env: { ...process.env, SRC: extDir, DST: zipPath },
+      stdio: "inherit",
+    },
+  );
 } else {
-  execFileSync("zip", ["-qr", zipPath, "."], { cwd: extDir });
+  let packed = false;
+  // Try native zip CLI first
+  try {
+    execFileSync("zip", ["-qr", zipPath, "."], { cwd: extDir });
+    packed = true;
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+
+  // Fallback to python3 / python zipfile module if zip CLI is not installed
+  if (!packed) {
+    for (const py of ["python3", "python"]) {
+      try {
+        execFileSync(py, ["-m", "zipfile", "-c", zipPath, "."], { cwd: extDir });
+        packed = true;
+        break;
+      } catch (err) {
+        if (err.code !== "ENOENT") throw err;
+      }
+    }
+  }
+
+  // Fallback to bsdtar if available
+  if (!packed) {
+    try {
+      execFileSync("tar", ["-a", "-cf", zipPath, "*"], { cwd: extDir });
+      packed = true;
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
+  }
+
+  if (!packed) {
+    console.error("No zip utility found (tried zip, python3/python zipfile, tar).");
+    process.exit(1);
+  }
 }
 console.log(`Wrote ${zipPath}`);
