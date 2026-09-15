@@ -228,7 +228,7 @@
    pointer-events: none allows drag text selection over highlighted spans
    without the unselectable annotation section intercepting pointer events. */
 #viewerContainer.fx-on .annotationLayer .highlightAnnotation {
-  background-color: var(--fx-highlight-color, rgb(255 235 59 / 0.45));
+  background-color: var(--fx-highlight-color, #ffff98);
   mix-blend-mode: multiply;
   pointer-events: none;
 }
