@@ -19,6 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { PATCHES, applyPatch, missingPatches } from "./pdfjs-patches.mjs";
+import { FONTS, FONT_WEIGHTS } from "./fetch-pdfjs.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const vendorDir = join(root, "extension", "vendor", "pdfjs");
@@ -38,6 +39,15 @@ if (!existsSync(join(root, "extension", "vendor", "words", "english.txt"))) {
   console.log(
     "No vendored word list (extension/vendor/words) — hyphen repair on copy falls\n" +
       "back to the document's own vocabulary. Run `npm run setup` to add it.",
+  );
+}
+
+const missingFonts = FONTS.flatMap((f) =>
+  FONT_WEIGHTS.map((w) => f.out.replace("{w}", w)),
+).filter((file) => !existsSync(join(root, "extension", "vendor", "fonts", file)));
+if (missingFonts.length) {
+  console.log(
+    `Missing ${missingFonts.length} reading font(s) in extension/vendor/fonts — run \`npm run setup\` to fetch them.`,
   );
 }
 

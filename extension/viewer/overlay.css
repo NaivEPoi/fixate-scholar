@@ -32,6 +32,26 @@
   src: url(../vendor/fonts/literata-700.woff2) format("woff2");
   font-weight: 700;
 }
+@font-face {
+  font-family: "FX Lexend";
+  src: url(../vendor/fonts/lexend-400.woff2) format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "FX Lexend";
+  src: url(../vendor/fonts/lexend-700.woff2) format("woff2");
+  font-weight: 700;
+}
+@font-face {
+  font-family: "FX Source Serif 4";
+  src: url(../vendor/fonts/source-serif-4-400.woff2) format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "FX Source Serif 4";
+  src: url(../vendor/fonts/source-serif-4-700.woff2) format("woff2");
+  font-weight: 700;
+}
 
 :root {
   /* Default all plugin GUI surfaces to dark color scheme */

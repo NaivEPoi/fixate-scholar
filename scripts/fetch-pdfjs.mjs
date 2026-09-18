@@ -84,6 +84,8 @@ export const FONTS = [
   { pkg: "@fontsource/atkinson-hyperlegible", file: "atkinson-hyperlegible-latin-{w}-normal.woff2", out: "atkinson-{w}.woff2" },
   { pkg: "@fontsource/inter", file: "inter-latin-{w}-normal.woff2", out: "inter-{w}.woff2" },
   { pkg: "@fontsource/literata", file: "literata-latin-{w}-normal.woff2", out: "literata-{w}.woff2" },
+  { pkg: "@fontsource/lexend", file: "lexend-latin-{w}-normal.woff2", out: "lexend-{w}.woff2" },
+  { pkg: "@fontsource/source-serif-4", file: "source-serif-4-latin-{w}-normal.woff2", out: "source-serif-4-{w}.woff2" },
 ];
 export const FONT_WEIGHTS = ["400", "700"];
 

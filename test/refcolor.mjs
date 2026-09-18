@@ -1,6 +1,7 @@
-// Citation-coloring check: per page, find [N]-style citation text inside
-// PROCESSED spans that has no .fx-cite-c coloring wrap. Reports totals plus
-// samples. Usage: node citecheck.mjs <url> [--pages=A-B]
+// In-paper reference coloring check: per page, find in-paper references
+// (Figure, Table, Section, Algorithm, Equation, ...) inside PROCESSED spans
+// that have no .fx-ref-c coloring wrap. Reports totals plus samples.
+// Usage: node test/refcolor.mjs <url> [--pages=A-B]
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -13,8 +14,8 @@ const URL0 =
   process.argv.slice(2).find((a) => !a.startsWith("--"));
 const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const EXT = extensionDir;
-const PORT = 9061 + (process.pid % 130);
-const userDataDir = join(tmpdir(), `fx-cc-${process.pid}`);
+const PORT = 9071 + (process.pid % 130);
+const userDataDir = join(tmpdir(), `fx-rc-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
@@ -38,30 +39,36 @@ const CHECK = (p) => `(() => {
   const pv = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});
   const div = pv?.textLayer?.div;
   if (!div) return { error: "no layer" };
-  const CITE = /(?<![\\p{L}\\p{N}_$\\]])\\[(\\d{1,3}(?:\\s*[,;\\u2013\\u2014-]\\s*\\d{1,3})*)\\]/gu;
+
+  const REF_LEADER = "(?:[Ff]igures?|[Ff]igs?\\\\.?|[Tt]ables?|[Tt]abs?\\\\.?|[Aa]lgorithms?|[Aa]lgs?\\\\.?|[Ll]istings?|[Ss]ections?|[Ss]ecs?\\\\.?|§{1,2}|[Aa]ppendices|[Aa]ppendix|[Aa]pps?\\\\.?|[Ee]quations?|[Ee]qs?\\\\.?|[Cc]hapters?|[Tt]heorems?|[Ll]emmas?|[Dd]efinitions?|[Cc]laims?)";
+  const REF_ROMAN = "(?:(?<=[a-zA-Z~])|\\\\b)(?=[IVXLCDM])M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{1,3})(?:-[A-Za-z\\\\d]+)?\\\\b";
+  const REF_NUM = "\\\\d+(?:\\\\.\\\\d+)*(?:-[A-Za-z\\\\d]+)?(?:\\\\([a-z\\\\d]+\\\\)|[a-z](?![a-zA-Z]))?";
+  const REF_PAREN_NUM = "\\\\(\\\\d+(?:\\\\.\\\\d+)*[a-z]?\\\\)";
+  const REF_ALPHA = "(?:(?<=[a-zA-Z~])|\\\\b)[A-Z]\\\\b(?:\\\\.\\\\d+)?";
+  const REF_ITEM = "(?:" + REF_PAREN_NUM + "|" + REF_NUM + "|" + REF_ROMAN + "|" + REF_ALPHA + ")";
+  const REF_SEP = "(?:\\\\s*(?:[–—\\\\u2212\\\\u2015-]|--|to)\\\\s*|\\\\s*,\\\\s*(?:and\\\\s+|&\\\\s*)?|\\\\s+and\\\\s+|\\\\s*&\\\\s*)";
+  const INTERNAL_REF = new RegExp("(?:\\\\b|(?<=[a-z])(?=[A-Z]))" + REF_LEADER + "\\\\s*~?\\\\s*" + REF_ITEM + "(?:" + REF_SEP + REF_ITEM + ")*", "g");
+
   let total = 0, colored = 0;
   const misses = [];
   for (const s of div.querySelectorAll("span[data-fx-done]")) {
     if (s.dataset.fxRefs) continue;
     const text = s.textContent;
-    for (const m of text.matchAll(CITE)) {
-      if (m[1].split(/[,;\\s\\u2013\\u2014-]/).includes("0")) continue;
+    for (const m of text.matchAll(INTERNAL_REF)) {
       total++;
-      // colored when SOME part of the match sits inside a .fx-cite-c wrap
       let pos = 0, hit = false;
       const walker = document.createTreeWalker(s, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
         const len = node.data.length;
         const a = Math.max(m.index, pos), b = Math.min(m.index + m[0].length, pos + len);
-        if (a < b && node.parentElement.closest(".fx-cite-c")) { hit = true; break; }
+        if (a < b && node.parentElement.closest(".fx-ref-c")) { hit = true; break; }
         pos += len;
       }
       if (hit) colored++;
       else if (misses.length < 6) misses.push({ m: m[0], ctx: text.slice(Math.max(0, m.index - 20), m.index + m[0].length + 6) });
     }
   }
-  const hits = pv.div.querySelectorAll(".fx-cite-hit").length;
-  return { total, colored, hits, misses };
+  return { total, colored, misses };
 })()`;
 
 try {
@@ -76,7 +83,6 @@ try {
   let appOk = false;
   for (let i = 0; i < 30; i++) { appOk = await ev(`!!(window.PDFViewerApplication && window.PDFViewerApplication.pdfViewer)`).catch(() => false); if (appOk) break; await sleep(500); }
   if (!appOk) throw new Error("viewer never loaded");
-  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`).catch(() => {});
   for (let i = 0; i < 40; i++) {
     await sleep(800);
     const ready = await ev(`({
@@ -103,9 +109,19 @@ try {
     if (r.error) { console.log(`p${p}: ${r.error}`); continue; }
     T += r.total; C += r.colored;
     const tag = r.total > r.colored ? "  <<< UNCOLORED" : "";
-    console.log(`p${p}: cites=${r.total} colored=${r.colored} hits=${r.hits}${tag}`);
-    for (const s of r.misses) console.log(`   miss ${s.m} in "...${s.ctx}"`);
+    console.log(`p${p}: refs=${r.total} colored=${r.colored}${tag}`);
+    if (r.misses?.length) {
+      for (const m of r.misses) console.log(`   miss: ${m.m} in "${m.ctx}"`);
+    }
   }
-  console.log(`\nTOTAL cites=${T} colored=${C}`);
-} catch (e) { console.error("citecheck error:", e.message || e); }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
+  console.log(`\nTOTAL refs=${T} colored=${C}`);
+  if (T > C) process.exitCode = 1;
+} catch (e) {
+  console.error("refcolor error:", e);
+  process.exitCode = 1;
+} finally {
+  try { ws?.close(); } catch {}
+  browser.kill();
+  await sleep(500);
+  try { rmSync(userDataDir, { recursive: true, force: true }); } catch {}
+}

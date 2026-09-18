@@ -16,6 +16,7 @@
 // on toggle-off. Work happens in idle-time chunks to avoid jank.
 
 import { emphasizeParts } from "./segmenter.mjs";
+import { findCitations } from "../references/parser.mjs";
 
 const CHUNK = 150;
 const ABSTRACT = /^\s*abstract\s*$/i;
@@ -110,6 +111,28 @@ const FONT_STACKS = {
   atkinson: '"FX Atkinson Hyperlegible", sans-serif',
   inter: '"FX Inter", sans-serif',
   literata: '"FX Literata", serif',
+  lexend: '"FX Lexend", sans-serif',
+  "source-serif-4": '"FX Source Serif 4", serif',
+};
+
+// Per-font visual scale factor normalizing visual x-height and glyph metrics to
+// standard paper typefaces (e.g. Computer Modern, Times New Roman). Modern
+// screen reading typefaces have 12-22% larger x-heights and wider letterforms;
+// scaling prevents font-swap bloat, horizontal squeeze, and cramped word gaps.
+const FONT_SCALES = {
+  original: 1.0,
+  atkinson: 0.96,
+  inter: 0.93,
+  literata: 0.91,
+  lexend: 0.92,
+  "source-serif-4": 0.91,
+};
+
+// Base word-spacing boost (em) for fonts whose native space glyph is
+// unusually narrow (e.g. Literata native space is 0.20em vs standard 0.25-0.28em).
+const FONT_BASE_WORD_SPACING = {
+  literata: 0.04,
+  "source-serif-4": 0.02,
 };
 
 // Characters that can sit either side of a mid-word span break: Latin letters,
@@ -216,6 +239,23 @@ export class TypographyEngine {
     if (!this.#enabled) return Promise.resolve();
     this.#restoreAll();
     return this.#processAll();
+  }
+
+  /** Reset document-specific state and font metric caches when a new document loads. */
+  onDocumentLoaded() {
+    this.#refsBoxes = null;
+    this.#furnitureBoxes = null;
+    this.#contentStart = null;
+    this.#bodyHeight = null;
+    this.#pageFonts.clear();
+    this.#inkRetryPages.clear();
+    this.#ascentCache.clear();
+    this.#spaceInkCache.clear();
+    for (const holder of this.#pending.values()) {
+      holder.cancelled = true;
+      holder.resolve();
+    }
+    this.#pending.clear();
   }
 
   /** Document-wide body-text height (char-weighted height mode over every
@@ -481,6 +521,7 @@ export class TypographyEngine {
         span.innerHTML = orig.html;
         span.style.setProperty("--scale-x", orig.scaleX || "");
         span.style.fontFamily = orig.fontFamily;
+        span.style.fontSize = orig.fontSize || "";
         span.style.fontStyle = orig.fontStyle || "";
         span.style.fontWeight = orig.fontWeight || "";
         span.style.wordSpacing = orig.wordSpacing || "";
@@ -640,8 +681,8 @@ export class TypographyEngine {
     const centerX = vx0 + pageW * 0.5;
     const LOWER_WORD = /^[a-zà-ÿ]{2,}$/;
     // Caption leaders, section labels, and pseudocode/algorithm leaders.
-    const CAP_LEAD = /^(?:Fig(?:ure)?\.?|Tab(?:le)?\.?|TABLE|FIGURE|Algorithm|Listing)\s*\d/;
-    const HEAD_LEAD = /^(?:\d+(?:\.\d+)*\.?|[A-Z]\d*[.:]|[IVX]{1,5}\.)(?:$|\s+[A-Z(])/;
+    const CAP_LEAD = /^(?:Fig(?:ure)?\.?|Tab(?:le)?\.?|TABLE|FIGURE|Algorithm|Listing)\s*(?:\d|[IVXLCDM]+\b)/;
+    const HEAD_LEAD = /^(?:\d+(?:\.\d+)*\.?|[A-Z]\d*[.:]|[IVX]{1,5}\.|(?:[a-zA-Z]|\d+)\))(?:$|\s+[A-Z(])/;
     const ALGO_LEAD = /^(?:\d{1,3}:|Require:|Ensure:|Input:|Output:|Algorithm\s+\d+)/;
     // An in-text reference opening a running sentence ("Figure 5 shows …",
     // "Table 8 lists …", "Algorithm 1 in Appendix …", "Listing 3
@@ -656,7 +697,7 @@ export class TypographyEngine {
     // alternative requires ≥2 lowercase letters so a single-letter SUBFIGURE
     // label — "Figure 5 (a) …", a caption — is not mistaken for prose
     // ("Listing 3 (representative of …" still is).
-    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|Tab(?:le)?|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*\d+[a-z]?\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})/;
+    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|Tab(?:le)?|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*(?:\d+[a-z]?|[IVXLCDM]+\b)\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})/;
     // Publisher boilerplate markers (permission/copyright block, ISBN/DOI
     // lines, ACM self-citation). Matched against a whole block's text.
     const LEGAL_TEXT = /(Permission to make digital or hard copies|Copyrights? for components of this work|Request permissions from|licensed to ACM|ACM ISBN|ACM Reference Format|©\s*(19|20)\d\d\s|creativecommons\.org|(https?:\/\/)?(dx\.)?doi\.org\/)/i;
@@ -834,6 +875,8 @@ export class TypographyEngine {
             // Both extend the table, but at most 2 rows past the last strong
             // row so the run can't creep into the body below. A row COVERING
             // the band with glyphs is running prose — the run is over.
+            const rowLead = sorted[j].items[0]?.item.str.trim() || "";
+            if (HEAD_LEAD.test(rowLead) || isCaptionLead(rowLead) || REF_PROSE.test(rowLead)) break;
             const smallHit = allGapsOf(sorted[j]).some(([a, b]) => Math.min(band[1], b) - Math.max(band[0], a) >= 1.5);
             const oneSide =
               sorted[j].items.every((p) => p.item.transform[4] + (p.item.width ?? 0) <= band[0] + 1) ||
@@ -848,7 +891,7 @@ export class TypographyEngine {
             // unaffected: its wordy cell sits INSIDE a column (oneSide), it
             // does not straddle the boundary.
             const straddlesBand =
-              lowerWords(sorted[j].items) >= 4 &&
+              (lowerWords(sorted[j].items) >= 3 || sorted[j].items.map((p) => p.item.str).join(" ").trim().split(/\s+/).length >= 5) &&
               sorted[j].items.some((p) => p.item.transform[4] < band[0]) &&
               sorted[j].items.some((p) => p.item.transform[4] + (p.item.width ?? 0) > band[1]);
             if (straddlesBand || (!smallHit && !oneSide) || j - last > 2) break;
@@ -857,6 +900,7 @@ export class TypographyEngine {
           if (withGap >= 3 && ext > bestLast) { bestLast = ext; bestBand = band; }
         }
         if (bestLast >= 0) {
+
           if (globalThis.__fxDebug) (globalThis.__fxAligned ??= []).push({ seed: sorted[i].items.map((p) => p.item.str).join(" ").slice(0, 48), band: bestBand.map((v) => Math.round(v)), n: bestLast - i + 1, split: splitX != null, y: Math.round(sorted[i].y), h: Math.round(sorted[i].h * 10) / 10 });
           for (let k = i; k <= bestLast; k++) {
             const seg = segItems(sorted[k], bestBand);
@@ -1220,6 +1264,8 @@ export class TypographyEngine {
       const MARKER = /^(?:[•‣▪◦*–—-]|\(?\[?\d{1,3}\]?[.):]?|\(?[a-z]\))$/;
       for (let i = 0; i < sorted.length; i++) {
         if (!all[i].length) continue; // seed: at least one interior cell start
+        const seedLead = sorted[i].items[0]?.item.str.trim() || "";
+        if (HEAD_LEAD.test(seedLead) || MARKER.test(seedLead) || isCaptionLead(seedLead) || REF_PROSE.test(seedLead)) continue;
         // 2-column tables offer a single interior start, so the seed accepts
         // one — but then the run must be LONGER (5 rows) to compensate.
         const need = all[i].length >= 2 ? 4 : 5;
@@ -1228,6 +1274,8 @@ export class TypographyEngine {
         for (let j = i + 1; j < sorted.length; j++) {
           if (sorted[j - 1].y - sorted[j].y > Math.max(sorted[j].h, sorted[j - 1].h, 8) * 2.5) break; // vertical gap — table ended
           if (j - last > 2) break; // two non-matching rows in a row — run over
+          const rowLead = sorted[j].items[0]?.item.str.trim() || "";
+          if (HEAD_LEAD.test(rowLead) || MARKER.test(rowLead) || isCaptionLead(rowLead) || REF_PROSE.test(rowLead)) break;
           if (all[j].some((x) => all[i].some((x0) => Math.abs(x - x0) <= 1.2))) {
             matched.push(j);
             last = j;
@@ -1356,7 +1404,7 @@ export class TypographyEngine {
           const [lx0, lx1] = lineX(inCol);
           const t = inCol.map((p) => p.item.str).join(" ").trim();
           if (inSubcapBlock(j)) continue; // subcaption lead or its wrap rows
-          const capAbove = /^(?:Fig(?:ure)?\.?|FIGURE|Tab(?:le)?\.?|TABLE)\s*\d/.test(t) && isCaptionLead(t);
+          const capAbove = /^(?:Fig(?:ure)?\.?|FIGURE|Tab(?:le)?\.?|TABLE)\s*(?:\d|[IVXLCDM]+\b)/.test(t) && isCaptionLead(t);
           const prose = lowerWords(inCol) >= 4 && lx1 - lx0 >= colW * 0.72;
           if (capAbove || prose) { boundIdx = j; break; }
         }
@@ -1449,11 +1497,14 @@ export class TypographyEngine {
       if (!measure || lineEnd < measure - (band[0].item.height || 8) * 0.5) return null;
       for (let j = 0; j < band.length - 1; j++) {
         const t = band[j].item.str.trim();
-        // The number alone ("4.2.1.") also ends in a period — only a piece
-        // carrying letters can be the end of the heading's TITLE.
-        if (!/\.$/.test(t) || !/[A-Za-zÀ-ɏ]/.test(t)) continue;
+        // The title ends in a period or colon, attached to letters or as a standalone punctuation item.
+        const isTerminator =
+          (/[.:]$/.test(t) && /[A-Za-zÀ-ɏ]/.test(t)) ||
+          ((t === ":" || t === ".") && j > 0 && /[A-Za-zÀ-ɏ]/.test(band[j - 1].item.str.trim()));
+        if (!isTerminator) continue;
         const tail = band.slice(j + 1);
-        if (lowerWords(tail) >= 2) return band.slice(0, j + 1);
+        const tailText = tail.map((p) => p.item.str).join(" ").trim();
+        if (lowerWords(tail) >= 2 || REF_PROSE.test(tailText)) return band.slice(0, j + 1);
       }
       return null;
     };
@@ -1658,6 +1709,8 @@ export class TypographyEngine {
             const y = inReg[0].item.transform[5];
             const h = Math.max(reg.h, inReg[0].item.height || 0);
             if (y >= reg.yBot - 0.5 || reg.yBot - y > h * 2.4) continue;
+            const inRegLead = inReg[0]?.item.str.trim() || "";
+            if (HEAD_LEAD.test(inRegLead) || isCaptionLead(inRegLead) || REF_PROSE.test(inRegLead)) continue;
             // A wordy row is running prose when it starts at the region's
             // left edge OR spans most of the region's width (an INDENTED
             // paragraph-opening line under the table still fills the column).
@@ -1681,10 +1734,20 @@ export class TypographyEngine {
           regions,
         });
       }
+      const proseLineDivs = new Set();
+      for (const ln of lines) {
+        const lnText = ln.items.map((p) => p.item.str).join(" ").trim();
+        const wCount = lnText.split(/\s+/).filter((w) => /[a-zA-Z]/.test(w)).length;
+        if (lowerWords(ln.items) >= 3 || wCount >= 5 || REF_PROSE.test(lnText) || HEAD_LEAD.test(lnText)) {
+          for (const p of ln.items) proseLineDivs.add(p.div);
+        }
+      }
       for (const reg of regions) {
         if (reg.n < 2) continue; // a single stray multi-gap row isn't a table
         for (const p of items) {
-          if (skip.has(p.div)) continue;
+          if (skip.has(p.div) || proseLineDivs.has(p.div)) continue;
+          const pStr = p.item.str.trim();
+          if (REF_PROSE.test(pStr) || HEAD_LEAD.test(pStr) || lowerWords([p]) >= 4) continue;
           const y = p.item.transform[5];
           const x = p.item.transform[4];
           // The span's horizontal CENTER must sit inside the region, not just
@@ -1694,7 +1757,7 @@ export class TypographyEngine {
           // x=315 and run 243 units right — clearly not cell content).
           if (
             y <= reg.yTop + reg.h * 0.5 &&
-            y >= reg.yBot - reg.h * 1.2 &&
+            y >= reg.yBot - Math.min(3, reg.h * 0.3) &&
             x >= reg.x0 - 2 &&
             x + (p.item.width ?? 0) / 2 <= reg.x1 + 2
           ) {
@@ -2478,7 +2541,12 @@ export class TypographyEngine {
       // weight; instead we leave them exactly as the document set them. They
       // are picked up as obstacles (see obstacleDivs), so neighbouring per-span
       // masks clamp around them and never white them out.
-      if (isSpecial({ item }) || !/[A-Za-zÀ-ɏ]/.test(trimmed) || trimmed.length < 2) {
+      const hasCitations = trimmed.includes("[") && findCitations(trimmed).length > 0;
+      if (
+        isSpecial({ item }) ||
+        trimmed.length < 2 ||
+        (!/[A-Za-zÀ-ɏ]/.test(trimmed) && !hasCitations)
+      ) {
         return reject(div, "special-or-short");
       }
       // Sub/superscripts of math symbols — the "out"/"in"/"dev" under γ, S,
@@ -3160,15 +3228,16 @@ export class TypographyEngine {
                 }
               }
               if (top < 0) { rej.ink++; continue; }
-              const canvasInkTop = (y0 + top) / csy + cr.top;
-              const fontPx = parseFloat(getComputedStyle(div).fontSize) || r.height;
+              const mode = this.#settings.fontMode ?? "original";
+              const scale = FONT_SCALES[mode] ?? 1.0;
+              const fontPx = (parseFloat(getComputedStyle(div).fontSize) || r.height) * scale;
               this.#measureCtx.font = `${fontPx}px ${family}`;
               const asc = this.#measureCtx.measureText(text).actualBoundingBoxAscent;
               if (!(asc > 0) || !(fontPx > 0)) { rej.asc++; continue; }
               // Predicted overlay ink top with zero margin: rendered baseline
-              // = blRatio × boxHeight below the box top, ink rises `asc`
+              // = blRatio × fontPx below the box top, ink rises `asc`
               // above it. Pixel-validated (probe-bl2 red-vs-black offsets).
-              const predictedNoMargin = r.top + this.#baselineRatio(family) * r.height - asc;
+              const predictedNoMargin = r.top + this.#baselineRatio(family) * fontPx - asc;
               arr.push((canvasInkTop - predictedNoMargin) / fontPx);
             }
             for (const [family, arr] of samples) {
@@ -3292,6 +3361,7 @@ export class TypographyEngine {
             html: span.innerHTML,
             scaleX: span.style.getPropertyValue("--scale-x"),
             fontFamily: span.style.fontFamily,
+            fontSize: span.style.fontSize,
             fontStyle: span.style.fontStyle,
             fontWeight: span.style.fontWeight,
             wordSpacing: span.style.wordSpacing,
@@ -3308,6 +3378,8 @@ export class TypographyEngine {
             this.#spacePaintsInk(family || origFamily),
           );
           span.replaceChildren(frag);
+          const mode = this.#settings.fontMode ?? "original";
+          const isBundled = mode !== "original" && Boolean(FONT_STACKS[mode]);
           if (family && family !== origFamily) {
             span.style.fontFamily = family;
             // A bundled face REPLACES the embedded one — carry the original
@@ -3318,6 +3390,15 @@ export class TypographyEngine {
             if (famKey(family) !== famKey(origFamily)) {
               if (isItalic(pair)) span.style.fontStyle = "italic";
               if (isBold(pair)) span.style.fontWeight = "700";
+              const scale = isBundled ? (FONT_SCALES[mode] ?? 1.0) : 1.0;
+              if (scale !== 1.0) {
+                const basePx =
+                  parseFloat(span.style.fontSize) ||
+                  parseFloat(getComputedStyle(span).fontSize);
+                if (basePx > 0) {
+                  span.style.fontSize = `${(basePx * scale).toFixed(3)}px`;
+                }
+              }
             }
           }
           // Re-seat the baseline. Preferred: the per-family CANVAS-MEASURED
@@ -3338,11 +3419,12 @@ export class TypographyEngine {
           // face), PDF.js's own placement is already correct — the formula's
           // bbox-vs-baseline difference is measurement noise that pushed
           // Libertine-faced papers ~0.12em off the canvas row.
+          const scale = isBundled ? (FONT_SCALES[mode] ?? 1.0) : 1.0;
           const dEm =
             cal !== undefined
               ? cal
               : family && famKey(family) !== famKey(origFamily)
-                ? this.#ascentRatio(origFamily) - this.#baselineRatio(family)
+                ? (this.#ascentRatio(origFamily) / scale) - this.#baselineRatio(family)
                 : 0;
           if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
           span.dataset.fxDone = "1";
@@ -3378,13 +3460,13 @@ export class TypographyEngine {
         for (const { rect, rect2, targetW } of batch) {
           const r2 = rect2 || rect;
           if (!(rect.width > 0) || !(r2.height > 0)) continue;
-          const h = r2.height;
+          const h = Math.max(rect.height, r2.height);
           const padY = h * 0.28;
           const padX = Math.max(2, h * 0.12);
           let L = rect.left - padX;
           let R = rect.left + (targetW || rect.width) + padX;
-          let T = r2.top - padY;
-          let B = r2.bottom + padY;
+          let T = Math.min(rect.top, r2.top) - padY;
+          let B = Math.max(rect.bottom, r2.bottom) + padY;
           for (const o of obstacleRects) {
             if (o.right <= L || o.left >= R || o.bottom <= T || o.top >= B) continue;
             // Obstacle reaches into the padding — pull the nearest padded edge
@@ -3459,6 +3541,9 @@ export class TypographyEngine {
         // word-spacing against targetW erases the stale scale: glyphs render
         // at their natural advances (matching the canvas letters) and the
         // spaces absorb the justification surplus, exactly like the canvas.
+        const mode = this.#settings.fontMode ?? "original";
+        const isBundled = mode !== "original" && Boolean(FONT_STACKS[mode]);
+        const baseSpacingEm = FONT_BASE_WORD_SPACING[mode] ?? 0;
         for (const { pair, rect, rect2, targetW, fontPx: measuredFontPx } of batch) {
           const span = pair.div;
           const newWidth = (rect2 || span.getBoundingClientRect()).width;
@@ -3468,6 +3553,7 @@ export class TypographyEngine {
           const natural = newWidth / prevScale;
           if (Math.abs(natural - targetW) <= 0.5) {
             if (prevScale !== 1) span.style.setProperty("--scale-x", 1);
+            if (baseSpacingEm > 0) span.style.wordSpacing = `${baseSpacingEm}em`;
             continue;
           }
           const spaces = (span.textContent.match(/ /g) || []).length;
@@ -3480,28 +3566,29 @@ export class TypographyEngine {
           //
           // A NEGATIVE correction means our text is WIDER than the original --
           // which is what a bundled reading face is, systematically, at the
-          // same point size (Inter and Literata run ~5-8% wide of Computer
-          // Modern). Spending that on word-spacing eats the inter-word gaps
-          // themselves, and they are the one piece of horizontal space a
-          // reader actually reads: at the old -0.1em cap a typical space fell
-          // from ~0.26em to ~0.15em and whole lines set in a reading font ran
-          // together ("Thismanual providesan introductory", ProVerif manual
-          // p10 in Literata/Inter). So the negative side is held to a
-          // sub-pixel trim and the real shrink goes to --scale-x, which
-          // compresses glyphs and spaces ALIKE and so keeps the face's own
-          // word-gap proportion (5% narrower is invisible; fused words are
-          // not).
+          // same point size. Spending that on word-spacing eats the inter-word
+          // gaps themselves, and they are the one piece of horizontal space a
+          // reader actually reads. When using bundled reading fonts, we NEVER
+          // trim spaces negatively (minTrim = 0): inter-word gaps remain wide,
+          // open, and legible, while width shrink goes to --scale-x.
           if (spaces >= 1) {
             const raw = (targetW - natural) / spaces;
-            const perSpace = Math.min(rect.height * MAX_SPACE_STRETCH, Math.max(rect.height * -MAX_SPACE_TRIM, raw));
+            const minTrim = isBundled ? 0 : rect.height * -MAX_SPACE_TRIM;
+            const perSpace = Math.min(rect.height * MAX_SPACE_STRETCH, Math.max(minTrim, raw));
             const fontPx = measuredFontPx || rect.height;
-            span.style.wordSpacing = `${perSpace / fontPx}em`;
+            const totalSpacingEm = baseSpacingEm + perSpace / fontPx;
+            if (Math.abs(totalSpacingEm) > 0.001) {
+              span.style.wordSpacing = `${totalSpacingEm.toFixed(4)}em`;
+            } else {
+              span.style.wordSpacing = "";
+            }
             const carried = natural + perSpace * spaces;
             span.style.setProperty(
               "--scale-x",
               Math.abs(carried - targetW) <= 0.5 ? 1 : targetW / carried,
             );
           } else {
+            if (baseSpacingEm > 0) span.style.wordSpacing = `${baseSpacingEm}em`;
             span.style.setProperty("--scale-x", targetW / natural);
           }
         }

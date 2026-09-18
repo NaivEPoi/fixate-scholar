@@ -121,6 +121,23 @@ test("emphasizeParts round-trips text", () => {
 test("emphasizeParts skips math-heavy spans", () => {
   assert.equal(emphasizeParts("x = 3.14 * (a+b)/2"), null);
   assert.equal(emphasizeParts("∑ αi → ∞"), null);
+  assert.equal(emphasizeParts("[2, 1, 0]"), null);
+  assert.equal(emphasizeParts("0.0  0.2  0.4"), null);
+});
+
+test("emphasizeParts does not skip spans containing only or mostly citations", () => {
+  const c1 = emphasizeParts("[25], [27]–[30], [32]–[35].");
+  assert.notEqual(c1, null);
+  assert.equal(c1.parts.map((p) => p.text).join(""), "[25], [27]–[30], [32]–[35].");
+  assert.equal(c1.parts.some((p) => p.bold), false);
+
+  const c2 = emphasizeParts("modeling [17], [19], [22], [24], [25], [27]–[29], [34]. Chen et");
+  assert.notEqual(c2, null);
+  assert.equal(c2.parts.map((p) => p.text).join(""), "modeling [17], [19], [22], [24], [25], [27]–[29], [34]. Chen et");
+
+  const c3 = emphasizeParts("[25]");
+  assert.notEqual(c3, null);
+  assert.equal(c3.parts.map((p) => p.text).join(""), "[25]");
 });
 
 test("emphasizeParts saccade interval skips words across spans", () => {

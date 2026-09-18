@@ -13,7 +13,7 @@ export const DEFAULTS = Object.freeze({
   fraction: 0.4,
   saccade: 1,
   boldWeight: 650,
-  fontMode: "original", // "original" | "atkinson" | "inter" | "literata"
+  fontMode: "original", // "original" | "atkinson" | "inter" | "literata" | "lexend" | "source-serif-4"
   bypassOrigins: [],
   // Individual PDF URLs escaped to the browser's native PDF viewer.
   bypassUrls: [],

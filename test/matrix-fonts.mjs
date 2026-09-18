@@ -22,7 +22,7 @@ const PAPERS = {
   "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
 };
 const MATRIX = [];
-for (const fontMode of ["original", "atkinson", "inter", "literata"])
+for (const fontMode of ["original", "atkinson", "inter", "literata", "lexend", "source-serif-4"])
   for (const boldWeight of [500, 700, 900]) MATRIX.push({ fontMode, boldWeight });
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -155,6 +155,7 @@ try {
     // whose words were visibly running together in a bundled reading face.
     // Measure the space itself, after word-spacing AND --scale-x.
     let jams = 0;
+    let narrow = 0;
     let narrowest = null;
     const rows = new Map();
     for (const s of div.querySelectorAll('span[data-fx-done]')) {
@@ -170,6 +171,7 @@ try {
           if (!(gap > 0)) continue;
           if (narrowest === null || gap < narrowest) narrowest = gap;
           if (gap < 0.12) jams++;
+          if (gap < 0.20) narrow++;
         }
       }
       const w = widthOf.get(s.textContent);
@@ -185,11 +187,11 @@ try {
     }
     res.sort((a, b) => a - b);
     const q = (f) => res.length ? Math.round(res[Math.min(res.length - 1, Math.floor(res.length * f))] * 100) / 100 : null;
-    return { n: res.length, med: q(0.5), p90: q(0.9), max: q(1), jams,
+    return { n: res.length, med: q(0.5), p90: q(0.9), max: q(1), jams, narrow,
              gapMin: narrowest === null ? null : Math.round(narrowest * 1000) / 1000, overlaps };
   })()`;
 
-  console.log("mode      weight  n   med    p90    max   jams gapMin overlaps done");
+  console.log("mode            weight  n   med    p90    max   jams narrow gapMin overlaps done");
   const setCombo = async (combo) => {
     const expr = `new Promise((r) => chrome.storage.sync.set({ enabled: true, fontMode: ${JSON.stringify(combo.fontMode)}, boldWeight: ${combo.boldWeight} }, () => r("ok")))`;
     for (let i = 0; i < 20; i++) {
@@ -213,13 +215,14 @@ try {
     const m = await ev(measureExpr);
     m.fxb = await ev(`(() => { const b = document.querySelector('#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-b'); if (!b) return null; const cs = getComputedStyle(b); return cs.fontWeight + "/" + cs.webkitTextStrokeWidth + "/" + cs.fontFamily.split(",")[0]; })()`).catch(() => "err");
     console.log(
-      combo.fontMode.padEnd(9),
+      combo.fontMode.padEnd(15),
       String(combo.boldWeight).padEnd(7),
       String(m.n).padEnd(3),
       String(m.med).padEnd(6),
       String(m.p90).padEnd(6),
       String(m.max).padEnd(5),
       String(m.jams).padEnd(4),
+      String(m.narrow).padEnd(6),
       String(m.gapMin).padEnd(6),
       String(m.overlaps).padEnd(8),
       String(done).padEnd(5),

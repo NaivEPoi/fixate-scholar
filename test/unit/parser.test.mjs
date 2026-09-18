@@ -471,6 +471,21 @@ test("findCitations: a bracketed list containing 0 is math, not a citation", () 
   assert.deepEqual(findCitations("cited in [2, 1]")[0].keys, ["2", "1"]);
 });
 
+test("findCitations: code array indexing is not a citation", () => {
+  assert.equal(findCitations("packet[4] = 0x55").length, 0);
+  assert.equal(findCitations("crc[0] = crc16 & 0xff").length, 0);
+  assert.equal(findCitations("char[16] buffer;").length, 0);
+  assert.equal(findCitations("matrix[1][2]").length, 0);
+  assert.equal(findCitations("arr_1[2]").length, 0);
+  assert.equal(findCitations("arr$1[2]").length, 0);
+
+  // When includeIndexed is explicitly true (for hyperlink reconciliation)
+  const indexed = findCitations("packet[4] = 0x55", { includeIndexed: true });
+  assert.equal(indexed.length, 1);
+  assert.equal(indexed[0].precededByIdentifier, true);
+  assert.deepEqual(indexed[0].keys, ["4"]);
+});
+
 test("findCitations: narrative author-year, bracketed or parenthesized year", () => {
   // natbib \citet — the authors are running prose, only the year is bracketed.
   // The numeric pattern can't see a 4-digit year and the parenthetical pattern
@@ -589,6 +604,44 @@ test("findInternalRefs: a line-wrap with no space after the number is not swallo
   const suffixText = "See Section 3a, then Section 3b.";
   const suffixed = findInternalRefs(suffixText).map(({ start, end }) => suffixText.slice(start, end));
   assert.deepEqual(suffixed, ["Section 3a", "Section 3b"]);
+});
+
+test("findInternalRefs matches plurals, Roman numerals, subfigures, lists, and equations", () => {
+  const text =
+    "See Figures 1 and 2, Table II, Table III, Table IV, Tables VI, VII and VIII, and Section III-E. " +
+    "Also Figure 1(a), Eq. (1), Equations (1)-(3), and Sections 3.1 to 3.4.";
+  const found = findInternalRefs(text).map(({ start, end }) => text.slice(start, end));
+  assert.deepEqual(found, [
+    "Figures 1 and 2",
+    "Table II",
+    "Table III",
+    "Table IV",
+    "Tables VI, VII and VIII",
+    "Section III-E",
+    "Figure 1(a)",
+    "Eq. (1)",
+    "Equations (1)-(3)",
+    "Sections 3.1 to 3.4",
+  ]);
+});
+
+test("findInternalRefs matches concatenated line-wrapped references", () => {
+  // When a reference wraps across text layer spans, plain concatenation glues
+  // the leader directly to the number, Roman numeral, or appendix letter, or
+  // glues the preceding line-ending word directly to the leader.
+  const text =
+    "The results are in TableIII. As seen in TableIV and SectionIII-E, along with AppendixA and Figure1. " +
+    "Also implementation inSection V and as showsFigure 2, but intersection 5 is not matched.";
+  const found = findInternalRefs(text).map(({ start, end }) => text.slice(start, end));
+  assert.deepEqual(found, [
+    "TableIII",
+    "TableIV",
+    "SectionIII-E",
+    "AppendixA",
+    "Figure1",
+    "Section V",
+    "Figure 2",
+  ]);
 });
 
 test("guessTitle falls back to raw prefix", () => {
