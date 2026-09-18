@@ -26,6 +26,8 @@ export class ReferencesFeature {
   // paper whose reference section was found but whose entries all failed to
   // group is still a paper whose "[12]" is a citation — see #shouldAnnotate.
   #hasBibliography = false;
+  #refPages = new Set();
+  #destPageCache = new Map();
   #popup;
   #ready = null;
 
@@ -60,6 +62,8 @@ export class ReferencesFeature {
   onDocumentLoaded(pdfDocument) {
     this.#entries = [];
     this.#sections = [];
+    this.#refPages = new Set();
+    this.#destPageCache.clear();
     this.#hasBibliography = false;
     this.#ready = (async () => {
       try {
@@ -78,8 +82,14 @@ export class ReferencesFeature {
           entries: sec.entries,
         }));
         this.#entries = sections.flatMap((sec) => sec.entries);
+        this.#refPages = new Set();
+        for (const sec of sections) {
+          this.#refPages.add(sec.heading.page);
+          for (const line of sec.body) this.#refPages.add(line.page);
+        }
         globalThis.__fxRefCount = this.#entries.length; // test introspection
         globalThis.__fxRefNums = this.#entries.map((e) => e.number); // test introspection
+        globalThis.__fxRefPages = [...this.#refPages]; // test introspection
         // Document-wide body height (char-weighted height mode over every
         // page) — body text dominates the whole document, so a single
         // small-text-heavy page can't skew it.
@@ -142,6 +152,21 @@ export class ReferencesFeature {
     })();
   }
 
+  #isReferenceLink(href, dest) {
+    if (href && /^#?(?:cite|bib|ref|bibr|bibitem)[._-]/i.test(href)) return true;
+    if (typeof dest === "string" && /^(?:cite|bib|ref|bibr|bibitem)[._-]/i.test(dest)) return true;
+    return false;
+  }
+
+  #destTargetsRef(dest) {
+    if (!dest) return false;
+    if (typeof dest === "string") {
+      if (this.#isReferenceLink(dest, null)) return true;
+      if (this.#destPageCache.has(dest)) return this.#destPageCache.get(dest);
+    }
+    return false;
+  }
+
   /**
    * Whether to run the citation pass at all.
    *
@@ -167,12 +192,11 @@ export class ReferencesFeature {
 
   async onTextLayerRendered(pageView) {
     await this.#ready;
-    if (this.#shouldAnnotate()) this.annotatePage(pageView);
+    this.annotatePage(pageView);
   }
 
   /** Rebuild hit-targets on every rendered page (geometry has changed). */
   reannotateRendered() {
-    if (!this.#shouldAnnotate()) return;
     const viewer = this.#app.pdfViewer;
     for (let i = 0; i < viewer.pagesCount; i++) {
       const pv = viewer.getPageView(i);
@@ -259,11 +283,13 @@ export class ReferencesFeature {
     const segments = [];
     let joined = "";
     for (const span of textLayerDiv.querySelectorAll("span")) {
-      if (span.querySelector("span")) continue; // markedContent wrappers
+      if (span.closest(".fx-cite-c, .fx-ref-c, .fx-sp")) continue;
+      if (span.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue; // markedContent wrappers
       const text = span.textContent;
       if (!text) continue;
-      segments.push({ span, start: joined.length, end: joined.length + text.length });
-      joined += text;
+      const start = joined.length;
+      joined += text + "\n";
+      segments.push({ span, start, end: start + text.length });
     }
 
     // TWO PHASES, and they must stay separate. Phase 1 only READS geometry
@@ -281,32 +307,96 @@ export class ReferencesFeature {
     const hits = []; // { rect, cards }
     const wraps = []; // { span, start, end, className } — applied in push order
 
-    for (const cite of findCitations(joined)) {
-      const bracketed = joined[cite.start] === "[";
-      // One card per CITED key, in reading order: the resolved entry, or — for
-      // a bracketed marker the extractor missed — a stub. So (1) a multi-citation's
-      // pager shows EVERY cited reference, not only the ones that resolved, and
-      // (2) every bracketed citation gets a hit-target, which lets reconcileLinks
-      // neutralise the PDF's own link so a click opens our card instead of
-      // scrolling to the bibliography. Unresolved AUTHOR-YEAR parentheticals
-      // get no card (that pattern false-positives on ordinary parens).
-      const cards = this.#buildCards(cite.keys, bracketed, pageView.id);
-      if (!cards.length) continue;
-      for (const seg of intersecting(segments, cite.start, cite.end)) {
-        // Don't annotate the bibliography's own entry "[N]" markers (the engine
-        // tags refs-region spans data-fx-refs): the reference list is left as the
-        // author set it, no hover/click cards on its own numbers (F1).
-        if (seg.span.dataset.fxRefs) continue;
-        const localStart = Math.max(0, cite.start - seg.start);
-        const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
-        for (const rect of rangeRects(seg.span, localStart, localEnd)) {
-          hits.push({ rect, cards });
+    // Collect all native annotation links on this page that target references/bibliography
+    const annotLayer = pageView.div?.querySelector(".annotationLayer");
+    const refLinks = [];
+    if (annotLayer) {
+      for (const a of annotLayer.querySelectorAll("a")) {
+        const href = a.getAttribute("href") || "";
+        if (/^(https?|mailto|tel):/i.test(href)) continue;
+        if (this.#isReferenceLink(href) || this.#destTargetsRef(href.startsWith("#") ? href.slice(1) : href)) {
+          const rect = a.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            refLinks.push({ rect, href });
+          }
         }
-        // Color the citation text itself. A fixed, high-contrast color (set
-        // in overlay.css) — not the document's own link color, which is often
-        // a low-contrast pastel that's hard to read.
-        if (seg.span.dataset.fxDone) {
-          wraps.push({ span: seg.span, start: localStart, end: localEnd, className: "fx-cite-c" });
+      }
+    }
+
+    const isMonospace = (span) => {
+      const font = (span.style?.fontFamily || window.getComputedStyle(span)?.fontFamily || "").toLowerCase();
+      return (
+        font.includes("mono") ||
+        font.includes("courier") ||
+        font.includes("consolas") ||
+        font.includes("menlo") ||
+        font.includes("inconsolata") ||
+        font.includes("typewriter") ||
+        font.includes("code")
+      );
+    };
+
+    if (this.#shouldAnnotate()) {
+      for (const cite of findCitations(joined, { includeIndexed: true })) {
+        const bracketed = joined[cite.start] === "[";
+        const citeSegs = [...intersecting(segments, cite.start, cite.end)];
+        if (!citeSegs.length) continue;
+
+        // Check if this bracketed match has a hyperlink to a reference
+        let hasRefLink = false;
+        if (bracketed && refLinks.length) {
+          for (const seg of citeSegs) {
+            const localStart = Math.max(0, cite.start - seg.start);
+            const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
+            for (const cr of rangeRects(seg.span, localStart, localEnd)) {
+              for (const rl of refLinks) {
+                const w = Math.min(cr.right, rl.rect.right) - Math.max(cr.left, rl.rect.left);
+                const h = Math.min(cr.bottom, rl.rect.bottom) - Math.max(cr.top, rl.rect.top);
+                if (w > 0 && h > 0 && (w * h) > 0.15 * (cr.width * cr.height)) {
+                  hasRefLink = true;
+                  break;
+                }
+              }
+              if (hasRefLink) break;
+            }
+            if (hasRefLink) break;
+          }
+        }
+
+        // If it has a hyperlink to the reference, it must be the citation.
+        // If it does NOT have a hyperlink to the reference:
+        // - Reject if preceded by an identifier character (array/variable indexing like packet[4], crc[0]).
+        // - Reject if in a monospace/code font (code listing).
+        if (!hasRefLink) {
+          if (cite.precededByIdentifier) continue;
+          if (citeSegs.some((s) => isMonospace(s.span))) continue;
+        }
+
+        // One card per CITED key, in reading order: the resolved entry, or — for
+        // a bracketed marker the extractor missed — a stub. So (1) a multi-citation's
+        // pager shows EVERY cited reference, not only the ones that resolved, and
+        // (2) every bracketed citation gets a hit-target, which lets reconcileLinks
+        // neutralise the PDF's own link so a click opens our card instead of
+        // scrolling to the bibliography. Unresolved AUTHOR-YEAR parentheticals
+        // get no card (that pattern false-positives on ordinary parens).
+        const cards = this.#buildCards(cite.keys, bracketed, pageView.id);
+        if (!cards.length) continue;
+        for (const seg of citeSegs) {
+          // Don't annotate the bibliography's own entry "[N]" markers (the engine
+          // tags refs-region spans data-fx-refs): the reference list is left as the
+          // author set it, no hover/click cards on its own numbers (F1).
+          if (seg.span.dataset.fxRefs) continue;
+          const localStart = Math.max(0, cite.start - seg.start);
+          const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
+          for (const rect of rangeRects(seg.span, localStart, localEnd)) {
+            hits.push({ rect, cards });
+          }
+          // Color the citation text itself. A fixed, high-contrast color (set
+          // in overlay.css) — not the document's own link color, which is often
+          // a low-contrast pastel that's hard to read.
+          if (seg.span.dataset.fxDone) {
+            wraps.push({ span: seg.span, start: localStart, end: localEnd, className: "fx-cite-c" });
+          }
         }
       }
     }

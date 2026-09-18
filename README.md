@@ -19,7 +19,7 @@ code, fonts, or assets.
   and fixed-fraction modes available) — with adjustable weight and an optional
   word-skip (saccade) interval. Text renders in the document's own embedded fonts at
   the original size and color; bundled open-source reading fonts (Atkinson
-  Hyperlegible, Inter, Literata) are available as replacements. Only main body prose
+  Hyperlegible, Inter, Literata, Lexend, Source Serif 4) are available as replacements. Only main body prose
   is processed — the paper title, authors and emails, section headings, math, tables,
   figures, captions, footnotes, headers/footers, and the references section are left
   exactly as set (see [REQUIREMENTS.md](REQUIREMENTS.md) for the full rulebook).

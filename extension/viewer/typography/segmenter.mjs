@@ -5,6 +5,8 @@
 // optionally capped at the end of the first syllable ("smart mode"). It is NOT
 // the fixed fractional table associated with the patented method — see TRADEMARKS.md.
 
+import { findCitations, findInternalRefs } from "../references/parser.mjs";
+
 const WORD_SEGMENTER = new Intl.Segmenter("en", { granularity: "word" });
 
 const VOWELS = /[aeiouyàâäéèêëîïôöùûüAEIOUY]/;
@@ -73,12 +75,28 @@ const PLAIN_WORD = new RegExp(
   `^[A-Za-zÀ-\u024f'\u2019\\-${LIGATURE_RANGE}${ACCENTS}]+$`,
 );
 
+function stripCitationsAndRefs(text) {
+  const ranges = [...findCitations(text), ...findInternalRefs(text)];
+  if (!ranges.length) return text;
+  const chars = text.split("");
+  for (const r of ranges) {
+    const end = Math.min(r.end, chars.length);
+    for (let i = Math.max(0, r.start); i < end; i++) {
+      chars[i] = " ";
+    }
+  }
+  return chars.join("");
+}
+
 // Spans dominated by digits and operators (equations, axis labels) are left
 // alone — bolding fragments of math reads as noise. Ordinary prose containing
-// a year or page number must still pass.
+// a year or page number must still pass. Citations (e.g. "[25]", "[27]–[30]")
+// and in-paper references are stripped first so their digits are not miscounted
+// as math characters.
 const MATHY = (text) => {
-  const letters = (text.match(/\p{L}/gu) || []).length;
-  const mathChars = (text.match(/[\d=+*/^<>|\\∑∏∫√∞±×÷∈∉∀∃≤≥≈≠⊂⊃∪∩→←↔]/gu) || []).length;
+  const clean = stripCitationsAndRefs(text);
+  const letters = (clean.match(/\p{L}/gu) || []).length;
+  const mathChars = (clean.match(/[\d=+*/^<>|\\∑∏∫√∞±×÷∈∉∀∃≤≥≈≠⊂⊃∪∩→←↔]/gu) || []).length;
   return mathChars > letters;
 };
 

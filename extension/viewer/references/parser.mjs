@@ -681,6 +681,12 @@ export function bibAuthors(authors) {
 
 // In-paper references: pointers to the document's own figures, tables,
 // sections, equations, algorithms, and appendices.
+// Supports:
+// - Singular and plural forms ("Figure 1", "Figures 1 and 2", "Tables VI, VII and VIII")
+// - Arabic numbers, ranges, and subfigures ("Figure 1(a)", "Fig. 2b", "Section 3.1-3.4")
+// - Roman numerals ("Table I", "Table II", "Table VI", "Section III-E")
+// - Parenthesized equation numbers ("Eq. (1)", "Equations (1)-(3)")
+// - Capital letter appendices ("Appendix A", "Appendices A and B")
 // The trailing letter only counts as a subsection suffix ("Section 2a") when
 // it is NOT itself followed by another letter. Text-layer spans correspond to
 // PDF-authored LINES, and a justified line's wrap point carries no space
@@ -689,8 +695,21 @@ export function bibAuthors(authors) {
 // `[a-z]?` swallowed the next word's first letter as a fake suffix ("2p"),
 // leaving that single letter colored as part of the reference and the rest
 // of the word an abrupt, oddly-colored orphan.
-const INTERNAL_REF =
-  /\b(?:Figure|Fig\.|Figs?\.|Table|Tab\.|Algorithm|Alg\.|Listing|Section|Sec\.|§|Appendix|App\.|Equation|Eq\.|Chapter|Theorem|Lemma|Definition|Claim)\s*~?\s*(?:\d+(?:\.\d+)*(?:[a-z](?![a-zA-Z]))?|[A-Z]\b(?:\.\d+)?)/g;
+const REF_LEADER =
+  "(?:[Ff]igures?|[Ff]igs?\\.?|[Tt]ables?|[Tt]abs?\\.?|[Aa]lgorithms?|[Aa]lgs?\\.?|[Ll]istings?|[Ss]ections?|[Ss]ecs?\\.?|§{1,2}|[Aa]ppendices|[Aa]ppendix|[Aa]pps?\\.?|[Ee]quations?|[Ee]qs?\\.?|[Cc]hapters?|[Tt]heorems?|[Ll]emmas?|[Dd]efinitions?|[Cc]laims?)";
+const REF_ROMAN =
+  "(?:(?<=[a-zA-Z~])|\\b)(?=[IVXLCDM])M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{1,3})(?:-[A-Za-z\\d]+)?\\b";
+const REF_NUM =
+  "\\d+(?:\\.\\d+)*(?:-[A-Za-z\\d]+)?(?:\\([a-z\\d]+\\)|[a-z](?![a-zA-Z]))?";
+const REF_PAREN_NUM = "\\(\\d+(?:\\.\\d+)*[a-z]?\\)";
+const REF_ALPHA = "(?:(?<=[a-zA-Z~])|\\b)[A-Z]\\b(?:\\.\\d+)?";
+const REF_ITEM = "(?:" + REF_PAREN_NUM + "|" + REF_NUM + "|" + REF_ROMAN + "|" + REF_ALPHA + ")";
+const REF_SEP = "(?:\\s*(?:[–—\\u2212\\u2015-]|--|to)\\s*|\\s*,\\s*(?:and\\s+|&\\s*)?|\\s+and\\s+|\\s*&\\s*)";
+
+const INTERNAL_REF = new RegExp(
+  "(?:\\b|(?<=[a-z])(?=[A-Z]))" + REF_LEADER + "\\s*~?\\s*" + REF_ITEM + "(?:" + REF_SEP + REF_ITEM + ")*",
+  "g"
+);
 
 /** Character ranges of in-paper references in a text string. */
 export function findInternalRefs(text) {
@@ -749,24 +768,30 @@ const ALPHA_CITE = new RegExp(
 
 /**
  * Find citation-like substrings in a text-layer span's text.
- * @returns Array<{start, end, keys: string[]}> keys match entry labels.
+ * @param {string} text
+ * @param {{ includeIndexed?: boolean }} [options]
+ * @returns Array<{start: number, end: number, keys: string[], precededByIdentifier?: boolean}>
  */
-export function findCitations(text) {
+export function findCitations(text, options = {}) {
   const out = [];
   for (const m of text.matchAll(NUMERIC_CITE)) {
+    const precededByIdentifier = m.index > 0 && /[\p{L}\p{N}_$\]]/u.test(text[m.index - 1]);
+    if (!options.includeIndexed && precededByIdentifier) continue;
     const keys = expandNumericList(m[1]);
     // Bibliographies number from [1]: a bracketed list containing 0 is math
     // (a vector/matrix row like "[2, 1, 0]"), not a citation.
     if (keys.includes("0")) continue;
-    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, precededByIdentifier });
   }
   for (const m of text.matchAll(NUMERIC_BRACKET_RANGE)) {
+    const precededByIdentifier = m.index > 0 && /[\p{L}\p{N}_$\]]/u.test(text[m.index - 1]);
+    if (!options.includeIndexed && precededByIdentifier) continue;
     const a = parseInt(m[1], 10);
     const b = parseInt(m[2], 10);
     if (a === 0 || b === 0 || a >= b) continue;
     const keys = [];
     for (let n = a; n <= Math.min(b, a + 25); n++) keys.push(String(n));
-    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, precededByIdentifier });
   }
   for (const m of text.matchAll(AUTHOR_YEAR_CITE)) {
     const keys = [];
@@ -780,8 +805,10 @@ export function findCitations(text) {
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
   }
   for (const m of text.matchAll(ALPHA_CITE)) {
+    const precededByIdentifier = m.index > 0 && /[\p{L}\p{N}_$\]]/u.test(text[m.index - 1]);
+    if (!options.includeIndexed && precededByIdentifier) continue;
     const keys = m[1].split(/\s*,\s*/).map((k) => k.trim()).filter(Boolean);
-    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, precededByIdentifier });
   }
   for (const m of text.matchAll(NARRATIVE_CITE)) {
     // The surname is the LAST multi-letter capitalized token of the run, so

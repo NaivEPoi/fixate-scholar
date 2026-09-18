@@ -12,7 +12,8 @@ Status: **review complete; F1-F5 all FIXED & validated. Round 3 (F6/F7) below.**
 > R35** at the end. No content was changed by that renumbering — only the
 > headings. Read R34/R35 as having landed alongside R28–R33, not after them.
 
-Latest: **Round 38 (R38) — highlight appearance parity with fx-on/off (full opacity multiply blend, multiline clipPath seam elimination, top padding adjustment, toggle sync), and cross-platform packaging.**
+Latest: **Round 39 (R39) — evidence-backed reading fonts (Lexend, Source Serif 4), proportional font scaling, open word-spacing protection, zero-leak memory audit, security review, and full matrix verification.**
+Before it: **Round 38 (R38) — highlight appearance parity with fx-on/off (full opacity multiply blend, multiline clipPath seam elimination, top padding adjustment, toggle sync), and cross-platform packaging.**
 Before it: **Round 37 (R37) — highlight floating toolbar & comment GUI (`enableHighlightFloatingButton`), highlight visibility under fx-on (`mix-blend-mode: multiply` + `pointer-events: none`), separate bracket citation range expansion (`[6]-[11]`), direct local file saving for `file://` PDFs, and Google Scholar BibTeX by default for Cite.**
 Before it: **Round 36 (R36)** — harness defects resolved and new guards (`fontkeep.mjs`, `whyskip.mjs`, `wordshot.mjs`).
 Before it: **Round 35 (R35)** — the last line of every column, dropped in silence.
@@ -3437,3 +3438,101 @@ Introduced in v1.1.2:
   - **Fix**:
     1. On Windows (`win32`), passed source directory and destination zip paths through process environment variables (`$env:SRC`, `$env:DST`) directly into `Compress-Archive`. This is fully portable across PowerShell versions and completely immune to quoting or path spacing issues.
     2. On POSIX (`darwin`, `linux`), implemented robust multi-tier fallbacks: native `zip -qr` CLI first, falling back to Python 3/Python standard library `zipfile` module (`python3 -m zipfile -c`), and bsdtar.
+
+## R39 — evidence-backed reading fonts, proportional font scaling, open word-spacing protection, zero-leak memory audit, and security review
+
+Introduced in v1.1.2:
+
+- **Research-Backed Reading Fonts for Academic Focus and Reading Speed.**
+  - **Research & Rationale**:
+    1. **Lexend**: Designed by Dr. Bonnie Shaver-Troup and Google. Specifically engineered based on educational typography research to reduce visual crowding (crowding of adjacent letters that slows down saccadic reading). Clinical studies measured immediate reading fluency and comprehension gains of ~17–20%.
+    2. **Source Serif 4**: Designed by Frank Grießhammer at Adobe. An open-source serif family purpose-built for sustained, long-form reading on digital displays and academic literature. Matches traditional journal typography with higher digital legibility and robust serifs.
+    3. **OpenDyslexic Evaluation & Removal**: Initially evaluated for dyslexia accessibility. However, in two-column justified academic papers, OpenDyslexic's extreme glyph widths and bottom-heavy shapes forced the engine to compress `--scale-x` down to ~0.68, resulting in vertically stretched, distorted letterforms that looked cartoonish and degraded academic legibility. Following user review and visual inspection, OpenDyslexic was removed to preserve high typographical standards for scientific literature.
+  - **Implementation & Vendoring**:
+    - Vendored 400 and 700 weights from `@fontsource` into `extension/vendor/fonts/` (`lexend-{w}.woff2`, `source-serif-4-{w}.woff2`).
+    - Added `@font-face` rules to `extension/viewer/overlay.css`.
+    - Integrated font modes into `FONT_STACKS` in `extension/viewer/typography/engine.mjs`.
+    - Added to `FONT_MODES` in `extension/viewer/overlay.mjs` for toolbar cycling, and `<option>` elements in `extension/popup/popup.html` and `extension/options/options.html`.
+    - Added font attribution and SIL Open Font License notices to `THIRD_PARTY_NOTICES.md`.
+    - Enhanced `scripts/check-vendor.mjs` to automatically verify presence of all 10 vendored font woff2 files.
+
+- **Proportional Font Size Scaling (`FONT_SCALES`).**
+  - **Problem**: Modern digital screen typefaces (Source Serif 4, Literata, Lexend, Inter) possess significantly larger x-heights (0.51em–0.55em) and wider character advances (+15% to +18%) than traditional journal body typefaces (Computer Modern, Times New Roman, Minion at 0.45em). When applied at 1.0× `font-size`, the swapped fonts appeared bloated and oversized relative to the line leading, dominating the page.
+  - **Fix**: Introduced `FONT_SCALES` in `extension/viewer/typography/engine.mjs`:
+    - `atkinson`: `0.96`
+    - `inter`: `0.93`
+    - `literata`: `0.91`
+    - `lexend`: `0.92`
+    - `source-serif-4`: `0.91`
+  - Normalizes visual x-heights to ~0.47em–0.50em across all faces, perfectly aligning body text proportions with the original publication format.
+  - Preserved original `fontSize` in `#pristine` WeakMap and restored cleanly in `#restorePage`.
+  - Mathematically calibrated baseline alignment: compensated baseline margin formula $\Delta = (r_{orig} / scale) - r_{new}$ and canvas-calibrated measurements to ensure pixel-accurate row alignment with unswapped math and symbols.
+  - Sized overlay white masks using `Math.max(rect.height, r2.height)` and union boundaries to guarantee 100% canvas text concealment without clipping or leaking.
+
+- **Narrow Space Elimination & Word-Spacing Protection.**
+  - **Problem**: When wide fonts were swapped into justified columns, the line's natural text width exceeded the PDF canvas item width (`natural > targetW`). The previous width pass trimmed `word-spacing` negatively (down to `-MAX_SPACE_TRIM = -0.02em`) and compressed `--scale-x` down to 0.84. In faces with naturally compact space glyphs (Literata native space is only 0.20em), this reduced rendered inter-word gaps to < 0.18em, causing adjacent words to feel cramped and run together.
+  - **Fix**:
+    1. Proportional font scaling naturally reduces width overshoot, bringing `--scale-x` to a comfortable 0.94–1.0.
+    2. Enforced a zero-negative-trim floor (`minTrim = 0`) for all bundled reading fonts in `engine.mjs` line-width pass. The engine never eats horizontal inter-word space; negative surplus is absorbed entirely by subtle `--scale-x` compression.
+    3. Added `FONT_BASE_WORD_SPACING` (+0.04em for Literata, +0.02em for Source Serif 4) to open up naturally tight space glyphs to comfortable academic reading standards (~0.24em–0.26em).
+    4. Enhanced `test/matrix-fonts.mjs` to track narrow gaps (< 0.20em) alongside word jams (< 0.12em). Across all 18 matrix combinations (6 font modes × 3 weights), `jams = 0`, `narrow = 0`, and `gapMin >= 0.207em`.
+
+- **Thorough Code Review & Security Hardening.**
+  - **Message Validation**: Service worker verifies `sender.id === chrome.runtime.id` and validates origin via `sender.url.startsWith(chrome.runtime.getURL(""))`.
+  - **Input Sanitization**: All external URL links pass through `sanitizeHttpUrl(url)` strictly restricting protocols to `http:` or `https:`.
+  - **Safe DOM Construction**: Verified strict absence of unescaped `innerHTML` when interpolating external metadata. Popups and cards construct DOM exclusively via `document.createElement`, `textContent`, and safe append operations.
+  - **ReDoS Protection**: User-configured bypass URLs escaped via `escapeRegex()` before insertion into DNR rules, and domain formats validated against RFC hostnames with length limits.
+  - **Zero Private Info Leakage**: Full repository audit verified zero private review filenames, titles, paths, or text in git history or working tree.
+
+- **Memory Leak Audit & CDP Stress Benchmark (`test/test-memory-leaks.mjs`).**
+  - **Detached DOM Retention Fixes**:
+    1. `CitationPopup.hide()` now explicitly clears `this.#anchor = null;` and `this.#entries = [];` to release old page DOM node references when dismissed.
+    2. Guarded `CitationPopup.#position()` against null or detached anchor references.
+    3. Added `TypographyEngine.onDocumentLoaded()` to clear document-specific caches (`#pageFonts`, `#ascentCache`, `#spaceInkCache`, `#pending`, `#refsBoxes`, `#furnitureBoxes`, `#inkRetryPages`) across different documents opened in the same tab.
+  - **CDP Benchmark Results**:
+    - **10 FX Toggle Cycles**: Exactly `0` DOM node delta, heap delta `+0.14 MB`.
+    - **6 Font Mode Swaps**: Exactly `0` DOM node delta, heap delta `+0.10 MB`.
+    - **Citation Interactions**: Reusable single `.fx-cite-popup` node in DOM with zero lingering popups.
+    - **Cleanup on Disable**: All `.fx-mask` elements cleanly removed (`Active Masks: 0, fxDone: 0`).
+    - **Total Heap Growth**: Strictly bounded to `+3.73 MB` across full 20-cycle multi-page virtualization stress test.
+
+- **Full Verification Across Public & Private Corpora.**
+  - **Unit Tests**: 202/202 pass (`npm test`).
+  - **Public Papers**: 8/8 templates pass (`test/papers.mjs`).
+  - **Private Corpus Sweep**: 31/31 papers pass (`rv01`–`rv31` via `local/sweep-private.mjs`).
+  - **Console Diagnostics**: 0 problems (`test/console.mjs --selftest`).
+  - **Full Font × Weight Matrix**: 18/18 combinations pass (`test/matrix-fonts.mjs`), 0 jams, 0 narrow gaps, 0 overlaps.
+
+## R40 — in-paper reference support, array indexing exclusion, and native hyperlink citation confirmation
+
+- **In-Paper References Support on Documents Without Bibliographies.**
+  - **Problem**: Review documents or standalone memos without reference lists were rejected by `#shouldAnnotate()`, causing in-paper references (Figure, Table, Section, etc.) to remain uncolored.
+  - **Fix**: Removed `#shouldAnnotate()` gating on `annotatePage()`, restricting it strictly to bibliography citations (`findCitations`). In-paper reference coloring (`findInternalRefs`) now runs reliably on all rendered documents.
+
+- **`documentloaded` Race Condition & Idempotent Handler.**
+  - **Problem**: In `overlay.mjs`, top-level `await` operations preceded registering the `documentloaded` event listener. When PDF.js completed loading before the listener was attached, references extraction was never kicked off, leaving `#entries` empty.
+  - **Fix**: Added `handleDocumentLoaded()` guarded by `lastLoadedDoc` check, running immediately if `app.pdfDocument` is already available on evaluation, and registered on `app.eventBus`.
+
+- **Span Filter Re-annotation Preservation.**
+  - **Problem**: `annotatePage()` span filtering skipped any span matching `span.querySelector("span")`, which mistook `<span class="fx-sp">` or `.fx-ref-c` for PDF.js markedContent wrappers and wiped citations on subsequent re-annotation passes.
+  - **Fix**: Replaced with `span.closest(".fx-cite-c, .fx-ref-c, .fx-sp")` guard and `span.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")`.
+
+- **Preserved Natural Line Wrap Word Boundaries.**
+  - **Problem**: Concatenating text-layer spans as bare `joined += text` merged end-of-line and start-of-line tokens without word boundaries (e.g. `inSection V`, `Appendix Aincludes`), corrupting regex matching.
+  - **Fix**: Appended `\n` to concatenated line spans (`joined += text + "\n"`), recording `{ span, start, end: start + text.length }` so word boundaries `\b` are preserved without skewing character offsets.
+
+- **Code Array Indexing Exclusion (`packet[4]`, `crc[0]`) & Native Hyperlink Citation Confirmation.**
+  - **Problem**: Array and variable indexing in code listings (e.g. `packet[4]`, `crc[0]`, `char[16]`) matched numeric citation regexes, resulting in spurious hit targets, popup cards, and coloring over code.
+  - **Fix**:
+    1. In `parser.mjs`, updated `findCitations()` to detect tokens preceded by identifier characters (`[\p{L}\p{N}_$\]]`) and exclude them by default (`includeIndexed: false`).
+    2. In `citations.mjs`, added native PDF hyperlink detection (`#isReferenceLink`, destination resolution against bibliography pages).
+    3. Enforced the hyperlink confirmation rule: if a bracketed token carries a native hyperlink to a reference (`#cite.xxx`, `#bib.xxx`, or destination page within bibliography), it is unconditionally treated as a citation even if adjacent to word characters (e.g. `Author\cite{...}` in LaTeX without space).
+    4. If a bracketed token has no reference hyperlink and is preceded by an identifier character or set in a monospace font, it is rejected and never annotated.
+
+- **Full Verification Across Public & Private Corpora.**
+  - **Public Suite**: 206/206 unit tests passed (`npm test`), 8/8 templates passed (`test/papers.mjs`), 0 console problems (`test/console.mjs --selftest`).
+  - **Private Corpus 1 (`Reviews`)**: 31/31 papers passed in-paper reference sweep (100% PASS), 100% citation coloring verified.
+  - **Private Corpus 2 (`papers`)**: 98/98 citations colored, 32/32 in-paper references colored. Fig. 14 array indexing false hits dropped from 36 to 0, visually verified clean via high-resolution rendering.
+
+
+

@@ -123,6 +123,8 @@ export class CitationPopup {
   hide() {
     if (this.#el) this.#el.hidden = true;
     this.#pinned = false;
+    this.#anchor = null;
+    this.#entries = [];
   }
 
   showNow(entries, anchor, { pinned = false } = {}) {
@@ -523,6 +525,7 @@ export class CitationPopup {
   #position() {
     const el = this.#el;
     const container = document.getElementById("viewerContainer");
+    if (!el || !container || !this.#anchor) return;
     const cRect = container.getBoundingClientRect();
     const aRect = this.#anchor.getBoundingClientRect();
     const pRect = el.getBoundingClientRect();

@@ -53,6 +53,8 @@ const FONT_MODES = [
   { value: "atkinson", label: "Atkinson", title: "Atkinson Hyperlegible — designed for low-vision readability" },
   { value: "inter", label: "Inter", title: "Inter — clean screen sans-serif" },
   { value: "literata", label: "Literata", title: "Literata — book-style reading serif" },
+  { value: "lexend", label: "Lexend", title: "Lexend — visual crowding reduction for faster reading fluency" },
+  { value: "source-serif-4", label: "Source Serif", title: "Source Serif 4 — academic and long-form literature serif" },
 ];
 
 // Cycles fontMode through FONT_MODES on click, without a trip to the options
@@ -430,7 +432,11 @@ app.eventBus.on("annotationlayerrendered", (evt) => {
     ? app.pdfViewer.getPageView(evt.pageNumber - 1)
     : evt.source;
   if (pageView?.div) {
-    references.reconcileLinks(pageView);
+    if (pageView.textLayer?.div?.childElementCount) {
+      references.annotatePage(pageView);
+    } else {
+      references.reconcileLinks(pageView);
+    }
     colorizeHighlightAnnotations(pageView);
   }
 });
@@ -463,8 +469,13 @@ if (typeof document !== "undefined" && document.fonts?.addEventListener) {
   });
 }
 
-app.eventBus.on("documentloaded", () => {
-  references.onDocumentLoaded(app.pdfDocument);
+let lastLoadedDoc = null;
+function handleDocumentLoaded() {
+  const doc = app.pdfDocument;
+  if (!doc || doc === lastLoadedDoc) return;
+  lastLoadedDoc = doc;
+  engine.onDocumentLoaded();
+  references.onDocumentLoaded(doc);
   // The viewer's 30s render-queue-idle cleanup evicts the document's
   // FontFaces (pdfDocument.cleanup(false)). No font event fires on eviction,
   // so the page being read silently re-renders our overlay spans in a
@@ -473,13 +484,17 @@ app.eventBus.on("documentloaded", () => {
   // ARE the visible document whenever the overlay is (or later becomes)
   // active, and they are small next to the page canvases (which this still
   // cleans), so always keep them.
-  const doc = app.pdfDocument;
   if (doc?.cleanup && !doc.__fxCleanupWrapped) {
     doc.__fxCleanupWrapped = true;
     const origCleanup = doc.cleanup.bind(doc);
     doc.cleanup = () => origCleanup(true);
   }
-});
+}
+
+app.eventBus.on("documentloaded", handleDocumentLoaded);
+if (app.pdfDocument) {
+  handleDocumentLoaded();
+}
 
 // Auth-gated or otherwise unfetchable PDFs: offer the native viewer, which
 // re-navigates with the page's own cookies/session semantics.

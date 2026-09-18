@@ -9,6 +9,8 @@ The optional reading fonts vendored into `extension/vendor/fonts/` by
 - **Atkinson Hyperlegible** — Copyright Braille Institute of America, Inc.
 - **Inter** — Copyright The Inter Project Authors (rsms.me/inter)
 - **Literata** — Copyright The Literata Project Authors
+- **Lexend** — Copyright The Lexend Project Authors (lexend.com)
+- **Source Serif 4** — Copyright Adobe Systems Incorporated
 
 ## English word list
 

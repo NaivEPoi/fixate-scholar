@@ -8,8 +8,10 @@ import { tmpdir } from "node:os";
 
 import { browserPath, extensionDir } from "./lib/env.mjs";
 
-const URL0 = process.argv[2];
-const RANGE = (process.argv.slice(3).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
+const URL0 =
+  process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6) ??
+  process.argv.slice(2).find((a) => !a.startsWith("--"));
+const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const EXT = extensionDir;
 const PORT = 9061 + (process.pid % 130);
 const userDataDir = join(tmpdir(), `fx-cc-${process.pid}`);
@@ -36,13 +38,14 @@ const CHECK = (p) => `(() => {
   const pv = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});
   const div = pv?.textLayer?.div;
   if (!div) return { error: "no layer" };
-  const CITE = /\\[(\\d{1,3}(?:\\s*[,;\\u2013\\u2014-]\\s*\\d{1,3})*)\\]/g;
+  const CITE = /(?<![\\p{L}\\p{N}_$\\]])\\[(\\d{1,3}(?:\\s*[,;\\u2013\\u2014-]\\s*\\d{1,3})*)\\]/gu;
   let total = 0, colored = 0;
   const misses = [];
   for (const s of div.querySelectorAll("span[data-fx-done]")) {
     if (s.dataset.fxRefs) continue;
     const text = s.textContent;
     for (const m of text.matchAll(CITE)) {
+      if (m[1].split(/[,;\\s\\u2013\\u2014-]/).includes("0")) continue;
       total++;
       // colored when SOME part of the match sits inside a .fx-cite-c wrap
       let pos = 0, hit = false;
@@ -74,7 +77,15 @@ try {
   for (let i = 0; i < 30; i++) { appOk = await ev(`!!(window.PDFViewerApplication && window.PDFViewerApplication.pdfViewer)`).catch(() => false); if (appOk) break; await sleep(500); }
   if (!appOk) throw new Error("viewer never loaded");
   await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`).catch(() => {});
-  for (let i = 0; i < 40; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 60) break; }
+  for (let i = 0; i < 40; i++) {
+    await sleep(800);
+    const ready = await ev(`({
+      bolded: document.querySelectorAll('.textLayer .fx-b').length,
+      refs: globalThis.__fxRefCount ?? -1,
+      refPages: (globalThis.__fxRefPages ?? []).length
+    })`).catch(() => null);
+    if (ready && ready.bolded > 60 && ready.refs >= 0) break;
+  }
   const pages = await ev(`window.PDFViewerApplication.pagesCount`);
   const from = RANGE[0] || 1, to = Math.min(RANGE[1] || pages, pages);
   let T = 0, C = 0;
