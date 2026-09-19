@@ -3716,7 +3716,7 @@ a URL, a log line or an output path (CLAUDE.md, "Private corpus").
 |---|---|
 | `tables.mjs` — no processed span inside a rule-bounded table zone | **0 offenders**, every document |
 | `fontkeep.mjs --all` — no processed span in a math/mono/small-caps/bold face | **0 violations**, every document |
-| `whyskip.mjs --all` — unreasoned prose below everything processed | `trailing: 0` on every page measured |
+| `whyskip.mjs --all` — unreasoned prose below everything processed | `trailing: 0` on **all 475 pages** |
 | Visual, per page | **every page of every document**, no classification defect |
 
 `tables.mjs` is the one that matters most for the gutter fix: excluding the
@@ -3748,6 +3748,17 @@ Two behaviours were investigated as candidate defects and are **correct**:
   candidate. The manuscript — the part being read — is processed correctly. This
   is a real limitation of a single document-wide `bodyHeight` rather than a
   misclassification, and worth knowing before anyone reports it as a bug.
+
+One measurement worth keeping as a baseline rather than a defect: across the
+475 pages, 32 lines on 21 pages carry no skip reason at all (`(none)`), where the
+public corpus reports zero on every page of three papers checked (49 pages,
+USENIX / NeurIPS / acmart). `trailing` is 0
+for every one of them, so none is the R35 "last line of the column" shape, and
+their samples are file paths, source identifiers and URL fragments — code-ish
+tokens that whyskip's prose predicate admits and that the engine correctly leaves
+alone, but by a path that records nothing. It is a residual gap in the
+diagnostics (the thing R35 closed for the margin band), not a rendering defect,
+and it is the private corpus's font/layout variety that exposes it at all.
 
 Also worth recording, in the spirit of R21/R36: **`whyskip.mjs` cannot fail.**
 CLAUDE.md's gate says "`whyskip --all` → `trailing: 0`", but the harness exits

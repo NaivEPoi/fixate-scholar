@@ -177,7 +177,7 @@ so no filename reaches a URL, a log line or an output path.
 - `tables.mjs` 0 offenders on every document (the check that retires the risk the
   gutter fix introduces: it can only make the aligned rule skip LESS).
 - `fontkeep.mjs --all` 0 violations on every document.
-- `whyskip.mjs --all` `trailing: 0` on every page measured — read from the
+- `whyskip.mjs --all` `trailing: 0` on all 475 pages — read from the
   per-document output, NOT from the sweep's PASS column, because that harness
   exits non-zero only on an error and cannot fail on `trailing`.
 - Two behaviours investigated and confirmed CORRECT, not defects: body prose set
