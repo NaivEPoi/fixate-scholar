@@ -15,6 +15,18 @@
 // `trailing` counts unreasoned prose sitting at or below everything the engine
 // processed — the "last line of the column left alone" shape. It should be 0.
 //
+// EXIT 1 when it isn't — and when `unreasoned` isn't either. Until R41 this
+// script exited non-zero only on an exception, so a sweep of it reported
+// "31/31 PASS" while proving nothing about the criterion stated right here, and
+// its numbers had to be dug out of the per-document output. Both counts are now
+// the pass criterion, and a run that examined no prose at all fails too, so it
+// cannot pass blind the way the checks in R36 did.
+//
+// `unreasoned` is fatal because "every skip path records a reason" is an
+// invariant the engine can hold: the reason is what makes the NEXT bug of the
+// R35 class findable instead of silent. Closing the last three gaps (link-annot,
+// url-or-math, overlaps-skipped) is what made it 0 across both corpora.
+//
 // Usage: node test/whyskip.mjs --url=<pdf> [--label=name] [--page=N | --all]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
@@ -132,6 +144,36 @@ try {
   const line = `${LABEL} ${JSON.stringify(report)}`;
   console.log(line);
   appendFileSync("test/out/whyskip.log", line + String.fromCharCode(10));
+
+  // The verdict, on one line the sweeps can show. Printing the per-page JSON
+  // alone is what let a sweep report PASS without anyone reading a number.
+  const sum = (k) => report.reduce((n, r) => n + (r[k] || 0), 0);
+  const totals = {
+    pages: report.length,
+    unprocessedProse: sum("unprocessedProse"),
+    unreasoned: sum("unreasoned"),
+    trailing: sum("trailing"),
+  };
+  console.log(`TOTALS: ${JSON.stringify(totals)}`);
+
+  // Blind-pass guard: a run that reached no page measured nothing, and would
+  // otherwise report a clean zero. (Zero unprocessed prose is NOT failed on —
+  // a short document can legitimately have none, and `unprocessedProse` is in
+  // the TOTALS line so a suspicious zero is visible.)
+  // Indented "  FAIL …" is the shape a sweep driver greps for, so a failure
+  // arrives with its page and sample attached instead of a bare exit code.
+  if (!totals.pages) {
+    console.error("  FAIL no page was probed");
+    process.exitCode = 1;
+  }
+  const offenders = report.filter((r) => r.unreasoned || r.trailing);
+  for (const r of offenders) {
+    console.error(
+      `  FAIL p${r.page} unreasoned=${r.unreasoned} trailing=${r.trailing} ` +
+        `sample=${JSON.stringify(r.sample)}`,
+    );
+  }
+  if (offenders.length) process.exitCode = 1;
 } catch (e) { console.error(`${LABEL} why-probe error: ${e.message || e}`); process.exitCode = 1; }
 finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500);
   try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} process.exit(process.exitCode ?? 0); }

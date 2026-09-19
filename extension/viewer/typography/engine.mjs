@@ -2697,10 +2697,7 @@ export class TypographyEngine {
         // block repeated at the top of every odd page sat below it at 7pt and
         // was emphasized as body prose — and, being processed, showed a canvas
         // glyph peeking past its mask: one word rendered with a doubled letter.
-        if (inFurniture(item)) {
-          if (globalThis.__fxDebug) div.dataset.fxWhy = "furniture";
-          return false;
-        }
+        if (inFurniture(item)) return reject(div, "furniture");
         // Skip when a URL annotation covers most of the item (a long prose
         // item merely brushing a link keeps its emphasis — the regex-based
         // range exclusion handles the link part).
@@ -2712,7 +2709,7 @@ export class TypographyEngine {
             return overlap > Math.max(2, (itemEnd - x) * 0.5);
           })
         ) {
-          return false;
+          return reject(div, "link-annot");
         }
       }
       return true;
@@ -3390,7 +3387,10 @@ export class TypographyEngine {
           // A candidate overlapping skipped content is a duplicate of it —
           // leave it on the canvas (no mask, no emphasis) so the skipped copy
           // survives.
-          if (overlapsObstacle(rect)) continue;
+          if (overlapsObstacle(rect)) {
+            if (globalThis.__fxDebug && !pair.div.dataset.fxWhy) pair.div.dataset.fxWhy = "overlaps-skipped";
+            continue;
+          }
           // The saccade setting emphasizes every Nth word, so a span's parts
           // depend on the running word count it STARTS at — keep it, so the
           // emphasis can be re-derived later for this span alone (see
@@ -3403,6 +3403,7 @@ export class TypographyEngine {
             // the canvas in its original face, and add it to the obstacles so
             // neighbouring masks clamp around it instead of whiting it out.
             if (rect.width > 0 && rect.height > 0) obstacleRects.push(rect);
+            if (globalThis.__fxDebug && !pair.div.dataset.fxWhy) pair.div.dataset.fxWhy = "url-or-math";
             continue;
           }
           wordIndex = result.wordIndex;
