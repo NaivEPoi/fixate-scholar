@@ -3716,7 +3716,7 @@ a URL, a log line or an output path (CLAUDE.md, "Private corpus").
 |---|---|
 | `tables.mjs` — no processed span inside a rule-bounded table zone | **0 offenders**, every document |
 | `fontkeep.mjs --all` — no processed span in a math/mono/small-caps/bold face | **0 violations**, every document |
-| `whyskip.mjs --all` — unreasoned prose below everything processed | `trailing: 0` on **all 475 pages** |
+| `whyskip.mjs --all` — unreasoned prose below everything processed | `trailing: 0` and `unreasoned: 0` on **all 475 pages** (after the fix below) |
 | Visual, per page | **every page of every document**, no classification defect |
 
 `tables.mjs` is the one that matters most for the gutter fix: excluding the
@@ -3749,21 +3749,71 @@ Two behaviours were investigated as candidate defects and are **correct**:
   is a real limitation of a single document-wide `bodyHeight` rather than a
   misclassification, and worth knowing before anyone reports it as a bug.
 
-One measurement worth keeping as a baseline rather than a defect: across the
-475 pages, 32 lines on 21 pages carry no skip reason at all (`(none)`), where the
-public corpus reports zero on every page of three papers checked (49 pages,
-USENIX / NeurIPS / acmart). `trailing` is 0
-for every one of them, so none is the R35 "last line of the column" shape, and
-their samples are file paths, source identifiers and URL fragments — code-ish
-tokens that whyskip's prose predicate admits and that the engine correctly leaves
-alone, but by a path that records nothing. It is a residual gap in the
-diagnostics (the thing R35 closed for the margin band), not a rendering defect,
-and it is the private corpus's font/layout variety that exposes it at all.
+### The last three silent skips, and a check that can now fail
 
-Also worth recording, in the spirit of R21/R36: **`whyskip.mjs` cannot fail.**
-CLAUDE.md's gate says "`whyskip --all` → `trailing: 0`", but the harness exits
-non-zero only on an error, and the private sweep's metric line does not match its
-output format — so a sweep of it reports "31/31 PASS" while proving nothing about
-`trailing`. The numbers above were read from the per-document output with
-`--verbose`, not from the PASS column. A harness whose name implies a criterion it
-does not enforce is the always-passes twin this file already warns about.
+The private corpus surfaced what the public one could not: 32 prose lines on 21
+pages carried **no skip reason at all** (`(none)`), against zero on every page of
+three public papers (49 pages, USENIX / NeurIPS / acmart). `trailing` was 0 for
+all of them, so none was the R35 "last line of the column" shape — but an
+unreasoned skip is exactly the ambiguity R35 was hiding in, and the engine's own
+policy is that every skip path records one.
+
+Tracked down by marking each candidate the filter saw and re-probing: the spans
+DID reach the filter and passed it, so the reason was missing further along.
+Three paths returned without recording:
+
+- `link-annot` — an item covered by the PDF's own link annotation.
+- `url-or-math` — `emphasizeParts` declines a span that is math-heavy or a
+  wrapped URL/path fragment (`MATHY`, or a space-free fragment containing `/`
+  or `@`). This was the one the private corpus hit: file paths and source
+  identifiers set in a monospace face inside prose.
+- `overlaps-skipped` — a candidate that duplicates already-skipped content.
+
+`furniture` was also moved onto the shared `reject()` helper so it honours the
+"never overwrite a more specific reason" rule the others follow. All four changes
+are inside `globalThis.__fxDebug` guards: with debug off the engine behaves
+exactly as before, which is why the corpus numbers are unchanged.
+
+**`whyskip.mjs` can now fail.** Until R41 it exited non-zero only on an exception,
+so a sweep of it reported every document PASS while proving nothing about the
+criterion its own header states. It now prints a `TOTALS:` line, exits 1 on any
+page with `unreasoned` or `trailing` above zero — naming the page and its sample
+— and fails a run that probed no page at all, so it cannot pass blind. Verified
+by mutation: removing the `url-or-math` reason turns the affected document from
+PASS into `FAIL p5 unreasoned=6`, which is what it would have done silently
+before.
+
+Its FAIL line is indented to the shape a sweep driver greps for, so a failure now
+arrives with its page and sample attached rather than as a bare exit code — the
+gap that made the original numbers have to be dug out of `--verbose` output
+instead of read off the PASS column.
+
+### Left open, characterised: `citeaudit.mjs` measures almost nothing
+
+Auditing the harnesses for the same "states a criterion it cannot enforce" defect
+found four with no failure path at all: `skipline`, `matrix-fonts`, `citecolor`
+and `citeaudit`. The first three describe themselves as reports. `citeaudit` does
+not — its header says JUMP-CITE "Must be 0" and NO-HIT "Must be 0" — and it is
+worse than unenforced: **it does not see the citations it audits.**
+
+Measured on page 5 of a USENIX paper that `papers.mjs` passes, with 36 coloured
+citations and 36 hit-targets present in the DOM: the audit's rebuilt page text
+contained 5 bracket openings and its own counter recorded **0 citations on that
+page**. Two causes are confirmed, a third is not:
+
+1. Its span filter is the pre-R40 one (`if (s.querySelector('span')) continue`),
+   which drops every span whose citation was coloured — the colour wrap IS a
+   child span. So it can only ever see citations that were NOT annotated, and
+   then reports them as NO-HIT.
+2. It settles on "the first processed span appeared" rather than on the
+   hit-target layer, which is built afterwards; and it never waits for the
+   document-wide extractor, so `__fxRefCount` is read partially (19 against the
+   58 entries `refbold` parses) and unparsed entries look UNRESOLVED.
+3. Fixing both still left the count at 5 brackets / 0 citations for the page, so
+   at least one more cause remains in how it rebuilds the page text.
+
+Those repairs are therefore NOT committed: a gate that fails a healthy document
+is worse than one that never fails (R36), and this one would. It is recorded
+here with its measurements so the next attempt starts from evidence rather than
+from the header's claim. Citation behaviour is meanwhile covered by
+`papers.mjs` (`colorOk`), `citecolor.mjs` and `refcolor.mjs`.
