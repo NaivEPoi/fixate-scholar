@@ -14,6 +14,11 @@
 // Usage:
 //   node test/review-triage.mjs                 # every captured paper
 //   node test/review-triage.mjs USENIX_baseline_
+//   node test/review-triage.mjs --no-text       # reasons only, no document text
+//
+// `--no-text` exists for sweeping a corpus whose contents must not be quoted:
+// it reports which rule fired on which page and suppresses the sample text, so
+// the shortlist is still usable while nothing from the document is printed.
 
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -21,7 +26,12 @@ import { join } from "node:path";
 import { outDir } from "./lib/env.mjs";
 
 const REVIEW = outDir("review");
-const ONLY = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const ARGS = process.argv.slice(2);
+const NO_TEXT = ARGS.includes("--no-text");
+const ONLY = ARGS.filter((a) => !a.startsWith("--"));
+
+/** A sample, or a placeholder when the corpus must not be quoted. */
+const show = (s) => (NO_TEXT ? `<${proseWords(s)} prose words>` : JSON.stringify(s.slice(0, 60)));
 
 /** Prose looks like prose: several runs of lowercase letters in a row. */
 const proseWords = (s) => (String(s).match(/\b[a-z]{3,}\b/g) ?? []).length;
@@ -70,7 +80,7 @@ for (const paper of papers) {
     for (const [reason, info] of Object.entries(p.skipByReason ?? {})) {
       if (!STRUCTURAL.has(reason)) continue;
       for (const ex of info.ex ?? []) {
-        if (proseWords(ex) >= 4) why.push(`${reason} on prose: ${JSON.stringify(ex.slice(0, 60))}`);
+        if (proseWords(ex) >= 4) why.push(`${reason} on prose: ${show(ex)}`);
       }
     }
 
@@ -88,7 +98,7 @@ for (const paper of papers) {
     // so only a real caption opener — the label followed by ":" or "." — counts.
     for (const ex of p.sampleDone ?? []) {
       if (/^(Figure|Table|Algorithm|Listing)\s+\d+\s*[:.]/.test(ex)) {
-        why.push(`processed a caption opener: ${JSON.stringify(ex.slice(0, 60))}`);
+        why.push(`processed a caption opener: ${show(ex)}`);
       }
     }
 

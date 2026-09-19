@@ -166,3 +166,26 @@ recorded their skips as `?`. See REVIEW_FINDINGS R41.
 `diagnose.mjs` whiteout/fontBad/selBad = 0; `tables.mjs` 0 offenders (including
 both single-column papers); `diag-dividers.mjs` 0 masked of 202 rules;
 `refbold.mjs` 0 emphasized bibliography spans.
+
+## Round 3b (R41) — the private corpus, every page
+
+Same rules, same method, from a capture taken after the R41 fixes. Documents are
+referred to only by positional alias; the sweep serves them under those aliases
+so no filename reaches a URL, a log line or an output path.
+
+- **31 documents, 475 pages — every page looked at.** No classification defect.
+- `tables.mjs` 0 offenders on every document (the check that retires the risk the
+  gutter fix introduces: it can only make the aligned rule skip LESS).
+- `fontkeep.mjs --all` 0 violations on every document.
+- `whyskip.mjs --all` `trailing: 0` on every page measured — read from the
+  per-document output, NOT from the sweep's PASS column, because that harness
+  exits non-zero only on an error and cannot fail on `trailing`.
+- Two behaviours investigated and confirmed CORRECT, not defects: body prose set
+  in a bold face is left alone (the `SPECIAL_FONT` rule R18 hardened), and a
+  composite document's off-size sections fall outside the single document-wide
+  body-height band. Details in REVIEW_FINDINGS R41 (cont.).
+
+Driven with `node local/sweep-private.mjs --script=test/<harness>.mjs` (local
+only, git-ignored). `review-capture.mjs` and `review-triage.mjs` grew `--url=` /
+`--label=` and `--no-text` for this, so the visual review runs over a corpus that
+is not in the public list and prints nothing from it.
