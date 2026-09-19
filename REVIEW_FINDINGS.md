@@ -3827,6 +3827,139 @@ Verified on a USENIX paper: both invocations now give the identical
 `cites=130 jumpCites=0 noHit=0 unresolved=0 refCount=58`, and a URL that loads
 nothing exits 1 instead of reporting a clean zero.
 
+The span-filter question raised here earlier is now closed. A first comparison,
+computed as a second counter inside the same probe, suggested the R40 filter
+would see 188 citation brackets against the current filter's 130. Running the
+audit for real with each filter shows no difference at all: usenixsecurity24-tu
+reports `cites=130 noHit=0 refCount=58` either way, Proteus-ccs24
+`cites=110 noHit=0 refCount=73` either way. The 188 was an artifact of how that
+side-by-side counter was measured, not a property of the filter — the colour
+wraps carry no child spans, so whichever end of the parent/child pair is skipped,
+the same text reaches the joined page string. The filter is left as committed.
+
+### R41 (cont.) — the same review over the private corpus
+
+Every document of the private verification corpus, every page, against the same
+Section 3 rules and from a capture taken after the fixes above. Nothing about
+those documents appears here; they are referred to only by their positional
+aliases, and the harness serves them under those aliases so no filename reaches
+a URL, a log line or an output path (CLAUDE.md, "Private corpus").
+
+| Gate | Result |
+|---|---|
+| `tables.mjs` — no processed span inside a rule-bounded table zone | **0 offenders**, every document |
+| `fontkeep.mjs --all` — no processed span in a math/mono/small-caps/bold face | **0 violations**, every document |
+| `whyskip.mjs --all` — unreasoned prose below everything processed | `trailing: 0` and `unreasoned: 0` on **all 475 pages** (after the fix below) |
+| Visual, per page | **every page of every document**, no classification defect |
+
+`tables.mjs` is the one that matters most for the gutter fix: excluding the
+gutter from the band candidates can only ever make the rule skip LESS, so the
+risk it introduces is emphasis leaking into a table. Zero offenders across the
+whole private corpus, and zero on both single-column public papers, is what
+retires that risk.
+
+**No page of the private corpus shows the R41 defect shape.** Of the pages with
+nothing processed, every one is a full-page table, a full-page figure or protocol
+diagram, a bibliography, a code listing, or a submission cover/metadata page —
+checked individually rather than assumed.
+
+Two behaviours were investigated as candidate defects and are **correct**:
+
+- **A document whose body prose is set in a bold face gets no emphasis.** One
+  document sets an entire response-to-reviewers section in CMBX10 — Computer
+  Modern Bold Extended — and those pages come out almost entirely skipped as
+  `runin`. That is the bold-display rule (`SPECIAL_FONT`) doing exactly what R18
+  hardened it to do, confirmed by resolving the fonts through `commonObjs`
+  rather than by reading the screenshot: 2 654 of ~2 950 characters on the page
+  are in CMBX10, and the regular-faced prose on the same pages IS processed.
+  Relaxing it to catch this document would put emphasis back into every run-in
+  heading in the corpus. Left as is.
+- **A composite document's sections can fall outside the body-size band.** A
+  submission bundle (questionnaire + manuscript + response letter, each typeset
+  at its own size) has ONE document-wide body height, char-weighted, which the
+  manuscript dominates; the other sections' prose is then off-size and is not a
+  candidate. The manuscript — the part being read — is processed correctly. This
+  is a real limitation of a single document-wide `bodyHeight` rather than a
+  misclassification, and worth knowing before anyone reports it as a bug.
+
+### The last three silent skips, and a check that can now fail
+
+The private corpus surfaced what the public one could not: 32 prose lines on 21
+pages carried **no skip reason at all** (`(none)`), against zero on every page of
+three public papers (49 pages, USENIX / NeurIPS / acmart). `trailing` was 0 for
+all of them, so none was the R35 "last line of the column" shape — but an
+unreasoned skip is exactly the ambiguity R35 was hiding in, and the engine's own
+policy is that every skip path records one.
+
+Tracked down by marking each candidate the filter saw and re-probing: the spans
+DID reach the filter and passed it, so the reason was missing further along.
+Three paths returned without recording:
+
+- `link-annot` — an item covered by the PDF's own link annotation.
+- `url-or-math` — `emphasizeParts` declines a span that is math-heavy or a
+  wrapped URL/path fragment (`MATHY`, or a space-free fragment containing `/`
+  or `@`). This was the one the private corpus hit: file paths and source
+  identifiers set in a monospace face inside prose.
+- `overlaps-skipped` — a candidate that duplicates already-skipped content.
+
+`furniture` was also moved onto the shared `reject()` helper so it honours the
+"never overwrite a more specific reason" rule the others follow. All four changes
+are inside `globalThis.__fxDebug` guards: with debug off the engine behaves
+exactly as before, which is why the corpus numbers are unchanged.
+
+**`whyskip.mjs` can now fail.** Until R41 it exited non-zero only on an exception,
+so a sweep of it reported every document PASS while proving nothing about the
+criterion its own header states. It now prints a `TOTALS:` line, exits 1 on any
+page with `unreasoned` or `trailing` above zero — naming the page and its sample
+— and fails a run that probed no page at all, so it cannot pass blind. Verified
+by mutation: removing the `url-or-math` reason turns the affected document from
+PASS into `FAIL p5 unreasoned=6`, which is what it would have done silently
+before.
+
+Its FAIL line is indented to the shape a sweep driver greps for, so a failure now
+arrives with its page and sample attached rather than as a bare exit code — the
+gap that made the original numbers have to be dug out of `--verbose` output
+instead of read off the PASS column.
+
+### `citeaudit.mjs` — a correction, and the fix it did need
+
+Auditing the harnesses for the same "states a criterion it cannot enforce"
+defect found four with no failure path: `skipline`, `matrix-fonts`, `citecolor`
+and `citeaudit`. The first three describe themselves as reports. `citeaudit`
+does not — its header says JUMP-CITE "Must be 0" and NO-HIT "Must be 0".
+
+**A first pass through this recorded that `citeaudit` was badly broken — that it
+could not see the citations it audits, counting 0 on a page holding 36 coloured
+ones. That finding was wrong, and it is worth saying why.** `citeaudit` takes its
+document POSITIONALLY; every other harness here takes `--url=`. Invoked as
+`--url=<pdf>`, the flag itself became the document, PDF.js silently opened its
+built-in sample instead, and the audit dutifully reported on 14 pages of the
+wrong file — `numPages=14`, `refCount=19`, bracketed numbers that were never
+citations. Run correctly on the same paper it reports 19 pages, `refCount=58`
+matching `refbold`, and zero NO-HIT and zero JUMP-CITE. The span filter was
+likewise exonerated: the pre-R40 form skips a span whose citation was coloured,
+but the colour WRAPS have no child spans and are kept, so the text is recovered
+either way.
+
+This is the failure mode CLAUDE.md warns about in its own words — a confident
+false positive costing more than a missed subtle one — and the thing that made it
+possible is that a harness handed the wrong document still produced a clean,
+plausible report. So the fixes are aimed there:
+
+- **`--url=` is accepted alongside the positional form**, so the invocation that
+  every other harness takes cannot silently audit a different file.
+- **A blind-pass guard**: examining no citation bracket at all is now a failure
+  (`FAIL no citation bracket was examined`), which is exactly what the wrong-file
+  run would have tripped.
+- **The two counts the header calls "Must be 0" are now the exit criterion**
+  (JUMP-CITE, NO-HIT), printed as indented `FAIL` lines a sweep can surface.
+  `unresolved` stays advisory — a paper citing beyond its own bibliography
+  produces it legitimately.
+
+Verified on a USENIX paper: both invocations now give the identical
+`cites=130 jumpCites=0 noHit=0 unresolved=0 refCount=58`, and a URL that loads
+nothing exits 1 instead of reporting a clean zero.
+
 One thing is left open rather than guessed at. Rebuilding the page text with the
 R40 span filter instead of the current one counts 188 citation brackets against
 130 — the two agree page for page early in the document and diverge later. Which
