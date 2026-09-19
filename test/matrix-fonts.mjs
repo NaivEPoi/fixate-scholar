@@ -3,6 +3,12 @@
 // re-process), then measure page-wide health — width residual vs the PDF's
 // own item widths, collapsed word-spacing, same-line span overlaps — and
 // capture a region screenshot per combo.
+//
+// PASS = no combo shows a word JAM (inter-word gap < 0.12em), a NARROW gap
+// (< 0.20em) or a same-line span OVERLAP, and every combo actually measured
+// spans. EXIT 1 otherwise — until R41 this printed its table and exited 0
+// whatever was in it, so "jams = 0, narrow = 0 across all 18 combinations"
+// (R39) was a number somebody had to read rather than a check that could fail.
 // Usage: node test/matrix-fonts.mjs [paper] [page] [--browser=chrome|edge] [--zoom=N] [--find="text"]
 import { spawn } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -208,6 +214,7 @@ try {
       sleep(6000).then(() => { throw new Error("sw eval timeout"); }),
     ]);
   };
+  const rows = [];
   for (const combo of MATRIX) {
     await setCombo(combo);
     await sleep(2500);
@@ -228,6 +235,8 @@ try {
       String(done).padEnd(5),
       m.fxb,
     );
+    rows.push({ mode: combo.fontMode, weight: combo.boldWeight, n: m.n,
+                jams: m.jams, narrow: m.narrow, overlaps: m.overlaps, gapMin: m.gapMin });
     const clip = await ev(`(async () => {
       const v = window.PDFViewerApplication.pdfViewer;
       const div = v.getPageView(${PAGE - 1}).textLayer.div;
@@ -239,6 +248,21 @@ try {
     const shot = await p.send("Page.captureScreenshot", { format: "png", clip: { ...clip, scale: 2 } });
     writeFileSync(join(root, "test", "out", "matrix", `${BROWSER}-${combo.fontMode}-${combo.boldWeight}.png`), Buffer.from(shot.data, "base64"));
   }
+  const bad = rows.filter((r) => r.jams || r.narrow || r.overlaps || !r.n);
+  for (const r of bad) {
+    console.error(
+      `  FAIL ${r.mode} ${r.weight}: jams=${r.jams} narrow=${r.narrow} ` +
+        `overlaps=${r.overlaps} gapMin=${r.gapMin} n=${r.n}`,
+    );
+  }
+  // Blind-pass guard: no combo measured means the table above is empty and a
+  // clean read of it would be meaningless.
+  if (!rows.length) {
+    console.error("  FAIL no combination was measured");
+    process.exitCode = 1;
+  }
+  if (bad.length) process.exitCode = 1;
+  console.log(`TOTALS: ${JSON.stringify({ combos: rows.length, failing: bad.length })}`);
   console.log("DONE");
-} catch (e) { console.error("matrix error:", e.message || e); }
-finally { try { browser.kill(); } catch {} await sleep(300); }
+} catch (e) { console.error("matrix error:", e.message || e); process.exitCode = 1; }
+finally { try { browser.kill(); } catch {} await sleep(300); process.exit(process.exitCode ?? 0); }
