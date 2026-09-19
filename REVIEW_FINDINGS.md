@@ -3703,3 +3703,56 @@ state the invariant rather than a number that goes stale.
   after the fixes, read against TESTING.md §3. One defect found (p12, above);
   everything else classifies correctly. Every remaining "nothing processed" page
   is a bibliography, a full-page figure or a code listing, as it should be.
+
+### R41 (cont.) — the same review over the private corpus
+
+Every document of the private verification corpus, every page, against the same
+Section 3 rules and from a capture taken after the fixes above. Nothing about
+those documents appears here; they are referred to only by their positional
+aliases, and the harness serves them under those aliases so no filename reaches
+a URL, a log line or an output path (CLAUDE.md, "Private corpus").
+
+| Gate | Result |
+|---|---|
+| `tables.mjs` — no processed span inside a rule-bounded table zone | **0 offenders**, every document |
+| `fontkeep.mjs --all` — no processed span in a math/mono/small-caps/bold face | **0 violations**, every document |
+| `whyskip.mjs --all` — unreasoned prose below everything processed | `trailing: 0` on every page measured |
+| Visual, per page | **every page of every document**, no classification defect |
+
+`tables.mjs` is the one that matters most for the gutter fix: excluding the
+gutter from the band candidates can only ever make the rule skip LESS, so the
+risk it introduces is emphasis leaking into a table. Zero offenders across the
+whole private corpus, and zero on both single-column public papers, is what
+retires that risk.
+
+**No page of the private corpus shows the R41 defect shape.** Of the pages with
+nothing processed, every one is a full-page table, a full-page figure or protocol
+diagram, a bibliography, a code listing, or a submission cover/metadata page —
+checked individually rather than assumed.
+
+Two behaviours were investigated as candidate defects and are **correct**:
+
+- **A document whose body prose is set in a bold face gets no emphasis.** One
+  document sets an entire response-to-reviewers section in CMBX10 — Computer
+  Modern Bold Extended — and those pages come out almost entirely skipped as
+  `runin`. That is the bold-display rule (`SPECIAL_FONT`) doing exactly what R18
+  hardened it to do, confirmed by resolving the fonts through `commonObjs`
+  rather than by reading the screenshot: 2 654 of ~2 950 characters on the page
+  are in CMBX10, and the regular-faced prose on the same pages IS processed.
+  Relaxing it to catch this document would put emphasis back into every run-in
+  heading in the corpus. Left as is.
+- **A composite document's sections can fall outside the body-size band.** A
+  submission bundle (questionnaire + manuscript + response letter, each typeset
+  at its own size) has ONE document-wide body height, char-weighted, which the
+  manuscript dominates; the other sections' prose is then off-size and is not a
+  candidate. The manuscript — the part being read — is processed correctly. This
+  is a real limitation of a single document-wide `bodyHeight` rather than a
+  misclassification, and worth knowing before anyone reports it as a bug.
+
+Also worth recording, in the spirit of R21/R36: **`whyskip.mjs` cannot fail.**
+CLAUDE.md's gate says "`whyskip --all` → `trailing: 0`", but the harness exits
+non-zero only on an error, and the private sweep's metric line does not match its
+output format — so a sweep of it reports "31/31 PASS" while proving nothing about
+`trailing`. The numbers above were read from the per-document output with
+`--verbose`, not from the PASS column. A harness whose name implies a criterion it
+does not enforce is the always-passes twin this file already warns about.

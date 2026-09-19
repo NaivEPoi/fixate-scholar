@@ -359,6 +359,7 @@ as color, then check each region.
 ### Capture
 ```bash
 node test/review-capture.mjs "<paper>"     # all pages of one paper
+node test/review-capture.mjs --url=<pdf> --label=<name>   # any document
 # or omit the arg to capture every paper
 ```
 

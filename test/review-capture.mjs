@@ -8,7 +8,13 @@
 // Usage:
 //   node test/review-capture.mjs "USENIX (code + algorithms)"   # one paper, all pages
 //   node test/review-capture.mjs                  # every paper
+//   node test/review-capture.mjs --url=<pdf> --label=<name>     # any document
 // Output: test/out/review/<paper>/pNN.png + pNN.json, and <paper>.json roll-up.
+//
+// `--url=` is what lets this run over a corpus that is not in the list below —
+// the document is named only by `--label=`, so a sweep can pass a neutral alias
+// and no filename reaches an output path. Same contract as every other harness
+// here (`fontkeep`, `whyskip`, `citecolor`), so one wrapper drives them all.
 
 import { spawn } from "node:child_process";
 import { writeFileSync, rmSync, mkdirSync } from "node:fs";
@@ -33,7 +39,13 @@ const PAPERS = {
   "ACL": "https://yilud.me/2026.acl-long.2136.pdf",
   "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
 };
-const ONLY = process.argv.slice(2).find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe"));
+const ARGS = process.argv.slice(2);
+const arg = (name) => ARGS.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+const URL_ARG = arg("url");
+if (URL_ARG) PAPERS[arg("label") ?? "adhoc"] = URL_ARG;
+const ONLY = URL_ARG
+  ? (arg("label") ?? "adhoc")
+  : ARGS.find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe"));
 const TARGETS = ONLY ? [ONLY] : Object.keys(PAPERS);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = join(root, "extension");
