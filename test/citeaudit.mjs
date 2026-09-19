@@ -15,8 +15,17 @@ import { tmpdir } from "node:os";
 
 import { browserPath, extensionDir } from "./lib/env.mjs";
 
-const URL0 = process.argv[2];
-const RANGE = (process.argv.slice(3).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
+const ARGS = process.argv.slice(2);
+// Positional URL, or --url= like every other harness here. Accepting only the
+// positional form made `--url=…` become the document itself, and PDF.js quietly
+// opened its built-in sample instead — 14 pages of the wrong file, audited and
+// reported as if it were the paper.
+const URL0 = ARGS.find((a) => a.startsWith("--url="))?.slice(6) ?? ARGS.find((a) => !a.startsWith("--"));
+if (!URL0) {
+  console.error("usage: node test/citeaudit.mjs <url|--url=...> [--pages=A-B]");
+  process.exit(2);
+}
+const RANGE = (ARGS.find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const EXT = extensionDir;
 const PORT = 9271 + (process.pid % 140);
 const userDataDir = join(tmpdir(), `fx-ca-${process.pid}`);
@@ -57,6 +66,8 @@ try {
   const p1 = RANGE[1] || nPages;
   let totalActive = 0;
   let totalMissing = 0;
+  let totalNoHit = 0;
+  let totalCites = 0;
   for (let p = p0; p <= p1; p++) {
     await ev(`window.PDFViewerApplication.page = ${p}`).catch(() => {});
     await sleep(2500);
@@ -69,7 +80,7 @@ try {
     const res = await ev(`(() => {
       const pv = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});
       if (!pv || !pv.textLayer) return null;
-      const out = { jumpCites: [], noHit: [], missing: [] };
+      const out = { jumpCites: [], noHit: [], missing: [], cites: 0 };
       // Active native internal-destination links (pointer-events not disabled).
       const activeLinks = [];
       const layer = pv.div.querySelector('.annotationLayer');
@@ -124,6 +135,7 @@ try {
         // lists containing 0 are math vectors, not citations (parser rule)
         if (m[1].split(/[^0-9]+/).includes('0')) continue;
         if (spans.some((sg) => sg.end > a && sg.start < b && sg.s.dataset.fxRefs)) continue;
+        out.cites++;
         const rs = rectsFor(a, b);
         // Bug 1: an ACTIVE native link overlaps this citation -> click jumps to
         // the bibliography instead of opening our card.
@@ -146,11 +158,22 @@ try {
       return out;
     })()`);
     if (!res) { console.log('p' + p + ': no textLayer'); continue; }
-    for (const l of res.jumpCites) { totalActive++; console.log(`p${p} JUMP-CITE (${l.x},${l.y}) "${l.cite}"`); }
-    for (const l of res.noHit) { console.log(`p${p} NO-HIT (${l.x},${l.y}) "${l.cite}"`); }
+    for (const l of res.jumpCites) { totalActive++; console.log(`  FAIL p${p} JUMP-CITE (${l.x},${l.y}) "${l.cite}"`); }
+    totalCites += res.cites;
+    for (const l of res.noHit) { totalNoHit++; console.log(`  FAIL p${p} NO-HIT (${l.x},${l.y}) "${l.cite}"`); }
     for (const mm of res.missing) { totalMissing++; console.log(`p${p} UNRESOLVED ${JSON.stringify(mm)}`); }
-    console.log(`p${p}: jumpCites=${res.jumpCites.length} noHit=${res.noHit.length} unresolved=${res.missing.length}`);
+    console.log(`p${p}: cites=${res.cites} jumpCites=${res.jumpCites.length} noHit=${res.noHit.length} unresolved=${res.missing.length}`);
   }
-  console.log(`TOTAL jumpCites=${totalActive} unresolved=${totalMissing} refCount=` + await ev('globalThis.__fxRefCount ?? -1').catch(() => -1));
-} catch (e) { console.error('citeaudit error:', e.message || e); }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
+  const refCount = await ev('globalThis.__fxRefCount ?? -1').catch(() => -1);
+  console.log(`TOTAL cites=${totalCites} jumpCites=${totalActive} noHit=${totalNoHit} unresolved=${totalMissing} refCount=${refCount}`);
+  // The two the header calls "Must be 0" are the pass criterion. `unresolved`
+  // stays advisory: a paper citing beyond its own bibliography produces it
+  // legitimately. Exiting 0 whatever it measured is what made a sweep of this
+  // report every document clean while proving nothing (R41).
+  if (!totalCites) {
+    console.error('  FAIL no citation bracket was examined — nothing was measured');
+    process.exitCode = 1;
+  }
+  if (totalActive || totalNoHit) process.exitCode = 1;
+} catch (e) { console.error('citeaudit error:', e.message || e); process.exitCode = 1; }
+finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} process.exit(process.exitCode ?? 0); }
