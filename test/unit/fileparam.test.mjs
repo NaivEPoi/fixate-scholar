@@ -129,19 +129,71 @@ test("normalizeFileParam clears dangerous schemes such as javascript: and data:"
   assert.equal(wData.location.search, "");
 });
 
+// viewer.html is web-accessible to <all_urls> and patch 1 disables PDF.js's own
+// validateFileURL for extension origins, so this scheme gate is the only thing
+// deciding what the viewer will fetch. It used to read the scheme only when the
+// query STARTED with `?file=`, so putting any parameter in front of it — which
+// an attacker opening the viewer controls completely — skipped the check.
+const SNEAKY = [
+  ["a parameter before file=", "?x=1&file=javascript:alert(1)"],
+  ["an empty leading parameter", "?&file=javascript:alert(1)"],
+  ["data: behind a parameter", "?a=b&file=data:text/html,<script>alert(1)</script>"],
+  ["a scheme-less value", "?a=b&file=/etc/passwd"],
+];
+for (const [name, search] of SNEAKY) {
+  test(`the scheme gate holds when the query does not start with file=: ${name}`, async () => {
+    const w = fakeWindow(search);
+    const { normalizeFileParam } = await load(w);
+    normalizeFileParam();
+    assert.equal(asPdfJsReadsIt(w.location.search), null, "PDF.js must be given no file at all");
+  });
+}
+
+test("stripping a rejected file= leaves the other parameters alone", async () => {
+  const w = fakeWindow("?zoom=150&file=javascript:alert(1)&pagemode=none");
+  const { normalizeFileParam } = await load(w);
+  normalizeFileParam();
+  const params = new URLSearchParams(w.location.search);
+  assert.equal(params.get("file"), null);
+  assert.equal(params.get("zoom"), "150");
+  assert.equal(params.get("pagemode"), "none");
+});
+
+test("a legitimate file= behind another parameter is left intact", async () => {
+  const url = "https://host.example/paper.pdf";
+  const w = fakeWindow(`?zoom=150&file=${encodeURIComponent(url)}`);
+  const { normalizeFileParam } = await load(w);
+  normalizeFileParam();
+  assert.equal(asPdfJsReadsIt(w.location.search), url);
+});
+
+// The frame guard runs at module EVALUATION time, so it can only be observed by
+// importing the module afresh. Node caches by resolved specifier, hence the
+// query suffix: without it this test re-imports the copy the tests above already
+// evaluated in an unframed window and asserts nothing about the guard. (It used
+// to assert an inline copy of the condition instead, which passed no matter what
+// the module did.)
+const loadFresh = async (w, tag) => {
+  globalThis.window = w;
+  return import(`../../extension/viewer/file-param.mjs?${tag}`);
+};
+
 test("frame protection blocks execution when window.top !== window.self", async () => {
-  const framedWindow = fakeWindow("?file=https://example.com/test.pdf");
-  framedWindow.top = {}; // different from framedWindow
-  framedWindow.self = framedWindow;
-  globalThis.window = framedWindow;
+  const framed = fakeWindow("?file=https://example.com/test.pdf");
+  framed.top = {}; // a different object: we are not the top-level document
+  framed.self = framed;
+  framed.stop = () => {};
   await assert.rejects(
-    async () => {
-      // Re-importing with cache busting or executing the module guard
-      if (framedWindow.top && framedWindow.top !== framedWindow.self) {
-        throw new Error("FixateScholar: embedding the PDF viewer in a frame is blocked for security.");
-      }
-    },
+    () => loadFresh(framed, "framed"),
     /embedding the PDF viewer in a frame is blocked/,
   );
+});
+
+test("a top-level document loads normally and still normalizes its parameter", async () => {
+  const top = fakeWindow("?file=https://host.example/p.pdf?a=1&b=2");
+  top.self = top;
+  top.top = top;
+  await assert.doesNotReject(() => loadFresh(top, "toplevel"));
+  assert.equal(asPdfJsReadsIt(top.location.search), "https://host.example/p.pdf?a=1&b=2");
 });
 

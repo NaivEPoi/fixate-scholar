@@ -625,6 +625,28 @@ test("findInternalRefs matches plurals, Roman numerals, subfigures, lists, and e
   ]);
 });
 
+// Neither of these appears anywhere in the 14-paper corpus, which is exactly
+// why both survived: the sweeps could not see them. They are locked in here.
+test("findInternalRefs matches Roman numerals that contain no I", () => {
+  // The canonical-Roman pattern ended in a group requiring an "I", so V/X/L/C
+  // were rescued only by the single-capital-letter rule and the multi-letter
+  // ones — XV, XX, XXV, XL — matched nothing at all and went uncoloured.
+  for (const n of ["I", "IV", "V", "IX", "X", "XIV", "XV", "XVI", "XX", "XXI", "XXV", "XL", "L"]) {
+    const text = `as reported in Table ${n} above`;
+    const found = findInternalRefs(text).map(({ start, end }) => text.slice(start, end));
+    assert.deepEqual(found, [`Table ${n}`], `Table ${n} must be a reference`);
+  }
+});
+
+test("findInternalRefs covers the whole of a dotted section range", () => {
+  // "Section 3.1-3.4" used to stop at "3.1-3": the range's right-hand side was
+  // matched as a bare number, so the colouring cut off inside the reference's
+  // own second number and left ".4" behind.
+  const text = "described in Section 3.1-3.4 and Section 10.2.3-10.2.9 below";
+  const found = findInternalRefs(text).map(({ start, end }) => text.slice(start, end));
+  assert.deepEqual(found, ["Section 3.1-3.4", "Section 10.2.3-10.2.9"]);
+});
+
 test("findInternalRefs matches concatenated line-wrapped references", () => {
   // When a reference wraps across text layer spans, plain concatenation glues
   // the leader directly to the number, Roman numeral, or appendix letter, or

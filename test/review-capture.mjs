@@ -60,6 +60,37 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
 });
 const ev = async (expr) => { const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + " " + (r.exceptionDetails.exception?.description ?? "")); return r.result.value; };
 
+/**
+ * Block until page `p` stops changing: its `data-fx-done` span count AND its
+ * `.fx-b` run count both unchanged across 8 polls.
+ *
+ * Two counters, because an emphasis run is painted AFTER its span is marked
+ * `data-fx-done` — a stable processed-span count is not completion.
+ *
+ * A page that legitimately has nothing to process (a full-page figure, a
+ * bibliography page) settles at "0/0", which is the right answer here: unlike
+ * the single-page harnesses, this one sweeps every page and must not spin out
+ * the full timeout on each such page. The text-layer wait in the caller is what
+ * keeps "0/0" from being read before the page exists.
+ */
+async function settleOn(p) {
+  let last = "";
+  let stable = 0;
+  for (let i = 0; i < 60; i++) {
+    const cur = await ev(`(() => {
+      const pv = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});
+      if (!pv || !pv.textLayer) return "x";
+      return pv.textLayer.div.querySelectorAll("span[data-fx-done]").length + "/" +
+             pv.textLayer.div.querySelectorAll(".fx-b").length;
+    })()`).catch(() => "x");
+    if (cur === last && cur !== "x") {
+      if (++stable >= 8) return cur;
+    } else { stable = 0; last = cur; }
+    await sleep(600);
+  }
+  return last;
+}
+
 // Tint spans by the engine's decision so misclassification is visible as color.
 const OVERLAY_ON = `(() => {
   let s = document.getElementById("fx-review");
@@ -87,6 +118,11 @@ const PAGE_JSON = (p) => `(() => {
   const countAttr = (a) => div.querySelectorAll("span[" + a + "]").length;
   return {
     page: ${p}, leafSpans: leaves.length,
+    // Is this page part of the bibliography the engine was told to leave alone?
+    // Without it a reference page and a page whose body was wrongly skipped are
+    // the same row in the triage — "nothing processed" — and the ten correct
+    // ones bury the one that matters.
+    refsPage: (globalThis.__fxRefPages ?? []).includes(${p}),
     processedDone: countAttr("data-fx-done"), skippedTable: countAttr("data-fx-table"), keptKeep: countAttr("data-fx-keep"),
     cites: pv.div.querySelectorAll(".fx-cite-hit").length,
     sampleDone: done, skipByReason: skip, sampleKeep: keep, sampleOther: other,
@@ -102,19 +138,41 @@ async function capturePaper(name) {
   await new Promise((r) => (pageWs.onopen = r));
   const prevWs = ws; ws = pageWs; // route ev()/send() to this tab
   try {
-    await send("Page.enable"); await sleep(2500);
-    await ev(`globalThis.__fxDebug = true`).catch(() => {});
+    await send("Page.enable");
+    // __fxDebug must be true BEFORE the engine classifies anything: the skip
+    // reason (`data-fx-why`) is only recorded while it is on. Setting it 2.5s
+    // after navigation left the first two or three pages of every paper with
+    // skips attributed to "?", and an unattributed skip is precisely the
+    // ambiguity a runaway rule hides in — the margin band that swallowed the
+    // last line of every column (R35) sat inside one for as long as it existed.
+    // Injecting it on new-document and reloading is what makes it win the race.
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: "globalThis.__fxDebug = true;" });
+    await send("Page.reload");
+    await sleep(2500);
     await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`).catch(() => {});
     for (let i = 0; i < 40; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 60) break; }
+    // The outline sidebar, gone. A PDF with /PageMode /UseOutlines opens it, and
+    // it keeps its layout width even when the toggle reports it closed — pushing
+    // the right-hand column past the viewport edge, so a fifth of the page never
+    // reaches the screenshot and the review reads "clean" on a page it only
+    // partly saw.
+    await ev(`(() => { const st = document.createElement("style");
+      st.textContent = "#sidebarContainer{display:none!important}#outerContainer.sidebarOpen #viewerContainer{inset-inline-start:0!important}";
+      document.head.appendChild(st); return true; })()`).catch(() => {});
     await ev(`window.PDFViewerApplication.pdfViewer.currentScaleValue = "page-fit"`).catch(() => {});
     await sleep(1500);
     const pages = await ev(`window.PDFViewerApplication.pagesCount`);
     const roll = { paper: name, url: PAPERS[name], pages, perPage: [] };
     for (let p = 1; p <= pages; p++) {
       await ev(`window.PDFViewerApplication.page = ${p}`);
-      // wait for this page's text layer + processing to settle
+      // Wait for this page's text layer to exist, THEN for its processing to
+      // stop changing. The `b > 60` probe above is document-wide and says
+      // nothing about the page being photographed; followed only by a fixed
+      // sleep, the shutter fired mid-emphasis and the overlay showed body text
+      // as untinted — i.e. it manufactured exactly the "body wrongly skipped"
+      // finding this capture exists to detect.
       for (let i = 0; i < 25; i++) { await sleep(300); const ok = await ev(`(()=>{const d=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;return !!(d&&d.childElementCount)})()`).catch(() => false); if (ok) break; }
-      await sleep(1500);
+      await settleOn(p);
       await ev(OVERLAY_ON);
       const clip = await ev(`(()=>{const pv=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});const r=pv.div.getBoundingClientRect();return {x:Math.max(0,r.left),y:Math.max(0,r.top),width:Math.min(r.width, innerWidth),height:Math.min(r.height, innerHeight)};})()`);
       const shot = await send("Page.captureScreenshot", { format: "png", clip: { ...clip, scale: 1.4 } });

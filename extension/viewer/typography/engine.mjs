@@ -244,6 +244,11 @@ export class TypographyEngine {
   /** Reset document-specific state and font metric caches when a new document loads. */
   onDocumentLoaded() {
     this.#refsBoxes = null;
+    // Reset here as well as in setRefsRegion: that setter only runs when a
+    // document HAS a bibliography, so without this a document that has none,
+    // opened in a tab that previously held one, would leave the harnesses
+    // reading the previous document's reference pages.
+    globalThis.__fxRefPages = []; // test introspection
     this.#furnitureBoxes = null;
     this.#contentStart = null;
     this.#bodyHeight = null;
@@ -796,13 +801,27 @@ export class TypographyEngine {
     // (whiting out row/column lines) and ghost the cell text where the mask is
     // clamped by neighbouring cells. Bullet/numbered lists indent at the row
     // START (no inter-item gap), so they never seed a run.
-    // splitX (the page-centre gutter) — when given, gaps containing splitX are
-    // NEVER band candidates (a two-column page's merged left+right baselines
-    // all share the gutter gap at the same x, which would read as a giant
-    // aligned table), and a detected run skips only the row SEGMENT on the
-    // band's side of the gutter (so a table in one column can't swallow the
-    // other column's body sharing its baselines).
-    const skipAlignedTable = (rows, splitX = null) => {
+    // Two SEPARATE uses of the page-centre gutter, deliberately not one
+    // parameter — conflating them is what let a whole page of body text be
+    // skipped as a table (see below):
+    //
+    //   gutterX  — a gap spanning it is NEVER a band candidate. On a two-column
+    //              page the merged left+right baselines all share the gutter gap
+    //              at the same x, so without this the gutter itself reads as a
+    //              perfect column boundary held across every row of the page.
+    //   splitX   — a detected run skips only the row SEGMENT on the band's side
+    //              of the gutter, so a table in one column cannot swallow the
+    //              other column's body sharing its baselines.
+    //
+    // The per-region call needs the first and must NOT have the second: its
+    // regions are already column-scoped, and segment-bounding a full-width
+    // table's rows there would release the half of each row on the far side of
+    // the centre. Passing one argument for both meant the region call opted out
+    // of the gutter guard as well, and on a page whose full-width table puts the
+    // body lines into the full-width region, the gutter seeded a 29-row run that
+    // skipped both columns of prose (usenixsecurity24-tu p12: band [296,318] is
+    // exactly the 296/318 column boundary, processed=0 for the whole page).
+    const skipAlignedTable = (rows, splitX = null, gutterX = splitX) => {
       if (rows.length < 3) return;
       const sorted = rows.slice().sort((a, b) => b.y - a.y); // top → bottom
       const gapsOf = (r) => {
@@ -813,7 +832,7 @@ export class TypographyEngine {
           const a = prev.transform[4] + (prev.width ?? 0);
           const bx = r.items[k].item.transform[4];
           if (bx - a > Math.max(prev.height || 8, r.items[k].item.height || 8) * 1.4 &&
-              !(splitX != null && a < splitX && bx > splitX)) g.push([a, bx]);
+              !(gutterX != null && a < gutterX && bx > gutterX)) g.push([a, bx]);
         }
         return g;
       };
@@ -900,8 +919,25 @@ export class TypographyEngine {
           if (withGap >= 3 && ext > bestLast) { bestLast = ext; bestBand = band; }
         }
         if (bestLast >= 0) {
-
-          if (globalThis.__fxDebug) (globalThis.__fxAligned ??= []).push({ seed: sorted[i].items.map((p) => p.item.str).join(" ").slice(0, 48), band: bestBand.map((v) => Math.round(v)), n: bestLast - i + 1, split: splitX != null, y: Math.round(sorted[i].y), h: Math.round(sorted[i].h * 10) / 10 });
+          // Every run this rule seeds, for test/diag-aligned.mjs. The column
+          // model is recorded next to the band because the two failures this
+          // rule has are told apart by it: a band that IS the gutter means the
+          // gutter guard was off, a band inside a column means the run walked
+          // out of a real table.
+          if (globalThis.__fxDebug) {
+            (globalThis.__fxAligned ??= []).push({
+              seed: sorted[i].items.map((p) => p.item.str).join(" ").slice(0, 48),
+              band: bestBand.map((v) => Math.round(v)),
+              n: bestLast - i + 1,
+              y: Math.round(sorted[i].y),
+              h: Math.round(sorted[i].h * 10) / 10,
+              split: splitX != null,
+              centerX: Math.round(centerX),
+              twoColumn,
+              gutterRows,
+              gutterX: gutterX == null ? null : Math.round(gutterX),
+            });
+          }
           for (let k = i; k <= bestLast; k++) {
             const seg = segItems(sorted[k], bestBand);
             for (const p of seg) { skip.add(p.div); dbg(p.div, "table-aligned"); }
@@ -933,6 +969,40 @@ export class TypographyEngine {
       if (ln.items.some((p) => p.item.transform[4] < centerX && p.item.transform[4] + (p.item.width ?? 0) > centerX))
         occupy++;
     const twoColumn = lines.length > 4 && occupy < lines.length * 0.35;
+
+    // Is there a gutter down the middle of the BODY? Used only to keep the
+    // aligned-gap table rule from reading that gutter as a column boundary.
+    //
+    // Deliberately a different question from `twoColumn`, which counts every
+    // line equally and so can be outvoted by a wide table: page 12 of
+    // usenixsecurity24-tu carries a 24-row full-width table over a two-column
+    // body, every one of those rows crosses the centre, and `twoColumn` comes
+    // out FALSE for a page that plainly has two columns of prose. The band
+    // guard then switched itself off, the gutter seeded a 29-row "table", and
+    // both columns of body text on that page were skipped — the page rendered
+    // with no emphasis at all. Counting only body-height lines is what the
+    // table cannot outvote, because its rows are not at body height.
+    let gutterRows = 0;
+    for (const ln of lines) {
+      if (ln.h < dominant * 0.9 || ln.h > dominant * 1.15) continue;
+      for (let k = 1; k < ln.items.length; k++) {
+        const a = ln.items[k - 1].item.transform[4] + (ln.items[k - 1].item.width ?? 0);
+        const bx = ln.items[k].item.transform[4];
+        if (a < centerX && bx > centerX && bx - a > dominant * 1.4) { gutterRows++; break; }
+      }
+    }
+    // Enough paired baselines to be a column layout rather than one wide space
+    // that a justified line happened to leave near the centre.
+    //
+    // A vertical-spread condition was tried here as well, to spare a
+    // single-column paper holding one two-column table whose boundary sits at
+    // the page centre. It was removed: it costs more than it buys. A short
+    // two-column body under a tall figure would fail it and fall straight back
+    // into the defect above (a whole page with no emphasis, very visible),
+    // whereas a centred table losing THIS rule still meets line-cells,
+    // table-starts, table-rules and the region fill. `tables.mjs` over the
+    // single-column papers is the check that this is the right trade.
+    const gutterX = gutterRows >= 6 ? centerX : null;
 
     const left = [];
     const right = [];
@@ -1306,7 +1376,7 @@ export class TypographyEngine {
     // band candidates and the skip is segment-bounded, so merged two-column
     // body baselines are never swept).
     for (const region of regions) {
-      skipAlignedTable(region);
+      skipAlignedTable(region, null, gutterX);
       skipAlignedStarts(region);
     }
     if (twoColumn) skipAlignedTable(lines, centerX);

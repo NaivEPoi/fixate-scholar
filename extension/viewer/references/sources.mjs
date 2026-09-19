@@ -51,7 +51,6 @@ import {
   bestMatch,
   isSearchable,
   queryText,
-  queryVariants,
   referenceQuery,
   scoreResult,
 } from "./matching.mjs";

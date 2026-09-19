@@ -71,7 +71,7 @@ this be processed?" — review everything against them.
 
 ```bash
 cd /c/misc/Claude_Workspace/fixate-scholar
-npm test                 # naming guard + vendored-PDF.js patch check + 173 unit tests
+npm test                 # naming guard + vendored-PDF.js patch check + unit tests
                          # (segmenter/parser/extractor/copytext/fileparam/ligature/
                          # matching/sources/lookupcache/popup/fontclass).
 node test/papers.mjs     # 8-paper corpus smoke test. MUST be 8/8 PASS, all checks true.
@@ -110,8 +110,8 @@ never received all pass it.
 
 | Command | What it verifies | Pass criteria |
 |---|---|---|
-| `npm test` | naming guard (trademarked 2-word brand absent) + vendored-PDF.js patch check + unit tests | `Naming guard passed`, `patch check passed (6/6)`, 173/173. It also NOTES a missing `extension/vendor/words` — not a failure (the reader works), but the copy reflow's hyphen repair is running on the shape rules alone |
-| `node scripts/check-vendor.mjs [--fix]` | every source edit in `scripts/pdfjs-patches.mjs` is present in `extension/vendor/pdfjs`. `extension/vendor/` is git-ignored, so a tree can arrive with only SOME patches applied and every other check stays green — that is how patch 5 went missing and drag-selection regressed to "I can only select the bolded part of a word" (R24-5). `--fix` re-applies the missing ones in place, no download | `patch check passed (6/6)`; exit 1 naming the missing markers |
+| `npm test` | naming guard (trademarked 2-word brand absent) + vendored-PDF.js patch check + unit tests | `Naming guard passed`, a patch check that passes N/N for however many patches `scripts/pdfjs-patches.mjs` defines, and 0 failing unit tests. (Exact counts are deliberately not written here: they were 173/173 and 6/6 in this table long after the tree had 215 tests and 9 patches, which makes a correct run look wrong.) It also NOTES a missing `extension/vendor/words` — not a failure (the reader works), but the copy reflow's hyphen repair is running on the shape rules alone |
+| `node scripts/check-vendor.mjs [--fix]` | every source edit in `scripts/pdfjs-patches.mjs` is present in `extension/vendor/pdfjs`. `extension/vendor/` is git-ignored, so a tree can arrive with only SOME patches applied and every other check stays green — that is how patch 5 went missing and drag-selection regressed to "I can only select the bolded part of a word" (R24-5). `--fix` re-applies the missing ones in place, no download | `Vendored PDF.js patch check passed (N/N)`; exit 1 naming the missing markers |
 | `node test/papers.mjs` | full corpus classification + color + links | 8/8 PASS |
 | `node test/verify-links.mjs` | hyperref borders suppressed in fx-on, links still clickable, masks track glyphs | `ALL LINK CHECKS PASSED` |
 | `node test/diagnose.mjs <paper>` | rendering fidelity: true whiteout, mask peek, font fallback, skipped paragraphs, citation alignment, selectability | whiteout 0; peek low; fontBad 0; selBad 0 |
@@ -292,6 +292,13 @@ All write to `test/out/`. Add `--headful` (where supported) for real-DPI.
   above the Abstract is skipped by design — counted, it failed every paper with a
   3-line author block).
   Per-page deep dive: `node test/probe.mjs <paper> <page> <query> [--shot]`.
+- **A page with NO emphasis at all** (`data-fx-why="table-aligned"` over body
+  prose): `node test/diag-aligned.mjs --url=<pdf> --page=N` prints every run the
+  aligned-gap table rule seeded on that page — its band, its row count, and the
+  page's column model. Read the band first: one that straddles the page centre
+  means the run IS the gutter and the gutter guard was off (the R41 defect,
+  where a full-width table made `twoColumn` false and the guard switched itself
+  off with it); one inside a column means a real table's run walked out of it.
 - **Bibliography emphasis**: `node test/refbold.mjs <paper> [--url=]` → 0
   **emphasized** spans inside the reference list, per page and column. It counts
   spans that actually carry an emphasis run, not spans the engine merely walked:
@@ -396,6 +403,13 @@ For every page, scan the overlay and flag any mismatch:
   (mask miss), citations not blue / refs not red.
 - **Figures/tables specifically**: caption skipped? labels/cells on canvas? the
   figure body not bolded? a "Figure N shows…" sentence in the body IS bolded?
+
+`node test/review-triage.mjs [paper]` ranks the captured pages by how likely
+they are to hold a defect (a structural skip whose sample reads as a sentence, a
+non-bibliography page with nothing processed) so the visual pass starts where the
+evidence is. It is a shortlist, not a verdict, and it does not replace looking at
+the pages — every flag is a question, and REVIEW_LOG.md records more than one
+round where the instrument, not the product, was wrong.
 
 Record findings in `REVIEW_LOG.md` (template there) as you go, with
 `paper / page / region / expected / actual / data-fx-why / proposed fix`. Logging

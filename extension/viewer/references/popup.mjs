@@ -286,13 +286,18 @@ export class CitationPopup {
     // paper to look up, so this text IS the answer, and its URL is the useful
     // part of it.
     for (const part of linkParts(raw.length > 360 ? raw.slice(0, 360) + "…" : raw)) {
-      if (!part.href) {
+      // linkParts only ever emits an http(s) href by construction, but this
+      // text comes straight out of the PDF, and every other href in this file
+      // is gated the same way. One rule for all of them, so the guarantee does
+      // not depend on re-reading a regex elsewhere.
+      const cleanHref = part.href ? sanitizeHttpUrl(part.href) : null;
+      if (!cleanHref) {
         d.append(part.text);
         continue;
       }
       const a = document.createElement("a");
       a.textContent = part.text;
-      a.href = part.href;
+      a.href = cleanHref;
       a.target = "_blank";
       a.rel = "noopener noreferrer";
       d.append(a);

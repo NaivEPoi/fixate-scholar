@@ -3534,5 +3534,172 @@ Introduced in v1.1.2:
   - **Private Corpus 1 (`Reviews`)**: 31/31 papers passed in-paper reference sweep (100% PASS), 100% citation coloring verified.
   - **Private Corpus 2 (`papers`)**: 98/98 citations colored, 32/32 in-paper references colored. Fig. 14 array indexing false hits dropped from 36 to 0, visually verified clean via high-resolution rendering.
 
+## R41 — a page with no emphasis at all, a security gate that only guarded one URL shape, and two tests that could not fail
 
+A full review: every page of all twelve corpus papers read against TESTING.md §3
+from a fresh classification capture, the R39 security audit re-checked claim by
+claim, and a pass over the tree for dead and duplicated code.
 
+### The defect: the page gutter read as a table column, and a page lost its emphasis
+
+`usenixsecurity24-tu` p12 rendered with **no emphasis anywhere** — 498 text-layer
+spans, `processedDone=0`, and 197 of them marked `data-fx-why="table-aligned"`
+over plain body prose. Both columns of the page were classified as table.
+
+`test/diag-aligned.mjs` (new) prints every run the aligned-gap rule seeds, and
+named the cause in one line:
+
+```
+y=409 h=10 rows=29 band=[296,318] split=false  seed:"found some UEs accept plaintext Registration Acc"
+```
+
+The band is `[296,318]` — precisely this template's 296/318 column boundary. The
+run was the **page gutter**, held across 29 consecutive body baselines, which is
+exactly what a two-column body looks like to a rule searching for a shared
+vertical gap.
+
+There was already a guard against this, and it was off. `skipAlignedTable` took
+one `splitX` parameter doing two unrelated jobs: excluding the gutter from band
+candidates, and bounding a detected run to one side of it. The per-region call
+site wanted only the first and passed `null`, opting out of both. Split into two
+parameters (`gutterX`, `splitX`), each call site now takes what it needs.
+
+That alone did not fix it, and the reason is the more interesting half. The
+gutter guard was keyed on `twoColumn`, which counts every line equally — and p12
+carries a 24-row full-width table over its two-column body. Every one of those
+rows crosses the centre, so `twoColumn` came out **false** for a page that
+plainly has two columns of prose, and the guard switched itself off with it. The
+fix is a separate `gutterX` signal computed from **body-height lines only**,
+which a table cannot outvote because its rows are not at body height
+(`gutterRows=27` on p12, against `twoColumn=false`).
+
+Result on p12: `processedDone` 0 → 91, `table-aligned` 197 → 1, the real table
+still detected (its own band moved to `[485,498]`), body prose green in both
+columns. Corpus unchanged elsewhere: `papers.mjs` 8/8, and `tables.mjs` reports
+0 offenders on both single-column papers, which is the check that the gutter
+exclusion has not cost a centred table its detection.
+
+### Two more product defects, in the in-paper reference pattern
+
+Neither appears anywhere in the twelve-paper corpus, which is why both survived;
+both are now unit-tested, since the sweeps cannot see them.
+
+- **Roman numerals with no "I" matched nothing.** The canonical-Roman pattern
+  ended in `(?:IX|IV|V?I{1,3})` — a group that *requires* an I. `V`, `X`, `L`,
+  `C` were rescued by the single-capital-letter alternative, but `Table XV`,
+  `Section XX`, `Table XXV` and `Table XL` matched nothing at all and went
+  uncoloured. Making that group optional instead would let the numeral match the
+  empty string and colour a bare `Table `; a bounded run of Roman letters
+  (`[IVXLCDM]{1,8}`) can do neither, and the mandatory leader in front is what
+  keeps it from claiming ordinary capitalised words.
+- **A dotted range was cut in half.** `Section 3.1-3.4` matched only
+  `Section 3.1-3`: the right-hand side of a range was matched as a bare integer,
+  so the colouring stopped inside the reference's own second number and left
+  `.4` behind as an orphan — the same "abrupt, oddly-coloured orphan" the
+  comment above that pattern already warns about.
+
+Verified as a pure widening: over all 14 corpus papers the old and new patterns
+produce **identical** match sets, so nothing regressed and no false positive was
+introduced.
+
+### Re-checking the R39 security audit
+
+Most of it held. `sanitizeHttpUrl` does gate every href the reference card
+builds; the DOM is built with `createElement`/`textContent` throughout (the only
+`innerHTML` is `engine.mjs` round-tripping PDF.js's own serialization, which is
+lossless and inert); `escapeRegex` is applied before user input reaches a DNR
+`regexFilter`, and the bypass-domain pattern is linear (measured: 0.6 ms on a
+100 000-character hostile input, its `{0,61}` bounds preventing backtracking);
+`openAlexAbstract` is bounded and cannot be used for prototype pollution; and the
+zero-leak claim checks out — no private path, filename or corpus marker appears
+anywhere in the working tree or in the full history, and no PDF or `CLAUDE.md`
+was ever committed.
+
+One claim did not hold.
+
+- **The `?file=` scheme allowlist guarded only one URL shape.**
+  `normalizeFileParam` returned early unless the query *started with* `?file=`,
+  so the check was skipped entirely by putting any parameter in front of it.
+  Measured, before the fix:
+
+  ```
+  ?file=javascript:alert(1)        -> PDF.js would open: null      (rejected)
+  ?x=1&file=javascript:alert(1)    -> PDF.js would open: "javascript:alert(1)"
+  ?a=b&file=file:///C:/Windows/... -> PDF.js would open: "file:///C:/Windows/..."
+  ```
+
+  This is the only control on what the viewer will fetch: `viewer.html` is
+  web-accessible to `<all_urls>`, so any page can open it with a query of its
+  choosing, and patch 1 disables PDF.js's own `validateFileURL` origin check for
+  extension origins. The gate now runs first, on the value PDF.js will actually
+  read, in every query shape, and removes only the `file` parameter rather than
+  the whole query.
+
+- **Correction to R40.** R40 claims citation confirmation by "destination
+  resolution against bibliography pages". That code (`#destTargetsRef`,
+  `#destPageCache`) never functioned: the cache was cleared but never written, so
+  its branch was unreachable, and the remaining branch re-tested the same regex
+  on the same string that `#isReferenceLink` had already tested one line earlier
+  (verified exhaustively: over 4096 generated hrefs the disjunct added
+  information in 0 of them). It has been removed. Hyperlink confirmation works —
+  it is `#isReferenceLink` doing it, by named destination, and nothing else.
+
+### Two tests that could not fail, and a capture that photographed the wrong moment
+
+- **The frame-protection test asserted an inline copy of the condition**, not the
+  module — it threw an error it had written itself and caught it. It passed no
+  matter what `file-param.mjs` did. It now imports the module afresh (Node caches
+  by specifier, hence the query suffix) with a framed window and asserts the
+  guard rejects. Mutation-checked: disabling the guard now fails the test.
+- **`review-capture.mjs` had exactly the defect R36 fixed everywhere else.**
+  TESTING.md §5 prescribes it for the visual review, and it waited on a
+  *document-wide* `.fx-b` count and then slept a fixed interval — the shutter
+  fired mid-emphasis, which manufactures "body wrongly skipped" findings, the
+  very thing the capture exists to detect. It also never hid the outline sidebar,
+  so a page could silently lose its right-hand column. Both fixed, matching
+  `debug-shot.mjs`: settle on the target page's `data-fx-done` **and** `.fx-b`
+  counts, and force the sidebar hidden.
+- **`__fxDebug` was set ~2.5 s after navigation**, so the first pages of every
+  paper recorded their skips as `?` — an unattributed skip is precisely the
+  ambiguity a runaway rule hides in. It is now injected with
+  `Page.addScriptToEvaluateOnNewDocument` before a reload, and no `?` remains.
+
+### Instruments added, and one honest label
+
+- `test/diag-aligned.mjs` — every aligned-table run on a page, with the band and
+  the column model beside it. A band straddling the page centre means the gutter
+  guard is off; a band inside a column means a real table's run escaped it.
+- `test/review-triage.mjs` — ranks captured pages by how likely they hold a
+  defect, so the visual pass starts where the evidence is. Each rule names the
+  §3 rule it is looking for a violation of, and every flag is a question.
+  `review-capture.mjs` now records `refsPage` per page: without it a bibliography
+  page and a page whose body was eaten look identical ("nothing processed"), and
+  ten correct ones buried the one that mattered.
+- `papers.mjs`'s summary now marks `~bolded`, `~masks` and `~cites` as
+  render-dependent. They count what is rendered when the poll stops, and PDF.js
+  virtualizes pages: `cites` measured 151, 151 and 266 on three consecutive runs
+  of one commit. Only `pages` and `refs` are document-wide, and only the
+  per-paper `checks=` line decides PASS — but an unlabelled number that halves
+  between runs reads as a regression, and did.
+
+### Dead code and drift
+
+`verifyScholar` (a pass-through to `bestMatch` with no callers), the unused
+`queryVariants` import in `sources.mjs`, and the `#refPages` set in
+`citations.mjs` — which recomputed, to publish a global, exactly the page set
+`engine.setRefsRegion` publishes moments later. `__fxRefPages` now has one owner:
+the engine, which also resets it in `onDocumentLoaded` so a document with no
+bibliography cannot inherit the previous one's pages. TESTING.md's gate
+expectations said "173 unit tests" and "patch check passed (6/6)" against a tree
+with 215 tests and 9 patches, which makes a correct run look wrong; they now
+state the invariant rather than a number that goes stale.
+
+### Verification
+
+- `npm test` — 215/215, and the naming + vendored-patch guards pass (9/9).
+- `node test/papers.mjs` — 8/8 PASS, every check true.
+- `node test/tables.mjs` on both single-column papers — 0 offenders.
+- Full visual review — all 181 pages of all 12 papers, from a capture taken
+  after the fixes, read against TESTING.md §3. One defect found (p12, above);
+  everything else classifies correctly. Every remaining "nothing processed" page
+  is a bibliography, a full-page figure or a code listing, as it should be.

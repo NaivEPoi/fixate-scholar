@@ -26,8 +26,6 @@ export class ReferencesFeature {
   // paper whose reference section was found but whose entries all failed to
   // group is still a paper whose "[12]" is a citation — see #shouldAnnotate.
   #hasBibliography = false;
-  #refPages = new Set();
-  #destPageCache = new Map();
   #popup;
   #ready = null;
 
@@ -62,8 +60,6 @@ export class ReferencesFeature {
   onDocumentLoaded(pdfDocument) {
     this.#entries = [];
     this.#sections = [];
-    this.#refPages = new Set();
-    this.#destPageCache.clear();
     this.#hasBibliography = false;
     this.#ready = (async () => {
       try {
@@ -82,14 +78,8 @@ export class ReferencesFeature {
           entries: sec.entries,
         }));
         this.#entries = sections.flatMap((sec) => sec.entries);
-        this.#refPages = new Set();
-        for (const sec of sections) {
-          this.#refPages.add(sec.heading.page);
-          for (const line of sec.body) this.#refPages.add(line.page);
-        }
         globalThis.__fxRefCount = this.#entries.length; // test introspection
         globalThis.__fxRefNums = this.#entries.map((e) => e.number); // test introspection
-        globalThis.__fxRefPages = [...this.#refPages]; // test introspection
         // Document-wide body height (char-weighted height mode over every
         // page) — body text dominates the whole document, so a single
         // small-text-heavy page can't skew it.
@@ -152,23 +142,24 @@ export class ReferencesFeature {
     })();
   }
 
-  #isReferenceLink(href, dest) {
-    if (href && /^#?(?:cite|bib|ref|bibr|bibitem)[._-]/i.test(href)) return true;
-    if (typeof dest === "string" && /^(?:cite|bib|ref|bibr|bibitem)[._-]/i.test(dest)) return true;
-    return false;
-  }
-
-  #destTargetsRef(dest) {
-    if (!dest) return false;
-    if (typeof dest === "string") {
-      if (this.#isReferenceLink(dest, null)) return true;
-      if (this.#destPageCache.has(dest)) return this.#destPageCache.get(dest);
-    }
-    return false;
+  /**
+   * Whether a native annotation link points at the bibliography rather than
+   * somewhere else in the document.
+   *
+   * The named-destination conventions the LaTeX toolchains emit — `cite.Foo12`,
+   * `bib.3`, `bibitem-7`, `ref_9` — with or without the leading `#` that the
+   * annotation layer writes into `href`.
+   */
+  #isReferenceLink(href) {
+    return !!href && /^#?(?:cite|bib|ref|bibr|bibitem)[._-]/i.test(href);
   }
 
   /**
-   * Whether to run the citation pass at all.
+   * Whether to run the BIBLIOGRAPHY-citation pass ("[12]", "(Author 2017)").
+   *
+   * In-paper references ("Figure 3", "Section 5") are not gated on this: they
+   * resolve against the document itself, so a memo or review with no reference
+   * list at all still gets them coloured and still keeps its jump links.
    *
    * Parsed entries are the normal reason. The second one is the honest
    * fallback: the document HAS a reference section — the heading and its body
@@ -314,7 +305,7 @@ export class ReferencesFeature {
       for (const a of annotLayer.querySelectorAll("a")) {
         const href = a.getAttribute("href") || "";
         if (/^(https?|mailto|tel):/i.test(href)) continue;
-        if (this.#isReferenceLink(href) || this.#destTargetsRef(href.startsWith("#") ? href.slice(1) : href)) {
+        if (this.#isReferenceLink(href)) {
           const rect = a.getBoundingClientRect();
           if (rect.width > 0 && rect.height > 0) {
             refLinks.push({ rect, href });

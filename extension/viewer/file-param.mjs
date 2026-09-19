@@ -60,30 +60,68 @@ function escapeForQuery(raw) {
     .replace(/\+/g, "%2B");
 }
 
+/** The only schemes the viewer will open a document from. */
+const DOCUMENT_SCHEMES = ["http", "https", "file", "blob", "chrome-extension"];
+
+/** Remove the `file` parameter, leaving any other query intact. */
+function dropFileParam() {
+  const params = new URLSearchParams(window.location.search);
+  params.delete("file");
+  const query = params.toString();
+  window.history.replaceState(
+    null,
+    "",
+    window.location.pathname + (query ? `?${query}` : "") + window.location.hash,
+  );
+}
+
+/**
+ * True when `value` names a scheme this viewer may load a document from.
+ *
+ * Checked against the DECODED value, so `javascript%3Aalert(1)` is recognised
+ * as the `javascript:` it becomes, and with `trim()` because a leading space or
+ * tab in front of a scheme is stripped by the URL parser but not by a plain
+ * prefix comparison.
+ */
+function hasDocumentScheme(value) {
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    // A `%` that isn't an escape — compare the raw text instead.
+  }
+  const colon = decoded.indexOf(":");
+  if (colon === -1) return false;
+  return DOCUMENT_SCHEMES.includes(decoded.slice(0, colon).toLowerCase().trim());
+}
+
 /** Rewrite `?file=<raw url>` in place so PDF.js parses back the real URL. */
 export function normalizeFileParam() {
   const search = window.location.search;
-  if (!search.startsWith(MARKER)) return;
-  const raw = search.slice(MARKER.length);
-  if (!raw) return;
 
-  // Reject dangerous protocols (e.g. javascript:, data:, vbscript:)
-  const unescaped = (() => {
-    try {
-      return decodeURIComponent(raw);
-    } catch {
-      return raw;
-    }
-  })();
-  const colon = unescaped.indexOf(":");
-  if (colon !== -1) {
-    const proto = unescaped.slice(0, colon).toLowerCase().trim();
-    if (!["http", "https", "file", "blob", "chrome-extension"].includes(proto)) {
-      window.history.replaceState(null, "", window.location.pathname + window.location.hash);
-      return;
-    }
+  // Gate the scheme FIRST, and on the value PDF.js will actually read, in every
+  // query shape. viewer.html is web-accessible to <all_urls>, so any page can
+  // open it with a query of its choosing, and patch 1 turns off PDF.js's own
+  // `validateFileURL` origin check for extension origins — which leaves this as
+  // the only thing deciding what the viewer will fetch. Reading the scheme off
+  // `?file=…` alone was not that: `?x=1&file=javascript:…` skipped the check
+  // entirely, because the query no longer STARTED with the marker.
+  //
+  // The raw DNR shape has to be read as a raw slice rather than through
+  // URLSearchParams, which would truncate an unescaped URL at its first `&` and
+  // so judge the scheme of a different string than the one being normalized.
+  const rawShape = search.startsWith(MARKER);
+  const candidate = rawShape
+    ? search.slice(MARKER.length)
+    : new URLSearchParams(search).get("file");
+  if (!candidate) return;
+  if (!hasDocumentScheme(candidate)) {
+    dropFileParam();
+    return;
   }
+  if (!rawShape) return; // nothing to re-escape: it parsed as a parameter already
 
+  const raw = candidate;
   // A blob: URL is minted by this page and is already exact; escaping it would
   // only make the address unreadable.
   if (raw.startsWith("blob:") || isEncoded(raw)) return;

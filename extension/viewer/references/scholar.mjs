@@ -30,8 +30,6 @@
 // so a generic title puts a better-cited paper above the work actually cited
 // (R24-1), and being the default source does not make it trusted.
 
-import { bestMatch } from "./matching.mjs";
-
 const BASE = "https://scholar.google.com";
 /** Results parsed from the page before scoring. Scholar returns ten. */
 const CANDIDATES = 10;
@@ -170,10 +168,4 @@ export async function scholarBibtex(cid, fetchPage) {
   }
   const text = (await fetchPage(targetUrl.href)).trim();
   return text.startsWith("@") ? text : null;
-}
-
-/** The verified Scholar match for `ref`, or null. Kept here so the scoring
- *  call sits next to the parse it scores. */
-export function verifyScholar(candidates, ref) {
-  return bestMatch(candidates, ref);
 }
