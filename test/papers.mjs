@@ -428,11 +428,17 @@ try {
   // in length, and a fixed width leaves the table ragged.
   const w = Math.max(8, ...results.map((r) => r.paper.template.length));
   console.log("\nSummary:");
-  console.log(`${"Template".padEnd(w)} | pages | bolded | masks | refs | cites`);
+  // bolded / masks / cites count what is RENDERED at the moment the poll above
+  // stopped, and PDF.js virtualizes pages — so they move between identical runs
+  // (`cites` measured 151, 151 and 266 on three consecutive runs of one commit).
+  // They are progress indicators, not measurements: only `pages` and `refs` are
+  // document-wide, and only the per-paper `checks=` line decides PASS. The `~`
+  // is there so a smaller number is not read as a regression.
+  console.log(`${"Template".padEnd(w)} | pages | ~bolded | ~masks | refs | ~cites`);
   for (const { paper, state, ok } of results) {
     const s = state ?? {};
     console.log(
-      `${paper.template.padEnd(w)} | ${String(s.pages ?? "-").padStart(5)} | ${String(s.bolded ?? "-").padStart(6)} | ${String(s.masks ?? "-").padStart(5)} | ${String(s.refs ?? "-").padStart(4)} | ${String(s.cites ?? "-").padStart(5)}${ok ? "" : "  << FAIL"}`,
+      `${paper.template.padEnd(w)} | ${String(s.pages ?? "-").padStart(5)} | ${String(s.bolded ?? "-").padStart(7)} | ${String(s.masks ?? "-").padStart(6)} | ${String(s.refs ?? "-").padStart(4)} | ${String(s.cites ?? "-").padStart(6)}${ok ? "" : "  << FAIL"}`,
     );
   }
 } catch (e) {

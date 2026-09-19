@@ -110,3 +110,59 @@ fully resumable. Order of priority:
    appending findings to the running list and ticking the Status table.
 (If a workflow is still wanted: it's batchable as one-agent-per-paper to cut cost;
 or resume via `Workflow({scriptPath:"test/review-workflow.mjs", resumeFromRunId:"wf_a5d4adf5-6fc"})` same-session only.)
+
+## Round 3 (R41) — every page of all twelve papers, COMPLETE
+
+Full sweep against TESTING.md §3, from a capture taken *after* the fixes below,
+so the overlay colours in `test/out/review/` describe the shipping engine.
+
+| Paper | Pages | Captured | Reviewed | Issues found |
+|---|---|---|---|---|
+| USENIX (baseline) | 21 | ☑ | ☑ all pages | — |
+| USENIX (code + algorithms) | 19 | ☑ | ☑ all pages | **p12 — whole page unprocessed (FIXED)** |
+| USENIX (no cover page) | 17 | ☑ | ☑ all pages | — |
+| ACM acmart (full) | 15 | ☑ | ☑ all pages | — |
+| ACM acmart (short) | 6 | ☑ | ☑ all pages | — |
+| IEEE conference (stamped) | 6 | ☑ | ☑ all pages | — |
+| NeurIPS | 15 | ☑ | ☑ all pages | — |
+| 5GCVerif | 15 | ☑ | ☑ all pages | — |
+| 5GShield | 20 | ☑ | ☑ all pages | — |
+| AFC-Diss | 4 | ☑ | ☑ all pages | — |
+| ACL | 25 | ☑ | ☑ all pages | — |
+| UC-Scheme | 18 | ☑ | ☑ all pages | — |
+| **Total** | **181** | | | **1** |
+
+**The one defect.** `USENIX (code + algorithms)` p12 rendered with no emphasis
+anywhere: 498 spans, 0 processed, 197 of them marked `table-aligned` over body
+prose. The page carries a 24-row full-width table over a two-column body; the
+page *gutter* seeded a 29-row aligned-table run and both columns were skipped.
+Cause and fix in REVIEW_FINDINGS R41. After the fix: 91 processed,
+`table-aligned` down to 1, the real table still detected, both columns green.
+
+**Everything else classified correctly**, including every case that looks like a
+defect in the triage and is not:
+- Bibliography pages with nothing processed — by design; the capture now records
+  `refsPage` per page so they stop competing with real findings.
+- Full-page tables, figure-label pages (NeurIPS p13–15 attention visualisations),
+  and code/algorithm listings with nothing processed — by design.
+- `Figure 5 shows…` / `Listing 3 provides…` opening a sentence and being
+  processed — by design (`REF_PROSE`); a caption opener is `Figure 5:`.
+- Roman-numeral section headings (IEEE, AFC-Diss) skipped, appendix prose after
+  the bibliography processed, author-year citations blue, in-paper refs red.
+
+**Method.** `node test/review-capture.mjs` (all 12) → `node test/review-triage.mjs`
+to rank pages → read every page's overlay in batches as contact sheets, against
+§3. The triage is a shortlist, not a verdict; all 181 pages were looked at.
+
+**Two capture defects fixed first** — the previous captures could not be trusted,
+which is why this round re-captured from scratch three times. `review-capture.mjs`
+waited on a document-wide `.fx-b` count and a fixed sleep (photographing pages
+mid-emphasis, which manufactures "body wrongly skipped"), never hid the outline
+sidebar, and set `__fxDebug` late enough that the first pages of every paper
+recorded their skips as `?`. See REVIEW_FINDINGS R41.
+
+**Supporting gates, all clean at the same commit:** `npm test` 215/215;
+`papers.mjs` 8/8; `audit.mjs` keepFallback/tableLeak/capProse/skipPara = 0;
+`diagnose.mjs` whiteout/fontBad/selBad = 0; `tables.mjs` 0 offenders (including
+both single-column papers); `diag-dividers.mjs` 0 masked of 202 rules;
+`refbold.mjs` 0 emphasized bibliography spans.

@@ -683,8 +683,10 @@ export function bibAuthors(authors) {
 // sections, equations, algorithms, and appendices.
 // Supports:
 // - Singular and plural forms ("Figure 1", "Figures 1 and 2", "Tables VI, VII and VIII")
-// - Arabic numbers, ranges, and subfigures ("Figure 1(a)", "Fig. 2b", "Section 3.1-3.4")
-// - Roman numerals ("Table I", "Table II", "Table VI", "Section III-E")
+// - Arabic numbers, ranges, and subfigures ("Figure 1(a)", "Fig. 2b", "Section 3.1-3.4",
+//   with the whole of a dotted range covered — "3.1-3.4", not "3.1-3")
+// - Roman numerals, including the ones with no "I" in them ("Table V", "Table XV",
+//   "Table XX", "Table XL") as well as "Table II" and "Section III-E"
 // - Parenthesized equation numbers ("Eq. (1)", "Equations (1)-(3)")
 // - Capital letter appendices ("Appendix A", "Appendices A and B")
 // The trailing letter only counts as a subsection suffix ("Section 2a") when
@@ -697,10 +699,22 @@ export function bibAuthors(authors) {
 // of the word an abrupt, oddly-colored orphan.
 const REF_LEADER =
   "(?:[Ff]igures?|[Ff]igs?\\.?|[Tt]ables?|[Tt]abs?\\.?|[Aa]lgorithms?|[Aa]lgs?\\.?|[Ll]istings?|[Ss]ections?|[Ss]ecs?\\.?|§{1,2}|[Aa]ppendices|[Aa]ppendix|[Aa]pps?\\.?|[Ee]quations?|[Ee]qs?\\.?|[Cc]hapters?|[Tt]heorems?|[Ll]emmas?|[Dd]efinitions?|[Cc]laims?)";
-const REF_ROMAN =
-  "(?:(?<=[a-zA-Z~])|\\b)(?=[IVXLCDM])M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{1,3})(?:-[A-Za-z\\d]+)?\\b";
+// A run of Roman-numeral letters, not a canonical Roman numeral. The canonical
+// form (M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{1,3})) ended in a group
+// that REQUIRED an "I", so every numeral without one — V, X, XV, XX, XXV, XL —
+// failed it. Single letters were covered by REF_ALPHA below and so looked fine;
+// "Table XV" and "Section XX" matched nothing at all and went uncoloured.
+// Making that last group optional instead would let the whole numeral match the
+// empty string, which after a leader would colour a bare "Table ". A bounded
+// run cannot do either, and the mandatory leader in front is what keeps it from
+// claiming ordinary capitalised words.
+const REF_ROMAN = "(?:(?<=[a-zA-Z~])|\\b)[IVXLCDM]{1,8}(?:-[A-Za-z\\d]+)?\\b";
+// The right-hand side of a range is a number in its own right: without the
+// trailing `(?:\.\d+)*` the match of "Section 3.1-3.4" stopped at "3.1-3",
+// colouring the reference up to the middle of its own second number and
+// leaving ".4" behind as an orphan.
 const REF_NUM =
-  "\\d+(?:\\.\\d+)*(?:-[A-Za-z\\d]+)?(?:\\([a-z\\d]+\\)|[a-z](?![a-zA-Z]))?";
+  "\\d+(?:\\.\\d+)*(?:-[A-Za-z\\d]+(?:\\.\\d+)*)?(?:\\([a-z\\d]+\\)|[a-z](?![a-zA-Z]))?";
 const REF_PAREN_NUM = "\\(\\d+(?:\\.\\d+)*[a-z]?\\)";
 const REF_ALPHA = "(?:(?<=[a-zA-Z~])|\\b)[A-Z]\\b(?:\\.\\d+)?";
 const REF_ITEM = "(?:" + REF_PAREN_NUM + "|" + REF_NUM + "|" + REF_ROMAN + "|" + REF_ALPHA + ")";
