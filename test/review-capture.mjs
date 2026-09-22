@@ -22,7 +22,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath } from "./lib/env.mjs";
+import { browserPath, killBrowser } from "./lib/env.mjs";
 
 const PAPERS = {
   "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
@@ -201,6 +201,8 @@ async function capturePaper(name) {
   } finally { try { pageWs.close(); } catch {} ws = prevWs; await fetch(`http://127.0.0.1:${PORT}/json/close/${tab.id}`).catch(() => {}); }
 }
 
+let failures = 0;
+
 try {
   let version = null;
   for (let i = 0; i < 50 && !version; i++) { try { version = await http("/json/version"); } catch { await sleep(250); } }
@@ -213,8 +215,22 @@ try {
   for (const name of TARGETS) {
     if (!PAPERS[name]) { console.log(`skip unknown paper: ${name}`); continue; }
     console.log(`=== ${name} ===`);
-    try { await capturePaper(name); } catch (e) { console.error(`  ${name} ERROR:`, e.message); }
+    try { await capturePaper(name); } catch (e) { failures++; console.error(`  ${name} ERROR:`, e.message); }
     ws.__extId = extId;
   }
-} catch (e) { console.error("review-capture error:", e); }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(600); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
+} catch (e) { failures++; console.error("review-capture error:", e); }
+finally {
+  try { ws?.close(); } catch {} killBrowser(browser); await sleep(600);
+  try { rmSync(userDataDir, { recursive: true, force: true }); } catch {}
+  // A capture that produced NOTHING used to exit 0. In a corpus sweep that
+  // reads as a green document, and the visual gate then reports "clean" on a
+  // paper nobody photographed: rv-class document 25 of one private sweep
+  // failed with ECONNREFUSED before its browser came up, printed the error,
+  // and was recorded as PASS with no output directory at all. Same defect
+  // class as R41's two tests that could not fail — the harness must carry its
+  // own verdict.
+  if (failures) {
+    console.error(`review-capture: ${failures} paper(s) captured nothing`);
+    process.exitCode = 1;
+  }
+}

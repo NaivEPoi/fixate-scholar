@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { intersecting } from "../../extension/viewer/references/citations.mjs";
+import { buildCards, intersecting } from "../../extension/viewer/references/citations.mjs";
 
 // The page's text-layer segments: contiguous and sorted, the way annotatePage
 // builds them (each segment's end is the next one's start).
@@ -56,4 +56,42 @@ test("intersecting handles the empty page and out-of-range matches", () => {
   const segs = segments([4, 4]);
   assert.deepEqual([...intersecting(segs, 8, 12)], []); // past the last segment
   assert.deepEqual([...intersecting(segs, 0, 0)], []); // empty range
+});
+
+// A citation's card list, and which card each key points at. The index is what
+// decides the reference a hover opens: "[4, 12]" pointed at the 12 has to open
+// [12], and a key's place in the card list is not its place in the key list.
+const entry = (number) => ({ number, label: null, raw: `entry ${number}`, title: `Paper ${number}` });
+
+test("buildCards maps each key to the card it produced", () => {
+  const entries = [entry(4), entry(12), entry(30)];
+  const { cards, indexOf } = buildCards(["4", "12"], true, entries);
+  assert.deepEqual(cards.map((c) => c.number), [4, 12]);
+  assert.equal(indexOf.get("4"), 0);
+  assert.equal(indexOf.get("12"), 1);
+});
+
+test("buildCards keeps the mapping right when cards are de-duplicated", () => {
+  const entries = [entry(4), entry(12)];
+  // The same reference cited twice in one bracket collapses to one card, so
+  // the third key's card is index 1 — not index 2, which does not exist.
+  const { cards, indexOf } = buildCards(["4", "4", "12"], true, entries);
+  assert.deepEqual(cards.map((c) => c.number), [4, 12]);
+  assert.equal(indexOf.get("4"), 0);
+  assert.equal(indexOf.get("12"), 1);
+  for (const [, i] of indexOf) assert.ok(i < cards.length);
+});
+
+test("buildCards indexes stub cards for keys the bibliography lost", () => {
+  // Only [4] parsed; [12] still gets a stub card, and still its own index.
+  const { cards, indexOf } = buildCards(["4", "12"], true, [entry(4)]);
+  assert.deepEqual(cards.map((c) => c.number), [4, 12]);
+  assert.equal(cards[1].unresolved, true);
+  assert.equal(indexOf.get("12"), 1);
+});
+
+test("buildCards gives an unresolved author-year citation no cards at all", () => {
+  const { cards, indexOf } = buildCards(["Smith-2020"], false, [entry(4)]);
+  assert.deepEqual(cards, []);
+  assert.equal(indexOf.size, 0);
 });

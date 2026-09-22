@@ -30,7 +30,7 @@
 // Usage: node test/whyskip.mjs --url=<pdf> [--label=name] [--page=N | --all]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
-import { browserPath, extensionDir, profileDir } from "./lib/env.mjs";
+import { browserPath, extensionDir, profileDir, killBrowser } from "./lib/env.mjs";
 
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 const ALL = process.argv.includes("--all");
@@ -175,5 +175,5 @@ try {
   }
   if (offenders.length) process.exitCode = 1;
 } catch (e) { console.error(`${LABEL} why-probe error: ${e.message || e}`); process.exitCode = 1; }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500);
+finally { try { ws?.close(); } catch {} killBrowser(browser); await sleep(500);
   try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} process.exit(process.exitCode ?? 0); }

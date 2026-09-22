@@ -21,7 +21,7 @@
 // Usage: --url= --label= --page=N --find="word" [--pad=60] [--zoom=2.6] [--nth=1]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync, writeFileSync } from "node:fs";
-import { browserPath, extensionDir, outDir, profileDir } from "./lib/env.mjs";
+import { browserPath, extensionDir, outDir, profileDir, killBrowser } from "./lib/env.mjs";
 
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 const URL0 = arg("url"), LABEL = arg("label", "doc"), PAGE = parseInt(arg("page", "1"), 10);
@@ -139,5 +139,5 @@ try {
     appendFileSync("test/out/wordshot.log", line + String.fromCharCode(10));
   }
 } catch (e) { console.error(`${LABEL} word-shot error: ${e.message || e}`); process.exitCode = 1; }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500);
+finally { try { ws?.close(); } catch {} killBrowser(browser); await sleep(500);
   try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} process.exit(process.exitCode ?? 0); }

@@ -20,7 +20,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath } from "./lib/env.mjs";
+import { browserPath, killBrowser } from "./lib/env.mjs";
 
 const ARGS = process.argv.slice(2); // skip node binary + script path
 const FILTER = ARGS.find((a) => !a.startsWith("--") && !a.toLowerCase().endsWith(".exe")) ?? "USENIX (code + algorithms)";
@@ -353,7 +353,7 @@ const url = URL_OVERRIDE ?? PAPERS[FILTER];
   process.exitCode = 1;
 } finally {
   try { ws?.close(); } catch {}
-  browser.kill();
+  killBrowser(browser);
   await sleep(500);
   rmSync(userDataDir, { recursive: true, force: true });
 }
