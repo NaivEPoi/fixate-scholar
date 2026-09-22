@@ -164,9 +164,20 @@ export async function extractStructureHints(pdfDocument) {
 
   return {
     // A file with a handful of `page.*`-only names is not a structured file.
-    available: counts.heading + counts.caption + counts.float + counts.equation > 0,
+    //
+    // Counted over the kinds the ENGINE ACTUALLY CONSULTS — headings and the
+    // float/caption anchors. `equation.*` destinations are still extracted and
+    // reported below, but no classifier reads them yet, so letting them raise
+    // this flag buys a document a full restore/reprocess cycle that cannot
+    // change a single decision. A paper whose only destinations are equations
+    // is, for the engine's purposes, a paper with no hints at all.
+    available: counts.heading + counts.caption + counts.float > 0,
     headings: groupByPage(resolved.filter((r) => r.kind === "heading")),
     captions: groupByPage(resolved.filter((r) => r.kind === "caption" || r.kind === "float")),
+    // Extracted, and currently UNUSED by the engine — kept because it is the
+    // one structural fact a numbered-equation classifier would need, and it
+    // costs nothing beyond the scan already being done. If it is still unread
+    // by the next release, delete it rather than letting it drift.
     equations: groupByPage(resolved.filter((r) => r.kind === "equation")),
     counts,
   };

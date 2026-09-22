@@ -166,3 +166,18 @@ test("extractStructureHints asks the page tree once per ref, not once per anchor
   await extractStructureHints(fakeDoc(dests, { pageIndex: async () => { calls++; return 0; } }));
   assert.equal(calls, 1);
 });
+
+test("a document whose only destinations are equations reports no hints", () => {
+  // The engine consults headings and captions and does not read equations, so
+  // an equation-only file must not raise `available` — doing so buys a full
+  // restore/reprocess cycle that cannot change a single classification.
+  return extractStructureHints(fakeDoc({
+    "equation.1": [{ num: 9, gen: 0 }, { name: "XYZ" }, 100, 400, null],
+    "equation.2": [{ num: 9, gen: 0 }, { name: "XYZ" }, 100, 300, null],
+  })).then((hints) => {
+    assert.equal(hints.available, false);
+    // Still extracted and reported, so a future classifier can use them.
+    assert.equal(hints.counts.equation, 2);
+    assert.equal(hints.equations.get(3).length, 2);
+  });
+});

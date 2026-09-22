@@ -817,6 +817,31 @@ test("findCitations spans a range's printed endpoints, not its implied middle", 
   assert.deepEqual(big.spans, [["1", "1"]]);
 });
 
+test("findCitations puts a bracket range's second key on the KEY, not on a locator that repeats it", () => {
+  // A cross-bracket range may carry a locator, and a locator can print the
+  // same number as the key: "[6]-[11, p. 11]". The second key used to be
+  // located with `lastIndexOf`, which lands on the page number — so [11]'s
+  // hit-target sat on "p. 11" while pointing at "[11" fell through to the
+  // whole-citation target and opened [6]'s card. That is precisely the defect
+  // per-key targets exist to prevent.
+  //
+  // Asserted by OFFSET, not by the sliced text: both candidates slice to the
+  // identical string "11", so a text comparison cannot tell them apart — which
+  // is why the existing spans test above stayed green through the bug.
+  const text = "see [6]-[11, p. 11] here";
+  const [cite] = findCitations(text, { includeIndexed: true });
+  const second = cite.keySpans.find((s) => s.key === "11");
+  assert.equal(second.start, text.indexOf("[11") + 1);
+  assert.equal(second.end, second.start + 2);
+  // And the locator's copy is NOT what was chosen.
+  assert.notEqual(second.start, text.lastIndexOf("11"));
+
+  // The plain range still resolves to its own printed endpoint.
+  const plain = "see [6]-[11] here";
+  const [p] = findCitations(plain, { includeIndexed: true });
+  assert.equal(p.keySpans.find((s) => s.key === "11").start, plain.indexOf("[11") + 1);
+});
+
 test("findCitations locates the keys of author-year, alpha and narrative citations", () => {
   const [ay] = keySpanSlices("work (Smith 2020; Jones 2021) shows");
   assert.deepEqual(ay.spans, [["Smith-2020", "Smith 2020"], ["Jones-2021", " Jones 2021"]]);
