@@ -757,7 +757,26 @@ const NUMERIC_CITE =
 // "[6]–[11]", "[6] - [11]", "[6]--[11]".
 const NUMERIC_BRACKET_RANGE =
   /\[\s*(\d{1,3})\s*\]\s*(?:[–—\u2212\u2015-]|--)\s*\[\s*(\d{1,3})(?:\s*,\s*(?:§|¶|pp?\.|[A-Z])[^\]]{0,55})?\s*\]/g;
-const AUTHOR_YEAR_CITE = /\(([^()]{2,120}?(?:19|20)\d{2}[a-z]?(?:\s*[;,]\s*(?:p+\.\s*[\d–-]+|[^();]*?(?:19|20)\d{2}[a-z]?))*)\)/g;
+// A page/section locator, defined ONCE and used both by the citation regex —
+// which decides whether a parenthetical is a citation at all — and by the
+// grouping below, which decides who the locator belongs to. They used to carry
+// separate notions of the same thing, and every divergence was a defect: the
+// regex accepted only digits after "p.", so "(Smith 2019, p. ix)" and
+// "(Smith 2019, § 4)" matched NOTHING and produced no card at all, while the
+// grouping accepted shapes the regex would never deliver.
+//
+// Roman numerals are lowercase-only and the prefix is case-sensitive, on
+// purpose. Written case-insensitively with the numerals folded into one
+// character class, "P. Dix" parses as a locator — "P." as the page mark and
+// "Dix" as roman numerals — so an APA initial swallowed the citation after it.
+// Front matter is paginated "p. ix", never "P. IX".
+const LOC_PREFIX = "(?:pp?\\.|§{1,2}|¶)";
+const LOC_NUM = "(?:\\d+(?:[.\\-\\u2013\\u2014]\\d+)*|[ivxlcdm]+)";
+const LOC_BODY = `${LOC_PREFIX}\\s*${LOC_NUM}`;
+const AUTHOR_YEAR_CITE = new RegExp(
+  `\\(([^()]{2,120}?(?:19|20)\\d{2}[a-z]?(?:\\s*[;,]\\s*(?:${LOC_BODY}|[^();]*?(?:19|20)\\d{2}[a-z]?))*)\\)`,
+  "g",
+);
 
 // NARRATIVE author-year (natbib \citet): the author names are running PROSE and
 // only the year is bracketed — "Church [1936]", "Vergis et al. [1986]",
@@ -790,7 +809,7 @@ const NOT_A_SURNAME = /^(Table|Figure|Fig|Section|Sec|Eq|Equation|Chapter|Append
 // locator inside Jones's span, opening Jones's card. The `pp.`/`§`/`¶` prefix
 // is what keeps this from matching an ordinary author token, so widening the
 // digits costs nothing.
-const CITE_LOCATOR = /^\s*(?:pp?\.|§{1,2}|¶)\s*[\divxlcdm–—-]+\s*$/i;
+const CITE_LOCATOR = new RegExp(`^\\s*${LOC_BODY}\\s*$`);
 // An undated citation — APA's "n.d.", and the "in press"/"forthcoming" forms.
 // AUTHOR_YEAR_CITE needs a 4-digit year, so one of these can never key a card
 // of its own; what it must NOT do is act as the author prefix of the citation
@@ -906,6 +925,12 @@ export function findCitations(text, options = {}) {
       if (cur && !cur.done && !cur.undated) {
         cur.end = end; // still gathering one citation's authors
         cur.done = hasYear;
+        // The marker can arrive in a LATER piece than the name, because APA
+        // punctuates it: "(Smith, n.d.; Jones 2020)" cuts to "Smith" / " n.d."
+        // / " Jones 2020", and testing only the piece that opened the group
+        // left the flag false — so the group stayed open and swallowed Jones,
+        // which is the same invented key the flag exists to prevent.
+        cur.undated = cur.undated || UNDATED.test(c.text);
       } else if (cur && !hasYear && CITE_LOCATOR.test(c.text)) {
         // Attaches BACKWARD only when it actually looks like a locator. A
         // yearless piece after a citation is usually the next citation's
