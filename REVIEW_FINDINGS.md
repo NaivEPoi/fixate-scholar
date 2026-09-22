@@ -4010,3 +4010,68 @@ asserting. Old and new parser, compared record-by-record with `keySpans`
 stripped, over **9,172 strings of real page text and 195 citations: 0
 mismatches.** The engine's inputs are byte-identical, so none of the four
 classification defects can originate in it — they are pre-existing.
+
+## R44 — reading the document's own structure instead of guessing at it
+
+R43 left four classification defects, all of them boundary errors: where a
+caption stops, where a run-in heading stops, whether a roman token belongs to
+the equation around it. The block classifier decides all of that from rendered
+geometry — line pitch, height deltas, x-bands, computed weight — and geometry
+is a poor instrument for boundaries the source document knows exactly.
+
+### What a LaTeX PDF already tells you
+
+hyperref writes NAMED DESTINATIONS for every float, heading and numbered
+equation, in the SAME user space as the text items:
+
+```
+subsubsection.3.1.2   page 3   x=53.798   y=188.28
+figure.caption.7      page 4   x=53.798   y=713.793
+table.caption.9       page 4   x=317.955  y=234.734
+```
+
+`figure.caption.N` is the `hypcap` anchor and sits ON the caption — exactly the
+boundary the caption pass keeps getting wrong. Measured across the public
+corpus, every paper typeset since hyperref became standard carries 80–159 of
+these, and they include `subsubsection.*` and `paragraph.*` anchors that the
+PDF OUTLINE omits: bookmarks usually stop at subsection, and depth 3–4 is
+precisely the run-in level the word-count gate kept mishandling.
+
+`typography/pdfhints.mjs` extracts them and resolves each to a page and a
+position; `engine.setStructureHints` holds them as priors. They are hints, not
+a contract: the 1995 Computer Modern paper in the corpus has no name tree at
+all and reports `available: false`, so the geometry path remains the only path
+for such documents, and nothing is ever classified as a heading or a caption
+because a hint is MISSING. `cite.*` and `page.*` names are ignored outright —
+a citation anchor says nothing about the region it sits in. Tagged PDFs would
+be better still (`/Caption`, `/Formula` roles), but none of the corpus is
+tagged, so that avenue is closed for now.
+
+### The equation defect was not a font problem
+
+Worth recording separately, because the obvious fix would not have worked. The
+`exp` of a displayed equation rendered with a bold "ex" while the same token in
+the neighbouring equations did not. The natural reading is "the math-font test
+missed it" — and `MATH_FONT` does exist and is applied per item.
+
+The font is not the issue. PDF.js resolves that paper's equation symbols to NO
+font at all: the text layer draws them in a generic substitute, so the math
+ratio of a row full of mathematics reads as ZERO. The row is then handed to the
+body filter, where every symbol is rejected on its own for being under two
+characters or carrying no Latin letter — and the one token LaTeX deliberately
+sets in upright ROMAN sails through, because `\exp`, `\cos`, `\min`, `\max`,
+`\log` and `\mod` are body-face text by construction. No font test can separate
+those from prose.
+
+The fix classifies the ROW by its composition: no prose words, and
+overwhelmingly built from items the body filter would reject anyway. Note the
+shared `MATH_SIGNAL` was not sufficient — it lists relations, and the offending
+equation is built from `+` and `∣`, neither of which is in it; a trailing
+equation number is the second tell, and a very high symbol ratio the third.
+
+Verified by occurrence on the page, which is the only way to tell this defect
+from its own look-alikes: `exp` #2, #4 and #8 are displayed equations and are
+now kept (`processed=false keep=true emph=0`), while "**ex**pression" in body
+prose is still emphasized. A first pass at this verification checked the FIRST
+`exp` on the page, which is inline math inside a running sentence — the wrong
+instance, and it would have confirmed the wrong thing.
