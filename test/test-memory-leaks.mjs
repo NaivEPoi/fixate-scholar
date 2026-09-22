@@ -204,8 +204,14 @@ try {
   console.log("Active Popups (must be <= 1): " + afterDisable.popups);
 
   const heapOk = totalHeapDelta < 15;
-  const toggleNodesOk = toggleNodeDelta === 0;
-  const fontNodesOk = (afterFonts.nodes - afterToggle.nodes) === 0;
+  // A LEAK is node GROWTH. These were written as `=== 0`, which also fails when
+  // the count comes back LOWER than the baseline — and it does: the baseline is
+  // taken while the first page is still settling, so ten clean toggle cycles
+  // land ~46 nodes BELOW it and the run reported "potential memory leak" over a
+  // tidier DOM than it started with. Exact equality is the wrong shape for a
+  // one-sided property; a decrease is evidence of the opposite of a leak.
+  const toggleNodesOk = toggleNodeDelta <= 0;
+  const fontNodesOk = (afterFonts.nodes - afterToggle.nodes) <= 0;
   const masksCleaned = afterDisable.fxMasks === 0 && afterDisable.fxDone === 0;
   const popupsOk = afterDisable.popups <= 1;
 
