@@ -34,7 +34,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath } from "./lib/env.mjs";
+import { browserPath, killBrowser } from "./lib/env.mjs";
 
 // Full 12-paper corpus (same map as diagnose.mjs / audit.mjs). `--url=` runs any
 // PDF the viewer can fetch, which is how private corpora are verified without
@@ -357,7 +357,7 @@ try {
     }
   }
 } catch (e) { fail(`drag error: ${e.message ?? e}`); }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
+finally { try { ws?.close(); } catch {} killBrowser(browser); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
 
 console.log(failures.length ? `\n${FILTER}: FAIL (${failures.length})` : `\n${FILTER}: PASS`);
 process.exit(failures.length ? 1 : 0);

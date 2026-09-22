@@ -3836,3 +3836,242 @@ reports `cites=130 noHit=0 refCount=58` either way, Proteus-ccs24
 side-by-side counter was measured, not a property of the filter — the colour
 wraps carry no child spans, so whichever end of the parent/child pair is skipped,
 the same text reaches the joined page string. The filter is left as committed.
+
+## R42 — the pointer said [12] and the card said [4]
+
+### The defect
+
+Hovering the **12** of a citation printed `[4, 12]` opened the card for **[4]**.
+Every number after the first in a multi-key bracket did it, on every document:
+`[24, 39, 42, 60]` opened [24] from all four of its numbers.
+
+The cause is one line short of a decision. `annotatePage` built the card list for
+a citation's keys and then laid a hit-target over each rect of the **whole
+bracket**, every one of them carrying the same list:
+
+```js
+for (const rect of rangeRects(seg.span, localStart, localEnd)) {
+  hits.push({ rect, cards });          // the whole citation, one card list
+}
+…
+a.addEventListener("mouseenter", () => this.#popup.scheduleShow(cards, a));
+```
+
+and `CitationPopup.showNow` opened that list at `#index = 0`. So the pointer
+carried no information at all: the card was "this citation's first reference",
+wherever inside the brackets you happened to be. The pager could reach the other
+references — you had to know to press it, on a card already showing the wrong
+paper.
+
+Nothing in the DOM was wrong, which is why this survived: the citation was
+annotated, its hit-target covered the digits, and `reconcileLinks` had properly
+neutralised the PDF's own link. `citeaudit` checks exactly those three things and
+reported the page clean. The defect lived entirely in which of several right
+answers was chosen.
+
+### The fix — the key under the pointer, not the citation
+
+`findCitations` now returns `keySpans` alongside `keys`: the character range of
+each key the document actually PRINTS. Only printed keys get one — the implied
+middle of `[6-11]` has no glyphs, and a range truncated at 26 keys never reaches
+the number at its far end, so neither claims a target for a card that is not
+there. All five citation forms carry them: numeric lists, the two range
+spellings, `;`-separated author-year, alpha keys, and the years of a narrative
+`Benioff [1980, 1982a]`.
+
+`buildCards` (lifted out of the class, so it can be unit-tested) returns
+`indexOf` next to `cards`: which CARD each key produced. Not a count — cards are
+de-duplicated, and one key can resolve to several entries, so a key's place in
+the key list is not its place in the card list.
+
+`annotatePage` then lays a second, precise hit-target over each printed key, on
+top of the whole-citation ones, and `scheduleShow`/`showNow` take the index it
+carries. Later siblings in the layer sit on top, so the precise target wins where
+it exists and the characters no key claims — the brackets, the comma, a locator —
+still open the citation at its first card, exactly as before. Single-key
+citations get no extra node.
+
+### The check that would have caught it: `test/citepoint.mjs`
+
+For every multi-key bracket on a page, each printed number is clicked at its own
+centre and the card that opens must carry that number:
+
+```
+p5: multi-key cites=7 wrongTarget=0 wrongCard=0
+```
+
+Verified by negative control — reverting the three source files turns one paper's
+first six pages from `wrongCard=0` into 18 named failures
+(`FAIL p5 WRONG-CARD "[24, 39, 60]" key 60 opened [24]`), so a PASS means
+something. It also fails a document where no page carried a hit-target at all,
+and SKIPs — with its hit-target count printed — a document that simply cites one
+work at a time, because making that a failure would fail real papers over a
+property they are entitled to have.
+
+The HOVER path is the one the reader actually uses, and the unpinned card has no
+header to read a label off, so it was checked separately against the entry text:
+on `[9, 11]` the 9 shows OpenAirInterface and the 11 shows srsRAN.
+
+## R43 — the gate's own litter, two harnesses that could not fail, and four real classification defects
+
+Found while running the full release gate for the R42 citation fix. The R42
+change itself is clean — see the differential below — but the sweep that proved
+it turned up three defects in the GATE and four in the engine.
+
+### The harness leak: the gate was poisoning its own results
+
+Every harness spawns Edge and ends with `browser.kill()`. That signals only the
+launcher; Chromium's renderer, GPU and utility processes are in no process group
+of ours and survive it, holding their profile directory, their remote-debugging
+port and their memory. One document leaks about nine processes.
+
+Measured mid-sweep: **476 live `msedge` processes, 159 stale profile directories
+in `%TEMP%`, and 1.1 GB of free RAM.** At that point a new harness could not bind
+`11400 + pid % 300` — some 46 ports in that range were already held by dead runs'
+browsers — so it attached to a stale browser or none at all and died with
+"extension did not load" or `chrome.storage` undefined. **Five documents were
+recorded as product failures over this** (one public paper, four private) and
+every one of them re-ran clean once the litter was cleared. The retry loop that
+first papered over it was treating the harness's own garbage as flakiness.
+
+The fix is central, because all 83 leaking scripts import `test/lib/env.mjs`:
+
+- `killBrowser(child)` kills the process TREE (`taskkill /F /T` on Windows, the
+  process group elsewhere), and the fourteen harnesses the gate drives call it
+  in place of `child.kill()`.
+- An exit-time net in `env.mjs` reaps any `msedge` whose profile directory
+  carries THIS process's pid, which covers the other sixty-nine scripts and a
+  run that dies before its own cleanup. Keyed on the pid in `fx-<tag>-<pid>`, so
+  it can never reach a concurrent lane's browser — the corpus sweeps run several
+  at once. `FX_NO_REAP=1` disables it.
+
+Negative control, on a harness that was NOT given `killBrowser` so only the net
+applies: **16 leftover processes with `FX_NO_REAP=1`, 0 without it.**
+
+### `review-capture.mjs` reported PASS on a document it never photographed
+
+One private document's capture died with `ECONNREFUSED` before its browser came
+up. The script printed the error, exited **0**, and the sweep recorded PASS — with
+no output directory at all. A visual gate that says "clean" about pages nobody
+photographed is worse than no gate, and this is the third instance of the R41
+class (a test stating a criterion it cannot enforce). It now counts failures and
+exits 1; verified by forcing a capture to throw.
+
+### `citepoint.mjs`'s blind-pass guard was too strict
+
+The new harness failed a two-page document that has **no bibliography and no
+bracketed citation at all** — zero hit-targets is the right answer there, and
+`citeaudit` fails the same document the same way. The guard now asks whether a
+citation was PRESENT before demanding one was annotated: brackets in the text
+with no hit-target is a failure, no brackets at all is a SKIP. Verified both
+ways, including a forced-zero control that still fails with 17 brackets found.
+
+### Four engine classification defects — and one claimed defect that was not real
+
+Every page of all fourteen public documents was read against TESTING.md §3 from a
+post-fix capture. **No rendering defect of any kind was found** — no ghosting, no
+canvas peek at mask edges, no whited-out words, no jammed spacing, no
+wrong-typeface span, no baseline drift. What the sweep did find is
+classification, and each one below was re-verified with `wordshot.mjs` before
+being written down:
+
+1. **Function names inside DISPLAYED equations are processed and emphasized.**
+   `exp` in a Computer Modern paper's equations: `processed=true emph=1 ["ex"]`,
+   and the bold "ex" of `exp(2πia` is plainly visible in the capture. It is
+   inconsistent within one page — the same token is correctly skipped in
+   neighbouring equations — which is what makes it a bug and not a policy.
+2. **A caption's continuation lines are processed and emphasized.** A table
+   caption wraps; only its first line is skipped, and the rest carries five
+   emphasis runs (`processed=true emph=5`). §3 puts captions "plus their
+   multi-line continuation" on canvas. The absorb loop bails before reaching
+   the continuation, which the per-line dump shows as a caption line followed
+   immediately by a line with no skip reason at all.
+3. **Numbered / labelled run-in sub-headings are processed and emphasized.**
+   The number is skipped as `leadrun` and the heading text after it is not:
+   `processed=true emph=3 ["Ba","stat","regis"]`.
+4. **The run-in family both over- and under-claims.** `runin-short`,
+   `line-head` and `runin` eat body prose — a paragraph's last line, a
+   mid-sentence fragment, in one template an entire abstract — while long
+   run-in heads escape the same rule. Both directions are the same
+   length-gated rule, so they want one fix, not two.
+
+**Not real:** "inline monospace spans are processed and emphasized" was reported
+on two pages of one paper from a 3× magnification of a page-scale capture.
+`wordshot` says `processed=false keep=false emph=0` — the span is untouched and
+carries no emphasis. This is exactly the downsampling-artifact class CLAUDE.md
+warns about, and it is why `fontkeep` reporting zero violations on that document
+was correct rather than a hole.
+
+### The R42 change is not implicated in any of the above
+
+`findCitations` is on the typography engine's path too (`engine.mjs`,
+`segmenter.mjs`), so "the new field is additive" needed measuring rather than
+asserting. Old and new parser, compared record-by-record with `keySpans`
+stripped, over **9,172 strings of real page text and 195 citations: 0
+mismatches.** The engine's inputs are byte-identical, so none of the four
+classification defects can originate in it — they are pre-existing.
+
+## R44 — reading the document's own structure instead of guessing at it
+
+R43 left four classification defects, all of them boundary errors: where a
+caption stops, where a run-in heading stops, whether a roman token belongs to
+the equation around it. The block classifier decides all of that from rendered
+geometry — line pitch, height deltas, x-bands, computed weight — and geometry
+is a poor instrument for boundaries the source document knows exactly.
+
+### What a LaTeX PDF already tells you
+
+hyperref writes NAMED DESTINATIONS for every float, heading and numbered
+equation, in the SAME user space as the text items:
+
+```
+subsubsection.3.1.2   page 3   x=53.798   y=188.28
+figure.caption.7      page 4   x=53.798   y=713.793
+table.caption.9       page 4   x=317.955  y=234.734
+```
+
+`figure.caption.N` is the `hypcap` anchor and sits ON the caption — exactly the
+boundary the caption pass keeps getting wrong. Measured across the public
+corpus, every paper typeset since hyperref became standard carries 80–159 of
+these, and they include `subsubsection.*` and `paragraph.*` anchors that the
+PDF OUTLINE omits: bookmarks usually stop at subsection, and depth 3–4 is
+precisely the run-in level the word-count gate kept mishandling.
+
+`typography/pdfhints.mjs` extracts them and resolves each to a page and a
+position; `engine.setStructureHints` holds them as priors. They are hints, not
+a contract: the 1995 Computer Modern paper in the corpus has no name tree at
+all and reports `available: false`, so the geometry path remains the only path
+for such documents, and nothing is ever classified as a heading or a caption
+because a hint is MISSING. `cite.*` and `page.*` names are ignored outright —
+a citation anchor says nothing about the region it sits in. Tagged PDFs would
+be better still (`/Caption`, `/Formula` roles), but none of the corpus is
+tagged, so that avenue is closed for now.
+
+### The equation defect was not a font problem
+
+Worth recording separately, because the obvious fix would not have worked. The
+`exp` of a displayed equation rendered with a bold "ex" while the same token in
+the neighbouring equations did not. The natural reading is "the math-font test
+missed it" — and `MATH_FONT` does exist and is applied per item.
+
+The font is not the issue. PDF.js resolves that paper's equation symbols to NO
+font at all: the text layer draws them in a generic substitute, so the math
+ratio of a row full of mathematics reads as ZERO. The row is then handed to the
+body filter, where every symbol is rejected on its own for being under two
+characters or carrying no Latin letter — and the one token LaTeX deliberately
+sets in upright ROMAN sails through, because `\exp`, `\cos`, `\min`, `\max`,
+`\log` and `\mod` are body-face text by construction. No font test can separate
+those from prose.
+
+The fix classifies the ROW by its composition: no prose words, and
+overwhelmingly built from items the body filter would reject anyway. Note the
+shared `MATH_SIGNAL` was not sufficient — it lists relations, and the offending
+equation is built from `+` and `∣`, neither of which is in it; a trailing
+equation number is the second tell, and a very high symbol ratio the third.
+
+Verified by occurrence on the page, which is the only way to tell this defect
+from its own look-alikes: `exp` #2, #4 and #8 are displayed equations and are
+now kept (`processed=false keep=true emph=0`), while "**ex**pression" in body
+prose is still emphasized. A first pass at this verification checked the FIRST
+`exp` on the page, which is inline math inside a running sentence — the wrong
+instance, and it would have confirmed the wrong thing.

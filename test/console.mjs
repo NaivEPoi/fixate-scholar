@@ -23,7 +23,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { browserPath, extensionDir } from "./lib/env.mjs";
+import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
 
 // Upstream-warning allowlist — two entries, each earned by a failing sweep.
 //
@@ -325,7 +325,7 @@ try {
   console.error("console harness error:", e.message || e);
   process.exitCode = 1;
 } finally {
-  browser.kill();
+  killBrowser(browser);
   await sleep(500);
   try { rmSync(userDataDir, { recursive: true, force: true }); } catch {}
 }

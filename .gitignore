@@ -14,3 +14,8 @@ scratch_*
 CLAUDE.md
 CLAUDE.local.md
 local/
+
+# Personal, machine-local Claude Code settings (permission rules for local
+# tooling). Never committed: this repo's local-only policy is the same one that
+# keeps CLAUDE.md and local/ out.
+.claude/settings.local.json

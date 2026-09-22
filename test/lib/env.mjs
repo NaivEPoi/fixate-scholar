@@ -10,6 +10,7 @@
 // can always be overridden: a CLI argument the script passes in, or the
 // FX_EDGE / FX_CHROME / FX_BROWSER environment variables.
 
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,6 +40,74 @@ export function outDir(sub = "") {
  */
 export function profileDir(tag, { persistent = false } = {}) {
   return join(tmpdir(), persistent ? `fx-profile-${tag}` : `fx-${tag}-${process.pid}`);
+}
+
+/**
+ * Kill a spawned browser AND the processes it spawned.
+ *
+ * `child.kill()` signals only the launcher. Chromium's renderer, GPU and
+ * utility processes are not in that process group and survive it, holding
+ * their profile directory, their remote-debugging port, and their share of
+ * memory. One document leaks ~9 processes; a corpus sweep leaks hundreds.
+ *
+ * Measured: a full two-corpus gate run left **476 live msedge processes and
+ * 1.1 GB of free RAM**, at which point new harnesses could not bind their
+ * debug port and failed with "extension did not load" / `chrome.storage`
+ * undefined. Several documents were recorded as product failures over it, and
+ * re-ran clean once the litter was cleared. The leak is the harness's, so the
+ * fix belongs here rather than in a retry loop.
+ *
+ * On Windows `taskkill /T` is what walks the tree; elsewhere the process group
+ * does, since the child is spawned into one.
+ */
+export function killBrowser(child) {
+  if (!child?.pid) return;
+  try {
+    if (process.platform === "win32") {
+      execFileSync("taskkill", ["/F", "/T", "/PID", String(child.pid)], {
+        stdio: "ignore",
+        timeout: 30000,
+      });
+    } else {
+      try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+    }
+  } catch {
+    // Already gone, or taskkill raced the exit — fall back to the plain kill so
+    // this is never worse than what it replaces.
+    try { child.kill(); } catch { /* nothing left to kill */ }
+  }
+}
+
+/**
+ * Last-resort net for the harnesses that still call `child.kill()` directly,
+ * and for a run that dies before its own cleanup: at process exit, kill any
+ * browser whose profile directory carries THIS process's pid.
+ *
+ * Every harness names its profile `fx-<tag>-<pid>` (see `profileDir`, and the
+ * few that build the path inline the same way), so the pid in the path is an
+ * unambiguous owner tag — this can never reach a browser belonging to another
+ * run, which matters because the corpus sweeps run several lanes at once.
+ * Synchronous on purpose: an exit handler cannot await.
+ */
+if (process.platform === "win32" && !process.env.FX_NO_REAP) {
+  process.on("exit", () => {
+    try {
+      // The pid must END the directory name, or `fx-cp-123` would also claim
+      // `fx-cp-1234`. Written `[^0-9]` rather than `\D` on purpose: this
+      // pattern is interpolated into a PowerShell single-quoted string, and a
+      // backslash class survives one layer of escaping less reliably than a
+      // character set does.
+      const own = `fx-[A-Za-z0-9-]*?-${process.pid}(?:[^0-9]|$)`;
+      execFileSync(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command",
+         `Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | ` +
+         `Where-Object { $_.CommandLine -match '${own}' } | ` +
+         `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
+        { stdio: "ignore", timeout: 20000 },
+      );
+    } catch { /* nothing to reap, or the process list moved under us */ }
+  });
 }
 
 // First existing entry wins. Ordered most-likely-first per platform.
