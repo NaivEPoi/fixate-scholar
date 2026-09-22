@@ -47,7 +47,11 @@ const CHECK = (p) => `(() => {
   const REF_ALPHA = "(?:(?<=[a-zA-Z~])|\\\\b)[A-Z]\\\\b(?:\\\\.\\\\d+)?";
   const REF_ITEM = "(?:" + REF_PAREN_NUM + "|" + REF_NUM + "|" + REF_ROMAN + "|" + REF_ALPHA + ")";
   const REF_SEP = "(?:\\\\s*(?:[–—\\\\u2212\\\\u2015-]|--|to)\\\\s*|\\\\s*,\\\\s*(?:and\\\\s+|&\\\\s*)?|\\\\s+and\\\\s+|\\\\s*&\\\\s*)";
-  const INTERNAL_REF = new RegExp("(?:\\\\b|(?<=[a-z])(?=[A-Z]))" + REF_LEADER + "\\\\s*~?\\\\s*" + REF_ITEM + "(?:" + REF_SEP + REF_ITEM + ")*", "g");
+  // Kept in step with parser.mjs, INCLUDING the (?=§) alternative: this copy
+  // carried the same missing-word-boundary bug, so the harness shared the
+  // product's blind spot and could never have reported an uncoloured "§4.2".
+  // (No backticks in this comment — it lives inside a template literal.)
+  const INTERNAL_REF = new RegExp("(?:\\\\b|(?<=[a-z])(?=[A-Z])|(?=§))" + REF_LEADER + "\\\\s*~?\\\\s*" + REF_ITEM + "(?:" + REF_SEP + REF_ITEM + ")*", "g");
 
   let total = 0, colored = 0;
   const misses = [];

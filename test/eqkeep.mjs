@@ -79,30 +79,92 @@ const probe = (page) => ev(`(() => {
     rows.get(key).push({ s, r });
   }
 
-  // The column's right edge, from the widest right extent on the page — an
-  // equation number sits hard against it.
-  const rights = [...rows.values()].flat().map((x) => x.r.right).sort((a, b) => a - b);
-  const pageRight = rights[Math.floor(rights.length * 0.97)] ?? 0;
+  // THE PAGE'S GUTTER — a baseline is not a row on a two-column page.
+  //
+  // The left column's line and the right column's equation number share one
+  // baseline, so a row keyed by baseline alone glues them together. The glued
+  // pair then matches every test below — a trailing parenthesised number, hard
+  // against the page's right edge, too few words to be a sentence — and a
+  // correctly-emphasized body line in the left column is reported as emphasis
+  // inside an equation. Seen on a private paper, where it also MASKED a real
+  // violation elsewhere on the same page (R45). A real equation and its number
+  // always live in ONE column.
+  //
+  // The gutter is the vertical band near the page's middle that the FEWEST
+  // rows cross. Counting rows rather than marking occupied pixels is what
+  // survives a full-width title, figure or table: those cross the gutter, and
+  // a plain occupancy map would let any one of them erase it.
+  const all = [...rows.values()].flat();
+  const pageBox = pv.div.getBoundingClientRect();
+  const x0 = pageBox.left, W = Math.max(1, Math.ceil(pageBox.width));
+  const cover = new Int32Array(W);
+  for (const arr of rows.values()) {
+    const seen = new Uint8Array(W);
+    for (const x of arr) {
+      const a = Math.max(0, Math.floor(x.r.left - x0));
+      const b = Math.min(W, Math.ceil(x.r.right - x0));
+      for (let i = a; i < b; i++) seen[i] = 1;
+    }
+    for (let i = 0; i < W; i++) if (seen[i]) cover[i]++;
+  }
+  let maxCover = 0;
+  for (let i = 0; i < W; i++) if (cover[i] > maxCover) maxCover = cover[i];
+  const quiet = maxCover * 0.15;
+  const lo = Math.floor(W * 0.3), hi = Math.ceil(W * 0.7);
+  let gutter = null, best = 0, run = -1;
+  for (let i = lo; i <= hi; i++) {
+    const open = i < W && cover[i] <= quiet;
+    if (open) { if (run < 0) run = i; continue; }
+    if (run >= 0 && i - run > best) { best = i - run; gutter = x0 + (run + i) / 2; }
+    run = -1;
+  }
+  if (run >= 0 && hi - run > best) { best = hi - run; gutter = x0 + (run + hi) / 2; }
+  // Too narrow to be a gutter: a single-column page, where the whole row is
+  // the segment and this behaves exactly as it did before.
+  //
+  // The floor only rejects slivers, and it is set from the PUBLIC corpus: at
+  // the harness's rendering width the two-column gutter measures 3.4-3.7% of
+  // the page on ACM and USENIX layouts but only 1.83% on the IEEE journal one,
+  // so a floor anywhere near 2% throws a whole real layout away. Single-column
+  // papers measure 0% — the detector finds no quiet band at all — which is the
+  // evidence that this is not merely tuned low.
+  //
+  // Telling a gutter from a wide word-space is the coverage test's job, not
+  // this one's: a single column's middle is crossed by nearly every row and
+  // never comes close to being quiet.
+  if (best < W * 0.01) gutter = null;
+
+  const sideOf = (x) => (gutter === null ? 0 : (x.r.left < gutter ? 0 : 1));
+  // Each column's own right edge — an equation number sits hard against the
+  // margin of the column it belongs to, not the page's.
+  const edges = [0, 1].map((side) => {
+    const xs = all.filter((x) => sideOf(x) === side).map((x) => x.r.right).sort((a, b) => a - b);
+    return xs.length ? xs[Math.floor(xs.length * 0.97)] : 0;
+  });
 
   let eqRows = 0, violations = 0;
   const bad = [];
   for (const arr of rows.values()) {
-    arr.sort((a, b) => a.r.left - b.r.left);
-    const text = arr.map((x) => x.s.textContent).join(" ").trim();
-    // A trailing equation number, hard against the column's right edge.
-    if (!/\\(\\s*(?:[A-Z]\\s*[.-]\\s*)?\\d+(?:\\.\\d+)*\\s*\\)\\s*$/.test(text)) continue;
-    const last = arr[arr.length - 1];
-    if (last.r.right < pageRight - 40) continue;
-    // No running prose: three or more ordinary lowercase words means a
-    // sentence that merely ends in a parenthesised number, not an equation.
-    const words = (text.match(/\\b[a-z]{3,}\\b/g) || [])
-      .filter((w) => !/^(?:exp|log|ln|cos|sin|tan|max|min|sup|inf|lim|det|dim|deg|gcd|mod|arg|where|and|for|the)$/.test(w));
-    if (words.length >= 3) continue;
-    eqRows++;
-    for (const x of arr) {
-      if (!x.s.dataset.fxDone) continue;
-      violations++;
-      if (bad.length < 6) bad.push({ text: x.s.textContent.trim().slice(0, 24), row: text.slice(0, 60) });
+    for (const side of gutter === null ? [0] : [0, 1]) {
+      const seg = arr.filter((x) => sideOf(x) === side);
+      if (!seg.length) continue;
+      seg.sort((a, b) => a.r.left - b.r.left);
+      const text = seg.map((x) => x.s.textContent).join(" ").trim();
+      // A trailing equation number, hard against the column's right edge.
+      if (!/\\(\\s*(?:[A-Z]\\s*[.-]\\s*)?\\d+(?:\\.\\d+)*\\s*\\)\\s*$/.test(text)) continue;
+      const last = seg[seg.length - 1];
+      if (last.r.right < edges[side] - 40) continue;
+      // No running prose: three or more ordinary lowercase words means a
+      // sentence that merely ends in a parenthesised number, not an equation.
+      const words = (text.match(/\\b[a-z]{3,}\\b/g) || [])
+        .filter((w) => !/^(?:exp|log|ln|cos|sin|tan|max|min|sup|inf|lim|det|dim|deg|gcd|mod|arg|where|and|for|the)$/.test(w));
+      if (words.length >= 3) continue;
+      eqRows++;
+      for (const x of seg) {
+        if (!x.s.dataset.fxDone) continue;
+        violations++;
+        if (bad.length < 6) bad.push({ text: x.s.textContent.trim().slice(0, 24), row: text.slice(0, 60) });
+      }
     }
   }
   return { page: ${page}, rows: rows.size, eqRows, violations, bad };

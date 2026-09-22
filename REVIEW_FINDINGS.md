@@ -4075,3 +4075,146 @@ now kept (`processed=false keep=true emph=0`), while "**ex**pression" in body
 prose is still emphasized. A first pass at this verification checked the FIRST
 `exp` on the page, which is inline math inside a running sentence — the wrong
 instance, and it would have confirmed the wrong thing.
+
+## R45 — a harness that spliced two columns into one row, and the section symbol that never matched
+
+Both findings here come from the same place: a test whose criterion was close
+enough to right that nothing it said could be trusted either way.
+
+### eqkeep grouped by baseline, and a two-column page has two rows per baseline
+
+The final release gate came back green on the public corpus and red on one
+private document: a span reported as emphasized inside a numbered displayed
+equation. The flagged "row" was not a row. It was the left column's closing
+line of a paragraph together with the RIGHT column's equation number — two
+items from opposite sides of the page, sharing a baseline and nothing else.
+`eqkeep` keyed a row on `Math.round(bottom / 3)` alone, so it glued them
+together, and the glued pair passed every test the harness had: a trailing
+parenthesised number, hard against the page's right edge, too few words to be a
+sentence. The emphasized span was ordinary body prose, correctly emphasized.
+
+The product was never wrong here. The engine's rows are column-scoped already
+(regions are split left/right/full-width at the page-centre gutter), and that
+two-item row would have failed its `items.length < 3` guard regardless.
+
+The fix gives the harness the same notion of a column: find the vertical band
+near the page's middle that the FEWEST rows cross, split each baseline there,
+and measure each segment against ITS OWN column's right edge. Counting rows
+rather than marking occupied pixels is the part that matters — a full-width
+title, figure or table crosses the gutter, and a plain occupancy map lets any
+one of them erase it. The width floor is 1% of the page: a two-column ACM page
+floor is derived from the PUBLIC corpus, so the threshold owes nothing to the
+document that exposed the bug: at the harness's rendering width the two-column
+gutter measures 3.4–3.7% of the page on ACM and USENIX layouts and only 1.83%
+on the IEEE journal one, so the 2% that looked safe discards a whole real
+layout. Single-column papers measure 0% — no quiet band is found at all — which
+is the evidence that 1% is not merely tuned low. Telling a gutter from a wide
+word-space is left to the coverage test, which is what can actually do it — a
+single column's middle is crossed by nearly every row and never comes close to
+being quiet.
+
+### And then the harness found a real one
+
+With the columns separated, the same page yielded a genuine numbered displayed
+equation, entirely inside one column, still carrying emphasis.
+
+Its shape: an operator bounded by a ROMAN multi-word identifier — `\max` or
+`\min` applied to a `\mathrm` name of two or three words — then a relation, a
+quantifier, and the equation number. The row-equation pass had rejected it on
+the word-length veto. That veto exists so a SENTENCE ending in a parenthesised
+number cannot read as an equation, and it works by assuming nothing five
+letters long belongs in one. Papers disagree: a roman identifier of that kind
+is ordinary notation, and one of its words reached five letters.
+
+A long word is now forgiven when the row carries a relation glyph AND is still
+mostly symbols. Both conditions are needed — a relation such as `≤`/`∈`/`∀` is
+what no English sentence has, and the ratio is what stops a prose line with one
+inline relation from qualifying. The offending row is symbol items in all but
+one position.
+
+Note what this cost: the false row had been masking the true one on the same
+page for the whole gate. A harness that is merely approximately right does not
+fail safe.
+
+### `§4.2` was in the leader list from the start and never once matched
+
+Reported from the render: section references written with the symbol were not
+coloured, while the spelled-out "Section 4.2" beside them was.
+
+`§` had been in `REF_LEADER` since the pattern was written. The pattern opens on
+`\b`, and a word boundary needs a word character on one side — in "see §4.2"
+both the space and the `§` are non-word, so there is no boundary between them
+and the match never started. Every section-symbol reference in every paper went
+uncoloured: `§4.2`, `§§5.1-5.3`, `§7`, `§ 8.2`, and the form at the start of a
+span or inside parentheses. A lookahead is the whole fix; `§` needs no boundary
+test of its own, because unlike "sec" it cannot occur inside a word.
+
+`test/refcolor.mjs` carries its own copy of the pattern and carried the same
+bug, so the harness shared the product's blind spot and could not have reported
+this no matter how often it ran. Both copies are fixed. Negative control, with
+the product fix reverted and the harness fix kept: 21 references found, 11
+coloured — the 10 uncoloured ones are exactly the `§` forms. With the fix,
+21/21.
+
+One thing deliberately left alone: a `§` locator inside a citation bracket
+("[9, §5.2.2.1]") now nests a reference-coloured run inside the citation-coloured
+bracket, which is what the spelled-out "[24, Section 5.2]" has always done.
+`NUMERIC_CITE`'s own comment says the whole bracket should read as one citation,
+so this is arguably a pre-existing defect — but it is a separate one, and
+changing shipped behaviour for both forms is not part of colouring `§`.
+
+### R45 (cont.) — the leak audit, and a review of this round's own code
+
+**Private-corpus audit.** The R45 write-up as first committed leaked the very
+thing the policy exists to prevent, and from the document that exposed the bug:
+a verbatim body line, a verbatim equation including a roman multi-word
+identifier, and the page coordinates of both. Removed from `REVIEW_FINDINGS.md`,
+`TESTING.md`, `engine.mjs` and `eqkeep.mjs`; the mechanism is stated without the
+text, which loses nothing, because the mechanism was never document-specific.
+
+The gutter floor is now justified from the PUBLIC corpus instead — at the
+harness's rendering width the two-column gutter runs 3.4–3.7% of the page on ACM
+and USENIX layouts and 1.83% on the IEEE journal one, and single-column papers
+measure 0%. That is a better justification than the private measurement it
+replaces: it shows both why 2% is too high AND that the detector finds nothing
+on a single-column page.
+
+Swept the rest of the repo for the same class. Clean: no corpus path, no
+document names, every `rvNN` an alias with no mapping to content. The quoted
+body text under the early letter labels (`A`–`F`) is from PUBLIC corpus papers,
+confirmed with the user — those were briefly over-redacted here and restored
+verbatim.
+
+**Two defects in this round's own code, found by reviewing it rather than by
+running it.**
+
+1. *A hot loop hoisted above its own early exit* (`engine.mjs`). Widening the
+   equation test moved the per-item symbol tally above the `proseWords` bail, so
+   a tally that resolves a FONT PER ITEM ran over every row of every page
+   instead of only over rows that could still qualify. Restored as a cheap
+   pre-test (`numbered && words.length <= 2`) ahead of the tally, with the prose
+   count hoisted so it is computed once. The decision is unchanged — the same
+   rows qualify, case by case — only the work is.
+
+2. *An untrusted name tree bought unbounded work* (`pdfhints.mjs`). The
+   structure-hint reader iterates the document's destinations and resolves one
+   PAGE-TREE WALK per distinct ref. Nothing bounded the tree, and the extension
+   opens whatever PDF the reader points it at, so a file naming a million
+   destinations bought a million pattern tests and up to a million walks on the
+   main thread. Now capped at 50000 destinations examined, 4000 anchors kept and
+   400 refs resolved — two orders of magnitude above the measured corpus
+   (80–159 destinations, ~20 refs), so no real document reaches one, and a file
+   that does falls back to geometry, which is the right answer for it. Covered
+   by a unit test that asserts the ceiling holds and that usable hints still
+   come back.
+
+**Security review of the round's surface.** No new permissions and no manifest
+change beyond the version; CSP remains `script-src 'self' 'wasm-unsafe-eval'`.
+The new citation hit-targets are `<a>` elements with NO `href` — listeners only
+— positioned from `getBoundingClientRect` numbers, so there is no URL to
+smuggle; every link the card renders still goes through `sanitizeHttpUrl`. No
+`innerHTML` sink takes reference text. The parser's regexes were timed against
+adversarial input (5000 consecutive section symbols, separator and bracket
+storms, deep nested parentheses): worst case 3ms, and the `(?=§)` alternative
+adds no backtracking, since both `REF_ITEM` and `REF_SEP` require at least one
+character and the repeated group therefore cannot spin on an empty match.

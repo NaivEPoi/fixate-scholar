@@ -138,6 +138,24 @@ test("extractStructureHints survives destinations that resolve to nothing", asyn
   assert.equal(hints.headings.get(1).length, 1);
 });
 
+test("extractStructureHints bounds the work a hostile name tree can buy", async () => {
+  // The name tree is the DOCUMENT's, and the extension opens whatever PDF the
+  // reader points it at. The expensive part is one page-tree walk per distinct
+  // ref, so a file naming a ref per destination must not buy one walk each.
+  let calls = 0;
+  const dests = {};
+  for (let i = 1; i <= 3000; i++) {
+    dests[`subsection.1.${i}`] = [{ num: i, gen: 0 }, { name: "XYZ" }, 50, 700, null];
+  }
+  const hints = await extractStructureHints(
+    fakeDoc(dests, { pageIndex: async () => { calls++; return 0; } }),
+  );
+  assert.ok(calls <= 400, `resolved ${calls} refs, expected the ceiling to hold`);
+  // Still returns usable hints rather than giving up entirely.
+  assert.equal(hints.available, true);
+  assert.ok(hints.counts.heading > 0);
+});
+
 test("extractStructureHints asks the page tree once per ref, not once per anchor", async () => {
   // A paper carries 80–160 destinations across ~20 pages; resolving every one
   // separately turns document load into a page-tree walk per anchor.
