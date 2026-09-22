@@ -2004,29 +2004,50 @@ export class TypographyEngine {
               Math.abs(above.h - leadH) <= leadH * 0.2 &&
               lowerWords(aboveBand) >= 3) continue;
         }
-        let prevY = lines[k].y;
+        const capAnchor = this.#hints && pageNumber
+          ? (anchorNear(this.#hints.captions, pageNumber, lines[k].y, Math.max(leadH, 8) * 1.8) ||
+             anchorNear(this.#hints.captions, pageNumber, lead.item.transform[5], Math.max(leadH, 8) * 1.8))
+          : null;
         for (const p of lines[k].items.filter(inBand)) { skip.add(p.div); dbg(p.div, "caption"); }
-        // Absorb the caption's own continuation lines only — captions are
-        // short. A small line cap and a tighter gap stop the sweep from
-        // running on into the body paragraph that follows the caption.
-        for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 4; m++) {
-          const bandM = lines[m].items.filter(inBand);
-          if (!bandM.length) continue;
-          // A paragraph break (the body paragraph after the caption) shows a
-          // slightly larger gap than caption-internal leading; 1.3× catches it
-          // while sparing tight multi-line captions (F2: stop eating body).
-          if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.3) break; // gap
-          if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
-          if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
-          // A new in-text reference sentence ("Figure 8 shows …") is body prose,
-          // not caption continuation — stop absorbing here.
-          if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" "))) break;
-          // A bold run-in heading ("Evaluating collaborative learning.") opens a
-          // new body paragraph below the caption — stop before swallowing it.
-          if (isBold(bandM[0])) break;
-          for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
-          prevY = lines[m].y;
-          absorbed++;
+        if (capAnchor) {
+          // Bounded by the hyperref caption anchor: absorb the contiguous run
+          // of lines at caption size without guessing end conditions.
+          let prevY = lead.item.transform[5];
+          for (let m = k + 1; m < lines.length; m++) {
+            const bandM = lines[m].items.filter(inBand);
+            if (!bandM.length) continue;
+            const curY = bandM[0].item.transform[5];
+            const lineH = Math.max(...bandM.map((p) => p.item.height || 0)) || lines[m].h;
+            if (prevY - curY <= 0 || prevY - curY > Math.max(leadH, lineH) * 1.35) break; // gap
+            if (Math.abs(lineH - leadH) > leadH * 0.2) break; // size change
+            if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
+            for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
+            prevY = curY;
+          }
+        } else {
+          let prevY = lines[k].y;
+          // Absorb the caption's own continuation lines only — captions are
+          // short. A small line cap and a tighter gap stop the sweep from
+          // running on into the body paragraph that follows the caption.
+          for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 4; m++) {
+            const bandM = lines[m].items.filter(inBand);
+            if (!bandM.length) continue;
+            // A paragraph break (the body paragraph after the caption) shows a
+            // slightly larger gap than caption-internal leading; 1.3× catches it
+            // while sparing tight multi-line captions (F2: stop eating body).
+            if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.3) break; // gap
+            if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
+            if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
+            // A new in-text reference sentence ("Figure 8 shows …") is body prose,
+            // not caption continuation — stop absorbing here.
+            if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" "))) break;
+            // A bold run-in heading ("Evaluating collaborative learning.") opens a
+            // new body paragraph below the caption — stop before swallowing it.
+            if (isBold(bandM[0])) break;
+            for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
+            prevY = lines[m].y;
+            absorbed++;
+          }
         }
       }
     }
