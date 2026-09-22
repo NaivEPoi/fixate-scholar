@@ -1095,3 +1095,27 @@ test("findCitations: shapes the split-and-repair parser could not express", () =
     ["Dix-2020", "P. Dix, 2020"],
   ]);
 });
+
+test("findCitations: the citation grammar cannot be made to backtrack", () => {
+  // The shipped v1.2.x pattern described the parenthetical's INTERNAL shape
+  // with a star over branches that all began with a lazy [^();]*?, so a
+  // parenthetical it ultimately REJECTS could be partitioned exponentially many
+  // ways: 122 characters took 7ms, 218 took 4.9 SECONDS, 264 did not finish.
+  // The input is body text from whatever PDF the reader opens.
+  //
+  // Bounded here rather than asserted exactly, because wall-clock on a shared
+  // machine is noisy — but the failure mode was seconds-to-forever on inputs
+  // this size, so any honest threshold separates them.
+  const shapes = [
+    "(" + "Smith 2019, ".repeat(3000) + ")",
+    "(" + "Smith 2019, ".repeat(3000), // never closes: the worst case
+    "(Smith 2019" + ", pp. 1".repeat(3000) + ")",
+    "(" + "n.d.; ".repeat(3000) + "Smith 2019)",
+  ];
+  for (const text of shapes) {
+    const t0 = Date.now();
+    findCitations(text, { includeIndexed: true });
+    const ms = Date.now() - t0;
+    assert.ok(ms < 2000, `took ${ms}ms on ${text.length} chars — backtracking is back`);
+  }
+});
