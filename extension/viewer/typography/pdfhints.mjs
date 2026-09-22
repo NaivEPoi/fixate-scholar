@@ -191,12 +191,21 @@ export async function extractStructureHints(pdfDocument) {
  * tolerance is a line height, not a guess: hyperref's anchor sits at the top
  * of the line it labels, a little above the baseline of the text.
  */
-export function anchorNear(byPage, page, y, tol) {
+export function anchorNear(byPage, page, y, tol, xRange = null) {
   const list = byPage?.get?.(page);
   if (!list?.length) return null;
   let best = null;
   let bestD = Infinity;
   for (const a of list) {
+    // `xRange` is the COLUMN the caller is asking about, and on a two-column
+    // page it is not optional. Baselines pair up across the gutter, so the
+    // nearest anchor in y is routinely the other column's: a heading at
+    // y=400.0 in column two is shadowed by one at y=400.1 in column one, and
+    // the caller's own x-check then rejects that anchor — leaving the real,
+    // correct anchor never considered and the heading treated as unanchored.
+    // Restricting the search to the column is what makes "nearest" mean
+    // nearest among the candidates that could actually belong to this line.
+    if (xRange && (a.x < xRange[0] || a.x >= xRange[1])) continue;
     const d = Math.abs(a.y - y);
     if (d < bestD) { bestD = d; best = a; }
   }

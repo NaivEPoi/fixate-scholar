@@ -181,3 +181,22 @@ test("a document whose only destinations are equations reports no hints", () => 
     assert.equal(hints.equations.get(3).length, 2);
   });
 });
+
+test("anchorNear is scoped to a column, so the other column cannot shadow it", () => {
+  // Baselines pair up across the gutter, so the anchor nearest in y is often
+  // the OTHER column's. Here a right-column line sits at y=400.0: the left
+  // column's anchor is exactly on it, the right column's own anchor is 0.6
+  // above. Unscoped, the left one wins on distance, the caller's x-check then
+  // rejects it, and a genuinely anchored heading reads as unanchored.
+  const byPage = groupByPage([
+    { page: 2, x: 54, y: 400.0, name: "subsection.2.1" },
+    { page: 2, x: 318, y: 399.4, name: "subsection.2.2" },
+  ]);
+  assert.equal(anchorNear(byPage, 2, 400.0, 12)?.name, "subsection.2.1");
+  // Scoped to its own column, the right-column line finds its own anchor.
+  assert.equal(anchorNear(byPage, 2, 400.0, 12, [300, 600])?.name, "subsection.2.2");
+  assert.equal(anchorNear(byPage, 2, 400.0, 12, [0, 300])?.name, "subsection.2.1");
+  // A column with no anchor near that baseline gets nothing, not the other
+  // column's.
+  assert.equal(anchorNear(byPage, 2, 250, 12, [300, 600]), null);
+});
