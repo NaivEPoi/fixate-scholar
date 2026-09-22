@@ -777,6 +777,17 @@ const LOC_PREFIX = "(?:pp?\\.|§{1,2}|¶)";
 const LOC_NUM =
   "(?:\\d+(?:[.\\-\\u2013\\u2014]\\d+)*|[ivxlcdm]+(?:[-\\u2013\\u2014][ivxlcdm]+)*)";
 const LOC_BODY = `${LOC_PREFIX}\\s*${LOC_NUM}`;
+// A locator may list further pages after its mark — "pp. 12, 14" is ONE
+// locator, not a locator followed by a stray number. This is the shape BOTH
+// the citation grammar and the scanner must use: they diverged once before,
+// and when only the scanner learned the list form, "(Smith 2019, pp. 12, 14)"
+// stopped matching the grammar at all and the whole parenthetical went
+// uncited. One name for one shape is the guard against repeating that.
+const LOC_LIST = `${LOC_BODY}(?:\\s*,\\s*${LOC_NUM})*`;
+// Compiled once, anchored, for the scanner's per-token test. It was being
+// built inside the scan loop, which recompiles the same pattern for every
+// token of every citation on every page.
+const LOC_LIST_AT = new RegExp(`^${LOC_LIST}`);
 // An undated work is a legitimate member of a citation list even though it can
 // never key a card, and the list grammar has to admit one. It did not, and the
 // consequence was out of all proportion: in "(Jones 2020; Smith n.d.)" the
@@ -784,10 +795,26 @@ const LOC_BODY = `${LOC_PREFIX}\\s*${LOC_NUM}`;
 // be a citation and the perfectly good Jones 2020 was lost with it. A shape
 // this regex does not know should cost its own segment, never its neighbours.
 const UNDATED_SEG = "[^();]*?(?:n\\.\\s*d\\.|in press|forthcoming)";
-const AUTHOR_YEAR_CITE = new RegExp(
-  `\\(([^()]{2,120}?(?:19|20)\\d{2}[a-z]?(?:\\s*[;,]\\s*(?:${LOC_BODY}|${UNDATED_SEG}|[^();]*?(?:19|20)\\d{2}[a-z]?))*)\\)`,
-  "g",
-);
+// Just the parenthetical. Everything about its INTERNAL shape is the scanner's
+// job now, and trying to describe that shape here was both wrong and dangerous.
+//
+// Wrong, because the grammar gate-kept the whole parenthetical: any segment it
+// could not describe — an undated work, a roman page range, a comma page list —
+// cost every citation beside it, not just itself. Each of those was reported as
+// a separate defect and fixed by adding another alternative.
+//
+// Dangerous, because those alternatives were a star over branches that all
+// began with a lazy `[^();]*?`, so a parenthetical the pattern ultimately
+// REJECTS can be partitioned exponentially many ways. Measured on the shipped
+// v1.2.x pattern: 122 characters took 7ms, 218 took 4.9 SECONDS, and 264 did
+// not finish. The input is body text from whatever PDF the reader opens, so
+// that is a hang, not a slow path. Adding an alternative made it worse, which
+// is the shape of the whole problem.
+//
+// A bounded negated class with no nested quantifier cannot backtrack like that.
+// The year test below, and the scanner's own refusal to key anything without a
+// surname, are what decide whether this is a citation at all.
+const AUTHOR_YEAR_CITE = /\(([^()]{2,160})\)/g;
 
 // NARRATIVE author-year (natbib \citet): the author names are running PROSE and
 // only the year is bracketed — "Church [1936]", "Vergis et al. [1986]",
@@ -898,6 +925,10 @@ export function findCitations(text, options = {}) {
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, keySpans: spans, precededByIdentifier });
   }
   for (const m of text.matchAll(AUTHOR_YEAR_CITE)) {
+    // A parenthetical with no year cannot hold an author-year citation, and
+    // this is where that used to be enforced — inside the pattern, at the cost
+    // above. One linear test replaces it.
+    if (!YEAR.test(m[1])) continue;
     const keys = [];
     const spans = [];
     // Each separated citation is a reference of its own, and the run of text it
@@ -924,7 +955,18 @@ export function findCitations(text, options = {}) {
     let cur = null; // the citation being built
     let prev = null; // the last completed one, for a locator that trails it
     let pos = 0;
-    const closeOn = (i) => { if (cur) { cur.end = i; prev = cur; cur = null; } };
+    // A citation closes at the START of whatever follows it, so the gap in
+    // between would otherwise land inside its hit-target. Walk back over it: a
+    // target that begins on the space before a word is one the reader can hit
+    // without pointing at anything.
+    const closeOn = (i) => {
+      if (!cur) return;
+      let e = i;
+      while (e > cur.at && /\s/.test(inner[e - 1])) e--;
+      cur.end = e;
+      prev = cur;
+      cur = null;
+    };
     while (pos < inner.length) {
       const rest = inner.slice(pos);
       const ws = /^\s+/.exec(rest);
@@ -936,7 +978,7 @@ export function findCitations(text, options = {}) {
       // A locator belongs to the citation it follows, and swallows any comma
       // list of further pages so "pp. 12, 14" stays one locator rather than
       // leaking "14" into the next citation.
-      const loc = new RegExp(`^${LOC_BODY}(?:\\s*,\\s*${LOC_NUM})*`).exec(rest);
+      const loc = LOC_LIST_AT.exec(rest);
       if (loc) {
         // `prev` as well as `cur`, because the comma that introduced the
         // locator has usually just closed the citation it belongs to.
@@ -968,7 +1010,13 @@ export function findCitations(text, options = {}) {
           // on the comma dropped the second entirely.
           const owner = cur ?? prev;
           if (owner?.surname) {
-            cites.push({ at: pos, end: pos + year.length, year, surname: owner.surname });
+            const extra = { at: pos, end: pos + year.length, year, surname: owner.surname };
+            cites.push(extra);
+            // It becomes the citation a trailing locator belongs to: in
+            // "(Smith 2019, 2020, p. 15)" the page is the 2020 work's, and
+            // leaving `prev` on the 2019 entry stretched THAT one's
+            // hit-target over the locator instead.
+            prev = extra;
           }
         }
         pos += year.length;
