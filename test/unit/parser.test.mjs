@@ -990,3 +990,48 @@ test("parseReferences returns both sections' entries, tagged and in order", () =
   // A bare "[1]" with no page context resolves to the ARTICLE's entry.
   assert.match(resolveCitation(["1"], entries)[0].raw, /A protocol analysis paper/);
 });
+
+test("findCitations: a locator is one shape, shared by the regex and the grouping", () => {
+  // The citation regex decides whether a parenthetical IS a citation; the
+  // grouping decides who a locator belongs to. They used to carry separate
+  // notions of the same thing, and every divergence was a defect.
+  const slice = (t) => {
+    const [c] = findCitations(t, { includeIndexed: true });
+    return c ? (c.keySpans ?? []).map((k) => [k.key, t.slice(k.start, k.end)]) : null;
+  };
+
+  // Non-digit locators: the regex accepted only digits after "p.", so these
+  // matched nothing at all and produced no card.
+  assert.deepEqual(slice("see (Smith 2019, p. ix) here"), [["Smith-2019", "Smith 2019, p. ix"]]);
+  assert.deepEqual(slice("see (Smith 2019, § 4) here"), [["Smith-2019", "Smith 2019, § 4"]]);
+  assert.deepEqual(slice("see (Smith 2019, ¶ 2) here"), [["Smith-2019", "Smith 2019, ¶ 2"]]);
+
+  // A dotted or ranged section number is still one locator, and still belongs
+  // to the citation before it.
+  assert.deepEqual(slice("see (Smith 2019, § 4.2; Jones 2020) here"), [
+    ["Smith-2019", "Smith 2019, § 4.2"],
+    ["Jones-2020", "Jones 2020"],
+  ]);
+
+  // An APA initial is NOT a locator. Folded case with the roman numerals in one
+  // character class, "P. Dix" parsed as page mark + numerals and swallowed the
+  // citation after it, losing Dix-2020 entirely.
+  assert.deepEqual(slice("see (Smith, 2019; P. Dix, 2020) here"), [
+    ["Smith-2019", "Smith, 2019"],
+    ["Dix-2020", "P. Dix, 2020"],
+  ]);
+});
+
+test("findCitations: an undated marker can arrive after the name it belongs to", () => {
+  // APA punctuates it — "(Smith, n.d.; Jones 2020)" cuts to "Smith" / " n.d." /
+  // " Jones 2020" — so testing only the piece that OPENED the group left the
+  // group open, and it swallowed Jones under the invented key Smith-2020.
+  for (const text of [
+    "see (Smith, n.d.; Jones 2020) here",
+    "see (Smith n.d.; Jones 2020) here",
+    "see (Smith, in press; Jones 2020) here",
+  ]) {
+    const [c] = findCitations(text, { includeIndexed: true });
+    assert.deepEqual(c.keys, ["Jones-2020"], text);
+  }
+});
