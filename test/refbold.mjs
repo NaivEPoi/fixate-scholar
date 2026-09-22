@@ -19,7 +19,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { browserPath, extensionDir } from "./lib/env.mjs";
+import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
 
 const ARGS = process.argv.slice(2);
 const POS = ARGS.filter((a) => !a.startsWith("--"));
@@ -235,7 +235,7 @@ try {
   process.exitCode = 1;
 } finally {
   try { ws?.close(); } catch {}
-  browser.kill();
+  killBrowser(browser);
   await sleep(500);
   try { rmSync(userDataDir, { recursive: true, force: true }); } catch {}
 }

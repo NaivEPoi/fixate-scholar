@@ -17,6 +17,7 @@
 
 import { emphasizeParts } from "./segmenter.mjs";
 import { findCitations } from "../references/parser.mjs";
+import { anchorNear } from "./pdfhints.mjs";
 
 const CHUNK = 150;
 const ABSTRACT = /^\s*abstract\s*$/i;
@@ -201,6 +202,12 @@ export class TypographyEngine {
   #furnitureBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — running heads/feet
   #contentStart = null; // { page, y, h } — the Abstract heading; front matter above it
   #bodyHeight = null; // document-wide body-text height (from the refs extractor)
+  // What the FILE says about its own structure: hyperref's named destinations
+  // for headings, float captions and numbered equations, in text-item user
+  // space (see typography/pdfhints.mjs). null, or `available: false`, whenever
+  // the document states nothing — the geometry rules below are unchanged and
+  // remain the only path for those documents.
+  #hints = null;
   #ascentCache = new Map(); // fontFamily -> browser ascent ratio (baseline align)
   #spaceInkCache = new Map(); // famKey -> the embedded face PAINTS U+0020
   #measureCtx = null; // offscreen 2d context for ascent measurement
@@ -252,6 +259,7 @@ export class TypographyEngine {
     this.#furnitureBoxes = null;
     this.#contentStart = null;
     this.#bodyHeight = null;
+    this.#hints = null;
     this.#pageFonts.clear();
     this.#inkRetryPages.clear();
     this.#ascentCache.clear();
@@ -271,6 +279,26 @@ export class TypographyEngine {
     if (!h || h === this.#bodyHeight) return Promise.resolve();
     this.#bodyHeight = h;
     if (!this.#enabled || this.#batching) return Promise.resolve();
+    this.#restoreAll();
+    return this.#processAll();
+  }
+
+  /**
+   * What the document states about its own structure — hyperref's named
+   * destinations for headings, float captions and numbered equations, already
+   * resolved to page + user-space position (typography/pdfhints.mjs).
+   *
+   * These are PRIORS for the block classifier, not a replacement for it: the
+   * geometry rules still decide everything the file is silent about, and a
+   * document with no name tree (a pre-hyperref paper) is classified exactly as
+   * before. Nothing is ever treated as body text because a hint is missing.
+   */
+  setStructureHints(hints) {
+    this.#hints = hints?.available ? hints : null;
+    globalThis.__fxHints = this.#hints // test introspection
+      ? { ...this.#hints.counts, pages: this.#hints.headings.size + this.#hints.captions.size }
+      : null;
+    if (!this.#enabled || !this.#hints || this.#batching) return Promise.resolve();
     this.#restoreAll();
     return this.#processAll();
   }
@@ -624,7 +652,7 @@ export class TypographyEngine {
    *   4. classify each block; everything that is not body text is skipped.
    * Captions are skipped whole — treated as part of their figure/table.
    */
-  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0 = 0, isMath = () => false) {
+  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0 = 0, isMath = () => false, pageNumber = null) {
     const skip = new Set();
     // Divs whose SURROUNDINGS carry structural canvas art hugging the text (a
     // displayed formula's box frame): masks of neighbouring lines must clamp a
@@ -1289,6 +1317,74 @@ export class TypographyEngine {
         // Body text → process. Strip a leading run-in heading if present.
         if (b.leadBold || HEAD_LEAD.test(b.lead)) skipLeadRun(b);
       }
+
+      // A DISPLAYED EQUATION THE FONT TEST CANNOT SEE.
+      //
+      // `isDisplayEquation` and `isDisplayMathRow` both decide from the math
+      // FACE, and on a great many papers the face is not there to read: PDF.js
+      // resolves an equation's symbols to no font at all (the text layer draws
+      // them in a generic substitute), so the math ratio of a row full of
+      // mathematics reads as ZERO and the row is handed to the body filter.
+      //
+      // Each symbol is then rejected individually — "special-or-short", under
+      // two characters or carrying no Latin letter — and the row looks handled.
+      // The exception is the one kind of token LaTeX deliberately sets in
+      // upright ROMAN: \exp, \cos, \min, \max, \log, \mod and the other
+      // operator names are body-face text by construction, indistinguishable
+      // from prose by any font test. So the operator name alone is processed,
+      // and emphasis is painted inside a displayed equation — on one equation
+      // and not the next, which is exactly what made the defect look arbitrary
+      // when it was found by eye (R43).
+      //
+      // Classify the ROW by what it is made of instead. A row qualifies only
+      // when all three hold: it carries a relation/operator glyph, it runs no
+      // prose, and it is overwhelmingly built from items the body filter would
+      // reject anyway. A prose line with inline math fails the prose test, so
+      // "we apply exp(2πiac/q) here" is untouched; an equation row keeps its
+      // operator names with the symbols they belong to.
+      for (const b of blocks) {
+        for (const r of b.rows) {
+          if (r.items.length < 3) continue;
+          const rowText = r.items.map((p) => p.item.str).join("");
+          // Space-joined for the WORD analysis below. Items carry no trailing
+          // space, so joining them bare runs neighbouring symbols together —
+          // "exp" and "brc", two separate items of equation (6.6), become the
+          // six-letter "expbrc" and read as prose.
+          const rowTrim = r.items.map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim();
+          // A trailing equation NUMBER — "(5.6)", "(12)", "(A.3)" — is the
+          // typesetting convention's own statement that the row is a displayed
+          // equation, and the strongest tell there is.
+          const numbered = /\((?:[A-Z][.-])?\d+(?:\.\d+)*\)\s*$/.test(rowTrim);
+          // A numbered row must still look like mathematics rather than a
+          // sentence that happens to end in a parenthesised number: nothing
+          // long enough to be a word, and at most a couple of short ones.
+          //
+          // This is what lets a variable PRODUCT through. Equation (6.6) reads
+          // "exp brc + kc + bd − c ( p − 1) . (6.6)" — `brc`, `kc` and `bd`
+          // are variables written side by side, not words, but `proseWords`
+          // counts `brc` as prose and disqualified the whole row, which is how
+          // this equation kept its emphasis after (5.6) was fixed.
+          const words = (rowTrim.match(/[a-zà-ÿ]{3,}/g) ?? []).filter((w) => !MATH_OP.test(w));
+          const eqNumbered = numbered && words.length <= 2 && !words.some((w) => w.length >= 5);
+          if (proseWords(r) > 0 && !eqNumbered) continue;
+          let symbolish = 0;
+          for (const p of r.items) {
+            const t = p.item.str.trim();
+            if (!t || t.length < 2 || !/[A-Za-zÀ-ɏ]/.test(t) || isMath(p) || isSpecial(p)) symbolish++;
+          }
+          const ratio = symbolish / r.items.length;
+          // For an UNNUMBERED row MATH_SIGNAL is the clearest tell, but it
+          // lists relations and carries neither the `+` nor the `∣` that
+          // equation (5.6) is built from — so a row with no signal at all has
+          // to be almost entirely symbols before it qualifies.
+          if (!(eqNumbered || ratio >= 0.85 || ((MATH_SIGNAL.test(rowText) || numbered) && ratio >= 0.7))) continue;
+          for (const p of r.items) {
+            if (skip.has(p.div)) continue;
+            skip.add(p.div);
+            dbg(p.div, "row-eqn");
+          }
+        }
+      }
     }
 
     // Confirmed table rows (skipped via cells / aligned starts) — collected for
@@ -1629,11 +1725,36 @@ export class TypographyEngine {
         const bx0 = twoColumn && ax >= centerX ? centerX : vx0;
         const bx1 = twoColumn && ax < centerX ? centerX : vx0 + pageW;
         const band = its.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+        const tol = Math.max((lead.item.height || 8) * 1.2, 12);
+        const hAnchor = pageNumber && this.#hints?.headings
+          ? anchorNear(this.#hints.headings, pageNumber, lead.item.transform[5], tol)
+          : null;
+        const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol;
         if (isAlgoLead(leadStr)) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
           // prose between bold keywords.
           for (const p of band) { skip.add(p.div); dbg(p.div, "line-algo"); }
+        } else if (atHeadingAnchor) {
+          let head = runinHeadRun(band, bx0, bx1);
+          if (!head) {
+            for (let j = 0; j < band.length - 1; j++) {
+              const t = band[j].item.str.trim();
+              const isTerminator =
+                (/[.:]$/.test(t) && /[A-Za-zÀ-ɏ]/.test(t)) ||
+                ((t === ":" || t === ".") && j > 0 && /[A-Za-zÀ-ɏ]/.test(band[j - 1].item.str.trim()));
+              if (isTerminator && (hAnchor.depth >= 3 || lowerWords(band.slice(j + 1)) >= 2)) {
+                head = band.slice(0, j + 1);
+                break;
+              }
+            }
+          }
+          if (!head) head = band;
+          for (const p of head) {
+            skip.add(p.div);
+            dbg(p.div, "line-head");
+            if (isItalic(lead)) protect.add(p.div);
+          }
         } else if (HEAD_LEAD.test(leadStr)) {
           if (lowerWords(band) <= 3) {
             // A NUMBERED RUN-IN heading shares its line with the paragraph it
@@ -1883,29 +2004,50 @@ export class TypographyEngine {
               Math.abs(above.h - leadH) <= leadH * 0.2 &&
               lowerWords(aboveBand) >= 3) continue;
         }
-        let prevY = lines[k].y;
+        const capAnchor = this.#hints && pageNumber
+          ? (anchorNear(this.#hints.captions, pageNumber, lines[k].y, Math.max(leadH, 8) * 1.8) ||
+             anchorNear(this.#hints.captions, pageNumber, lead.item.transform[5], Math.max(leadH, 8) * 1.8))
+          : null;
         for (const p of lines[k].items.filter(inBand)) { skip.add(p.div); dbg(p.div, "caption"); }
-        // Absorb the caption's own continuation lines only — captions are
-        // short. A small line cap and a tighter gap stop the sweep from
-        // running on into the body paragraph that follows the caption.
-        for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 4; m++) {
-          const bandM = lines[m].items.filter(inBand);
-          if (!bandM.length) continue;
-          // A paragraph break (the body paragraph after the caption) shows a
-          // slightly larger gap than caption-internal leading; 1.3× catches it
-          // while sparing tight multi-line captions (F2: stop eating body).
-          if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.3) break; // gap
-          if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
-          if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
-          // A new in-text reference sentence ("Figure 8 shows …") is body prose,
-          // not caption continuation — stop absorbing here.
-          if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" "))) break;
-          // A bold run-in heading ("Evaluating collaborative learning.") opens a
-          // new body paragraph below the caption — stop before swallowing it.
-          if (isBold(bandM[0])) break;
-          for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
-          prevY = lines[m].y;
-          absorbed++;
+        if (capAnchor) {
+          // Bounded by the hyperref caption anchor: absorb the contiguous run
+          // of lines at caption size without guessing end conditions.
+          let prevY = lead.item.transform[5];
+          for (let m = k + 1; m < lines.length; m++) {
+            const bandM = lines[m].items.filter(inBand);
+            if (!bandM.length) continue;
+            const curY = bandM[0].item.transform[5];
+            const lineH = Math.max(...bandM.map((p) => p.item.height || 0)) || lines[m].h;
+            if (prevY - curY <= 0 || prevY - curY > Math.max(leadH, lineH) * 1.35) break; // gap
+            if (Math.abs(lineH - leadH) > leadH * 0.2) break; // size change
+            if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
+            for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
+            prevY = curY;
+          }
+        } else {
+          let prevY = lines[k].y;
+          // Absorb the caption's own continuation lines only — captions are
+          // short. A small line cap and a tighter gap stop the sweep from
+          // running on into the body paragraph that follows the caption.
+          for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 4; m++) {
+            const bandM = lines[m].items.filter(inBand);
+            if (!bandM.length) continue;
+            // A paragraph break (the body paragraph after the caption) shows a
+            // slightly larger gap than caption-internal leading; 1.3× catches it
+            // while sparing tight multi-line captions (F2: stop eating body).
+            if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.3) break; // gap
+            if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
+            if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
+            // A new in-text reference sentence ("Figure 8 shows …") is body prose,
+            // not caption continuation — stop absorbing here.
+            if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" "))) break;
+            // A bold run-in heading ("Evaluating collaborative learning.") opens a
+            // new body paragraph below the caption — stop before swallowing it.
+            if (isBold(bandM[0])) break;
+            for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
+            prevY = lines[m].y;
+            absorbed++;
+          }
         }
       }
     }
@@ -2495,7 +2637,7 @@ export class TypographyEngine {
       );
     };
     if (globalThis.__fxDebug) globalThis.__fxCurPage = pageNumber;
-    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath);
+    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath, pageNumber);
     for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
     // Tag bibliography-region spans so the references feature can skip annotating
     // the reference list's own "[N]" entry markers with citation cards (F1).

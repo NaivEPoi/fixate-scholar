@@ -22,7 +22,7 @@
 // Usage: node test/fontkeep.mjs --url=<pdf> [--label=name] [--page=N | --all]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
-import { browserPath, extensionDir, profileDir } from "./lib/env.mjs";
+import { browserPath, extensionDir, profileDir, killBrowser } from "./lib/env.mjs";
 
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 const URL0 = arg("url"), LABEL = arg("label", "doc"), PAGE = parseInt(arg("page", "6"), 10), ZOOM = arg("zoom", "1.8");
@@ -158,5 +158,5 @@ try {
   console.log(line);
   appendFileSync("test/out/fontkeep.log", line + String.fromCharCode(10));
 } catch (e) { console.error(`${LABEL} probe error: ${e.message || e}`); process.exitCode = 1; }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500);
+finally { try { ws?.close(); } catch {} killBrowser(browser); await sleep(500);
   try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} process.exit(process.exitCode ?? 0); }

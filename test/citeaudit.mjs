@@ -13,7 +13,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { browserPath, extensionDir } from "./lib/env.mjs";
+import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
 
 const ARGS = process.argv.slice(2);
 // Positional URL, or --url= like every other harness here. Accepting only the
@@ -176,4 +176,4 @@ try {
   }
   if (totalActive || totalNoHit) process.exitCode = 1;
 } catch (e) { console.error('citeaudit error:', e.message || e); process.exitCode = 1; }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} process.exit(process.exitCode ?? 0); }
+finally { try { ws?.close(); } catch {} killBrowser(browser); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} process.exit(process.exitCode ?? 0); }
