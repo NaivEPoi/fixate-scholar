@@ -4218,3 +4218,85 @@ adversarial input (5000 consecutive section symbols, separator and bracket
 storms, deep nested parentheses): worst case 3ms, and the `(?=§)` alternative
 adds no backtracking, since both `REF_ITEM` and `REF_SEP` require at least one
 character and the repeated group therefore cannot spin on an empty match.
+
+## R46 — eight independent review passes, and the defect none of them was looking for
+
+An external reviewer (a second agentic CLI, run read-only in a detached
+worktree) reviewed this release eight times, each pass seeing the previous
+reports and the diff answering them. What it found, and what that cost, is
+worth recording — including where it was wrong.
+
+### The tally
+
+Rounds 1-8 returned 3, 3, 2, 0, 5, 2, 2 and 0 material defects. The two zeros
+are not equivalent: round 4 returned SHIP and was WRONG, and round 8 returned
+SHIP and held up. Round 4's verdict rested on an "adversarial stress analysis"
+that traced the parser on paper and pronounced each shape correct. Two of those
+shapes were defects when EXECUTED rather than reasoned about — a roman-numeral
+page locator and an undated citation, each losing a real citation. Tracing a
+state machine agrees with whatever you already believe about it. Every claimed
+finding after that was run before it was accepted, and every claimed
+non-finding too.
+
+Round 1 also built a finding on a FABRICATED quotation, stating REF_LEADER
+contained a paragraph mark it has never contained. Round 2 caught this when
+asked to re-read what it cited. Quoting the code, not describing it, was made a
+standing instruction from then on.
+
+### The defect none of the rounds was aimed at
+
+Round 7's brief asked for a fresh ReDoS look because the scanner was new code.
+The scanner was fine. `AUTHOR_YEAR_CITE` was not, and it had shipped in v1.2.x:
+it described the parenthetical's internal shape with a star over alternatives
+that all began with a lazy `[^();]*?`, so a parenthetical the pattern REJECTS
+partitions exponentially. On the pattern exactly as shipped, unmodified —
+122 characters 7ms, 218 characters 4.9 SECONDS, 264 characters never finished.
+The input is body text from whatever PDF the reader opens.
+
+It was found because the brief named the class, not because a round happened
+upon it. That is the argument for asking a reviewer for specific classes of
+defect rather than for "anything wrong".
+
+### Why the parser was rewritten
+
+Rounds 3-7 each repaired the previous round's fix to the same function, and
+three of those repairs introduced the next defect. Round 6 was asked directly
+whether the code was sound or accumulating patches, and answered with three
+shapes the approach could not express: a comma page list ("pp. 12, 14" — "14"
+leaked into the next citation's hit-target), a compressed multi-year citation
+("(Smith 2019, 2020)" — the second work dropped), and a narrative prefix
+("(See Smith 2019)" — key "See-2019", a reference that cannot exist). All three
+reproduced.
+
+The cause is that a separator does not mean one thing. A comma ends a citation
+in "(Smith 2019, Jones 2020)", joins authors in "(Smith, Jones & Roe 2019)",
+introduces the year in APA's "(Smith et al., 2020)", and continues a page list
+in "pp. 12, 14". No rule over the pieces can recover what the comma meant,
+because the pieces are what the comma destroyed.
+
+The parenthetical is now scanned once, left to right, classifying years,
+locators, undated markers, initials and names. The evidence for adopting it:
+all 242 pre-existing tests passed UNCHANGED, including every test written to pin
+the old parser's behaviour. It satisfies them rather than needing them relaxed.
+
+### The trade that was accepted, and what is still unmeasured
+
+Removing the ReDoS meant the grammar stopped describing the parenthetical's
+internal shape. It now finds a parenthetical and applies one linear year test;
+the scanner decides everything else. That removed two defect classes at once —
+the ReDoS, and the class where a segment the grammar could not describe cost
+every citation BESIDE it rather than itself.
+
+It also widens what reaches the scanner. Measured against the shipped grammar,
+most prose false positives are not new — "(completed in May 2020)" and "(born
+in Berlin in 1985)" matched the old pattern too — but the shape with prose
+CONTINUING AFTER the year is: "(born in Berlin in 1985 and later)" and "(we
+used ImageNet 2012 for pretraining)" were rejected before and are keyed now.
+
+Only a false positive that RESOLVES to a bibliography entry is user-visible: an
+unresolved author-year parenthetical yields no card, so no colouring and no
+hit-target. Whether these resolve depends on the document's own bibliography,
+which is exactly what invented strings cannot tell us — and adding another
+heuristic on invented strings is the failure mode that produced rounds 3-7. So
+this is left for `citepoint` over the two corpora to measure, and tightened, if
+at all, on that evidence.
