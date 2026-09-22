@@ -827,6 +827,12 @@ const CITE_LOCATOR = new RegExp(`^\\s*${LOC_BODY}\\s*$`);
 // AFTER it. "(Smith n.d.; Jones 2020)" did exactly that, inventing the key
 // Smith-2020 for a work nobody cited and losing Jones-2020 altogether.
 const UNDATED = /(?:\bn\.\s*d\.|\bin press|\bforthcoming)/i;
+// The same markers anchored at a scan position.
+const UNDATED_TOKEN = /^(?:n\.\s*d\.|in press|forthcoming)/i;
+// Capitalised words that OPEN a parenthetical without being anybody's surname.
+// "(See Smith 2019)" took the first capitalised word and produced the key
+// "See-2019" — a reference that cannot exist, so the card never resolved.
+const CITE_PREFIX = /^(?:See|Cf|Compare|Also|But|And|In|E\.g|I\.e|Viz|Following|After|Per|From|Adapted|Reproduced|Source|Data|Note|Based)$/i;
 
 // BibTeX "alpha"-style citation keys in brackets, matching ALPHA_MARKER's
 // entry labels — "[WL92]", "[SRC07, SRK10]", "[GHI+21]". Ends in exactly two
@@ -898,79 +904,112 @@ export function findCitations(text, options = {}) {
     // was written as is what the reader points at: "(Smith 2020; Jones 2021)"
     // hovers as two different cards, one per name.
     //
-    // Splitting on ";" alone missed every paper that separates with a COMMA —
-    // "(Smith 2019, Jones 2020)" yielded the single key Smith-2019, so Jones
-    // got no card at all and pointing anywhere in the parenthesis, Jones
-    // included, opened Smith's. AUTHOR_YEAR_CITE accepts either separator, so
-    // this has to as well.
+    // This SCANS the parenthetical rather than cutting it on separators and
+    // repairing the cuts. The cutting approach was rewritten four times in a
+    // row, each repair creating the next defect, because a separator does not
+    // mean one thing: "," ends a citation in "(Smith 2019, Jones 2020)", joins
+    // authors in "(Smith, Jones & Roe 2019)", introduces a year in APA's
+    // "(Smith et al., 2020)", and continues a page list in "pp. 12, 14". No
+    // rule over the pieces can recover what the comma meant, because the
+    // pieces are what the comma destroyed. Three shapes it could never express:
+    // a second year for one author "(Smith 2019, 2020)", a comma page list,
+    // and a narrative prefix "(See Smith 2019)", which yielded the key
+    // "See-2019" for a reference that cannot exist.
     //
-    // A comma is ambiguous where a semicolon is not: it separates two citations
-    // in "(Smith 2019, Jones 2020)" and joins authors of ONE in "(Smith, Jones
-    // & Roe 2019)". The year is what tells them apart — a piece carrying no
-    // year of its own is not a citation, so it is merged forward into the piece
-    // that follows it, and the author list stays whole.
+    // So: walk the text once, classify each token, and let a citation end only
+    // where the evidence says it does.
     const base = m.index + m[0].indexOf(m[1]);
-    const cuts = [];
-    {
-      const sep = /[;,]/g;
-      let last = 0;
-      for (let s; (s = sep.exec(m[1])); ) {
-        cuts.push({ text: m[1].slice(last, s.index), at: last });
-        last = s.index + 1;
+    const inner = m[1];
+    const cites = []; // { at, end, year, surname }
+    let cur = null; // the citation being built
+    let prev = null; // the last completed one, for a locator that trails it
+    let pos = 0;
+    const closeOn = (i) => { if (cur) { cur.end = i; prev = cur; cur = null; } };
+    while (pos < inner.length) {
+      const rest = inner.slice(pos);
+      const ws = /^\s+/.exec(rest);
+      if (ws) { pos += ws[0].length; continue; }
+
+      // A semicolon is unambiguous: it always ends the citation.
+      if (rest[0] === ";") { closeOn(pos); pos += 1; continue; }
+
+      // A locator belongs to the citation it follows, and swallows any comma
+      // list of further pages so "pp. 12, 14" stays one locator rather than
+      // leaking "14" into the next citation.
+      const loc = new RegExp(`^${LOC_BODY}(?:\\s*,\\s*${LOC_NUM})*`).exec(rest);
+      if (loc) {
+        // `prev` as well as `cur`, because the comma that introduced the
+        // locator has usually just closed the citation it belongs to.
+        const owner = cur ?? prev;
+        if (owner) owner.end = pos + loc[0].length;
+        pos += loc[0].length;
+        continue;
       }
-      cuts.push({ text: m[1].slice(last), at: last });
+
+      const und = UNDATED_TOKEN.exec(rest);
+      if (und) {
+        // Cannot key a card, but it IS a citation's date slot: it closes the
+        // author run so the next name starts its own citation instead of being
+        // read as more of this one.
+        closeOn(pos + und[0].length);
+        pos += und[0].length;
+        continue;
+      }
+
+      const yr = /^(?:19|20)\d{2}[a-z]?\b/.exec(rest);
+      if (yr) {
+        const year = yr[0];
+        if (cur && !cur.year) {
+          cur.year = year;
+          cur.end = pos + year.length;
+        } else {
+          // A year with no author of its own belongs to the author before it:
+          // "(Smith 2019, 2020)" cites two works by one author, and splitting
+          // on the comma dropped the second entirely.
+          const owner = cur ?? prev;
+          if (owner?.surname) {
+            cites.push({ at: pos, end: pos + year.length, year, surname: owner.surname });
+          }
+        }
+        pos += year.length;
+        continue;
+      }
+
+      // A comma only ENDS something once the citation it belongs to is
+      // complete; before that it is punctuation inside an author list.
+      if (rest[0] === "," || rest[0] === "&") {
+        if (cur?.year) closeOn(pos);
+        pos += 1;
+        continue;
+      }
+
+      const word = /^[^\s,;&]+/.exec(rest)[0];
+      if (cur?.year) closeOn(pos); // a new name after a complete citation
+      const bare = word.replace(/[.,]+$/, "");
+      // An INITIAL is not a surname. APA prints "P. Dix, 2020", and taking the
+      // first capitalised token made the key "P-2020", which resolves to
+      // nothing. Initials still belong to the citation's run — they just never
+      // name it.
+      const isInitial = /^\p{Lu}$/u.test(bare);
+      const isName = /^\p{Lu}[\p{L}'’-]*$/u.test(bare) && !NOT_A_SURNAME.test(bare);
+      if (isName && !CITE_PREFIX.test(bare)) {
+        if (!cur) {
+          cur = { at: pos, end: pos + word.length, year: null, surname: isInitial ? null : bare };
+          cites.push(cur);
+        } else {
+          cur.end = pos + word.length;
+          if (!cur.surname && !isInitial) cur.surname = bare;
+        }
+      } else if (cur) {
+        cur.end = pos + word.length; // a connector inside the run ("et al.")
+      }
+      pos += word.length;
     }
-    // A yearless piece attaches to a neighbour, and WHICH neighbour depends on
-    // whether a citation has been seen yet. Before the first year it is an
-    // author prefix and belongs to what FOLLOWS — "Smith" in "(Smith, Jones &
-    // Roe 2019)". After a citation it is that citation's trailing matter and
-    // belongs to what PRECEDES — the "p. 12" of "(Smith 2019, p. 12; Jones
-    // 2020)", which AUTHOR_YEAR_CITE admits between citations. Merging every
-    // yearless piece forward put Smith's page number inside Jones's span, so
-    // pointing at Smith's locator opened Jones's card.
-    const groups = [];
-    for (const c of cuts) {
-      const cur = groups[groups.length - 1];
-      const hasYear = YEAR.test(c.text);
-      const end = c.at + c.text.length;
-      if (cur && !cur.done && !cur.undated) {
-        cur.end = end; // still gathering one citation's authors
-        cur.done = hasYear;
-        // The marker can arrive in a LATER piece than the name, because APA
-        // punctuates it: "(Smith, n.d.; Jones 2020)" cuts to "Smith" / " n.d."
-        // / " Jones 2020", and testing only the piece that opened the group
-        // left the flag false — so the group stayed open and swallowed Jones,
-        // which is the same invented key the flag exists to prevent.
-        cur.undated = cur.undated || UNDATED.test(c.text);
-      } else if (cur && !hasYear && CITE_LOCATOR.test(c.text)) {
-        // Attaches BACKWARD only when it actually looks like a locator. A
-        // yearless piece after a citation is usually the next citation's
-        // AUTHOR, because APA puts a comma between author and year:
-        // "(Smith et al., 2020; Doe, 2019)" cuts to "Smith et al." / "2020" /
-        // "Doe" / "2019", and merging "Doe" backward lost Doe-2019 entirely.
-        cur.end = end;
-      } else {
-        groups.push({ at: c.at, end, done: hasYear, undated: !hasYear && UNDATED.test(c.text) });
-      }
-    }
-    for (const g of groups) {
-      const part = m[1].slice(g.at, g.end);
-      const partAt = g.at;
-      const year = YEAR.exec(part)?.[0];
-      const surname = /\p{Lu}[\p{L}'’-]+/u.exec(part)?.[0];
-      if (year && surname && !NOT_A_SURNAME.test(surname)) {
-        const key = `${surname}-${year}`;
-        keys.push(key);
-        // The separator's own spacing belongs to neither citation, so the span
-        // is the trimmed run — a hit-target that starts on the space before a
-        // name is one the reader can hit without pointing at anything.
-        const lead = part.length - part.trimStart().length;
-        spans.push({
-          key,
-          start: base + partAt + lead,
-          end: base + partAt + part.trimEnd().length,
-        });
-      }
+    for (const c of cites) {
+      if (!c.year || !c.surname) continue;
+      const key = `${c.surname}-${c.year}`;
+      keys.push(key);
+      spans.push({ key, start: base + c.at, end: base + c.end });
     }
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, keySpans: spans });
   }
