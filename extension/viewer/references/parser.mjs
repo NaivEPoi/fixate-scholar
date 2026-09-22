@@ -784,7 +784,19 @@ const NOT_A_SURNAME = /^(Table|Figure|Fig|Section|Sec|Eq|Equation|Chapter|Append
 // AUTHOR_YEAR_CITE admits: "(Smith 2019, p. 12; Jones 2020)". It belongs to the
 // citation before it, unlike every other yearless piece, which belongs to the
 // citation after it.
-const CITE_LOCATOR = /^\s*(?:pp?\.|§{1,2}|¶)\s*[\d–—-]+\s*$/i;
+// The number part accepts ROMAN numerals as well as arabic: front matter is
+// paginated "p. ix", and leaving those out put "(Smith 2019, p. ix; Jones
+// 2020)" back in exactly the failure the arabic case was fixed for — Smith's
+// locator inside Jones's span, opening Jones's card. The `pp.`/`§`/`¶` prefix
+// is what keeps this from matching an ordinary author token, so widening the
+// digits costs nothing.
+const CITE_LOCATOR = /^\s*(?:pp?\.|§{1,2}|¶)\s*[\divxlcdm–—-]+\s*$/i;
+// An undated citation — APA's "n.d.", and the "in press"/"forthcoming" forms.
+// AUTHOR_YEAR_CITE needs a 4-digit year, so one of these can never key a card
+// of its own; what it must NOT do is act as the author prefix of the citation
+// AFTER it. "(Smith n.d.; Jones 2020)" did exactly that, inventing the key
+// Smith-2020 for a work nobody cited and losing Jones-2020 altogether.
+const UNDATED = /(?:\bn\.\s*d\.|\bin press|\bforthcoming)/i;
 
 // BibTeX "alpha"-style citation keys in brackets, matching ALPHA_MARKER's
 // entry labels — "[WL92]", "[SRC07, SRK10]", "[GHI+21]". Ends in exactly two
@@ -891,7 +903,7 @@ export function findCitations(text, options = {}) {
       const cur = groups[groups.length - 1];
       const hasYear = YEAR.test(c.text);
       const end = c.at + c.text.length;
-      if (cur && !cur.done) {
+      if (cur && !cur.done && !cur.undated) {
         cur.end = end; // still gathering one citation's authors
         cur.done = hasYear;
       } else if (cur && !hasYear && CITE_LOCATOR.test(c.text)) {
@@ -902,7 +914,7 @@ export function findCitations(text, options = {}) {
         // "Doe" / "2019", and merging "Doe" backward lost Doe-2019 entirely.
         cur.end = end;
       } else {
-        groups.push({ at: c.at, end, done: hasYear });
+        groups.push({ at: c.at, end, done: hasYear, undated: !hasYear && UNDATED.test(c.text) });
       }
     }
     for (const g of groups) {

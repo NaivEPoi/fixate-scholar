@@ -875,6 +875,21 @@ test("findCitations locates the keys of author-year, alpha and narrative citatio
   // citation is that citation's locator and joins what precedes. Merging every
   // yearless piece forward put Smith's page number inside Jones's span, so
   // pointing at Smith's locator opened Jones's card.
+  // A locator may be paginated in ROMAN numerals — front matter is — and
+  // leaving those out of the locator shape put the defect straight back:
+  // "p. ix" fell through to the next citation and opened its card.
+  const [rom] = keySpanSlices("see (Smith 2019, p. ix; Jones 2020) here");
+  assert.deepEqual(rom.keys, ["Smith-2019", "Jones-2020"]);
+  assert.deepEqual(rom.spans, [["Smith-2019", "Smith 2019, p. ix"], ["Jones-2020", "Jones 2020"]]);
+
+  // An UNDATED citation carries no 4-digit year, so it can never key a card of
+  // its own — but it must not become the author prefix of the citation after
+  // it either. "(Smith n.d.; Jones 2020)" used to yield the single invented key
+  // Smith-2020 and lose Jones entirely.
+  const [nd] = keySpanSlices("see (Smith n.d.; Jones 2020) here");
+  assert.deepEqual(nd.keys, ["Jones-2020"]);
+  assert.deepEqual(nd.spans, [["Jones-2020", "Jones 2020"]]);
+
   // APA writes the comma BETWEEN author and year, so a yearless piece after a
   // citation is usually the NEXT citation's author, not a locator: attaching
   // every one of them backwards lost Doe-2019 from "(Smith et al., 2020; Doe,
