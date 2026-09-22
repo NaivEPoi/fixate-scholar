@@ -21,6 +21,12 @@ import { anchorNear } from "./pdfhints.mjs";
 
 const CHUNK = 150;
 const ABSTRACT = /^\s*abstract\s*$/i;
+// Words that end in a period WITHOUT ending a sentence. A run-in heading is cut
+// at its first terminator, and an abbreviation inside the title — "Model vs.
+// user interaction:", "Dr. Smith's approach." — looks exactly like one, which
+// cut the heading mid-title and left the remainder to be emphasized as body.
+const ABBREVIATION =
+  /^(?:vs|cf|e\.g|i\.e|etc|al|Dr|Mr|Mrs|Ms|Prof|Fig|Figs|Tab|Eq|Eqs|Sec|Secs|Ch|App|No|Vol|pp|approx|resp|viz)\.$/i;
 
 // PDF.js's drag-selection helper relocates its `.endOfContent` div next to the
 // selection edge on every selectionchange, and before patch 5 (see
@@ -1752,8 +1758,12 @@ export class TypographyEngine {
         const bx1 = twoColumn && ax < centerX ? centerX : vx0 + pageW;
         const band = its.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
         const tol = Math.max((lead.item.height || 8) * 1.2, 12);
+        // Scoped to THIS line's column: without it the other column's anchor
+        // shadows this one whenever their baselines pair up, and the x-check
+        // below then rejects it, so a genuinely anchored heading reads as
+        // unanchored (R45 round 2).
         const hAnchor = pageNumber && this.#hints?.headings
-          ? anchorNear(this.#hints.headings, pageNumber, lead.item.transform[5], tol)
+          ? anchorNear(this.#hints.headings, pageNumber, lead.item.transform[5], tol, [bx0, bx1])
           : null;
         const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol;
         if (isAlgoLead(leadStr)) {
@@ -1769,7 +1779,16 @@ export class TypographyEngine {
               const isTerminator =
                 (/[.:]$/.test(t) && /[A-Za-zÀ-ɏ]/.test(t)) ||
                 ((t === ":" || t === ".") && j > 0 && /[A-Za-zÀ-ɏ]/.test(band[j - 1].item.str.trim()));
-              if (isTerminator && (hAnchor.depth >= 3 || lowerWords(band.slice(j + 1)) >= 2)) {
+              // A deep anchor says the line IS a run-in heading, so a
+              // terminator can cut it without the trailing-prose evidence a
+              // guessed heading needs. It must still be a plausible END: an
+              // abbreviation inside the title ("Model vs. user interaction:",
+              // "Dr. Smith's approach.") ends in "." too, and cutting there
+              // left the rest of the title to be emphasized as body prose.
+              // Something has to follow it, and a one-word tail is a title's
+              // remainder rather than a sentence.
+              const deepCut = hAnchor.depth >= 3 && !ABBREVIATION.test(t);
+              if (isTerminator && (deepCut || lowerWords(band.slice(j + 1)) >= 2)) {
                 head = band.slice(0, j + 1);
                 break;
               }
@@ -2030,9 +2049,15 @@ export class TypographyEngine {
               Math.abs(above.h - leadH) <= leadH * 0.2 &&
               lowerWords(aboveBand) >= 3) continue;
         }
+        // Scoped to THIS line's column. Unlike the heading site there is no
+        // x-check after this one, so an unscoped match let a line in one
+        // column adopt the OTHER column's caption anchor and open the absorb
+        // loop on the wrong side of the gutter — the same cross-column
+        // confusion that made eqkeep report body prose as an equation.
+        const capTol = Math.max(leadH, 8) * 1.8;
         const capAnchor = this.#hints && pageNumber
-          ? (anchorNear(this.#hints.captions, pageNumber, lines[k].y, Math.max(leadH, 8) * 1.8) ||
-             anchorNear(this.#hints.captions, pageNumber, lead.item.transform[5], Math.max(leadH, 8) * 1.8))
+          ? (anchorNear(this.#hints.captions, pageNumber, lines[k].y, capTol, [bx0, bx1]) ||
+             anchorNear(this.#hints.captions, pageNumber, lead.item.transform[5], capTol, [bx0, bx1]))
           : null;
         for (const p of lines[k].items.filter(inBand)) { skip.add(p.div); dbg(p.div, "caption"); }
         if (capAnchor) {
