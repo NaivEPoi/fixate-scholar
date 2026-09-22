@@ -864,10 +864,36 @@ test("findCitations locates the keys of author-year, alpha and narrative citatio
   assert.deepEqual(authors.keys, ["Smith-2019"]);
   assert.deepEqual(authors.spans, [["Smith-2019", "Smith, Jones & Roe 2019"]]);
 
-  // A trailing page locator is part of the citation, not a second one.
+  // A trailing page locator is part of the citation, not a second one, and it
+  // belongs to the citation BEFORE it.
   const [loc] = keySpanSlices("see (Brown et al. 2021, p. 44) now");
   assert.deepEqual(loc.keys, ["Brown-2021"]);
-  assert.deepEqual(loc.spans, [["Brown-2021", "Brown et al. 2021"]]);
+  assert.deepEqual(loc.spans, [["Brown-2021", "Brown et al. 2021, p. 44"]]);
+
+  // The direction of that attachment is the whole subtlety. A yearless piece
+  // BEFORE any citation is an author prefix and joins what follows; one AFTER a
+  // citation is that citation's locator and joins what precedes. Merging every
+  // yearless piece forward put Smith's page number inside Jones's span, so
+  // pointing at Smith's locator opened Jones's card.
+  // APA writes the comma BETWEEN author and year, so a yearless piece after a
+  // citation is usually the NEXT citation's author, not a locator: attaching
+  // every one of them backwards lost Doe-2019 from "(Smith et al., 2020; Doe,
+  // 2019)" entirely. Only something shaped like a locator attaches backwards.
+  const [apa] = keySpanSlices("As shown previously (Smith et al., 2020; Doe, 2019).");
+  assert.deepEqual(apa.keys, ["Smith-2020", "Doe-2019"]);
+  assert.deepEqual(apa.spans, [["Smith-2020", "Smith et al., 2020"], ["Doe-2019", "Doe, 2019"]]);
+
+  for (const text of [
+    "see (Smith 2019, p. 12; Jones 2020) here",
+    "see (Smith 2019, p. 12, Jones 2020) here",
+    "see (Smith 2019, pp. 3-4, Jones 2020) here",
+  ]) {
+    const [mid] = keySpanSlices(text);
+    assert.deepEqual(mid.keys, ["Smith-2019", "Jones-2020"], text);
+    assert.equal(mid.spans[0][0], "Smith-2019", text);
+    assert.match(mid.spans[0][1], /^Smith 2019, pp?\. ?[\d-]+$/, text);
+    assert.deepEqual(mid.spans[1], ["Jones-2020", "Jones 2020"], text);
+  }
 
   const [alpha] = keySpanSlices("keys [WL92, SRC07] here");
   assert.deepEqual(alpha.spans, [["WL92", "WL92"], ["SRC07", "SRC07"]]);

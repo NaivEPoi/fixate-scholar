@@ -1699,7 +1699,11 @@ export class TypographyEngine {
         const isTerminator =
           (/[.:]$/.test(t) && /[A-Za-zÀ-ɏ]/.test(t)) ||
           ((t === ":" || t === ".") && j > 0 && /[A-Za-zÀ-ɏ]/.test(band[j - 1].item.str.trim()));
-        if (!isTerminator) continue;
+        // An abbreviation inside the title ends in a period without ending the
+        // title — "Comparison with Dr. Smith's protocol." must not be cut at
+        // "Dr.". This scan runs BEFORE the anchored one and returns first, so
+        // guarding only the anchored site left the common path unguarded.
+        if (!isTerminator || ABBREVIATION.test(t)) continue;
         const tail = band.slice(j + 1);
         const tailText = tail.map((p) => p.item.str).join(" ").trim();
         if (lowerWords(tail) >= 2 || REF_PROSE.test(tailText)) return band.slice(0, j + 1);
@@ -1787,8 +1791,13 @@ export class TypographyEngine {
               // left the rest of the title to be emphasized as body prose.
               // Something has to follow it, and a one-word tail is a title's
               // remainder rather than a sentence.
-              const deepCut = hAnchor.depth >= 3 && !ABBREVIATION.test(t);
-              if (isTerminator && (deepCut || lowerWords(band.slice(j + 1)) >= 2)) {
+              // The abbreviation test gates the WHOLE decision, not just the
+              // depth branch: written as `deepCut || lowerWords(...) >= 2` the
+              // guard was bypassed by any title with two lowercase words after
+              // the abbreviation ("Evaluation of Model vs. dynamic user
+              // interaction:"), which is most of them.
+              if (isTerminator && !ABBREVIATION.test(t) &&
+                  (hAnchor.depth >= 3 || lowerWords(band.slice(j + 1)) >= 2)) {
                 head = band.slice(0, j + 1);
                 break;
               }

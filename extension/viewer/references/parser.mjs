@@ -780,6 +780,11 @@ const NARRATIVE_CITE = new RegExp(
 );
 // Words that look like a surname but introduce a NUMBER, not an author.
 const NOT_A_SURNAME = /^(Table|Figure|Fig|Section|Sec|Eq|Equation|Chapter|Appendix|Algorithm|Theorem|Lemma|Definition|Part|Step|Line|No|Vol|Ref)$/i;
+// A page/section locator printed BETWEEN author-year citations, which
+// AUTHOR_YEAR_CITE admits: "(Smith 2019, p. 12; Jones 2020)". It belongs to the
+// citation before it, unlike every other yearless piece, which belongs to the
+// citation after it.
+const CITE_LOCATOR = /^\s*(?:pp?\.|§{1,2}|¶)\s*[\d–—-]+\s*$/i;
 
 // BibTeX "alpha"-style citation keys in brackets, matching ALPHA_MARKER's
 // entry labels — "[WL92]", "[SRC07, SRK10]", "[GHI+21]". Ends in exactly two
@@ -873,12 +878,36 @@ export function findCitations(text, options = {}) {
       }
       cuts.push({ text: m[1].slice(last), at: last });
     }
-    for (let i = 0; i < cuts.length; i++) {
-      let { text: part, at: partAt } = cuts[i];
-      while (!YEAR.test(part) && i + 1 < cuts.length) {
-        const next = cuts[++i];
-        part = m[1].slice(partAt, next.at + next.text.length);
+    // A yearless piece attaches to a neighbour, and WHICH neighbour depends on
+    // whether a citation has been seen yet. Before the first year it is an
+    // author prefix and belongs to what FOLLOWS — "Smith" in "(Smith, Jones &
+    // Roe 2019)". After a citation it is that citation's trailing matter and
+    // belongs to what PRECEDES — the "p. 12" of "(Smith 2019, p. 12; Jones
+    // 2020)", which AUTHOR_YEAR_CITE admits between citations. Merging every
+    // yearless piece forward put Smith's page number inside Jones's span, so
+    // pointing at Smith's locator opened Jones's card.
+    const groups = [];
+    for (const c of cuts) {
+      const cur = groups[groups.length - 1];
+      const hasYear = YEAR.test(c.text);
+      const end = c.at + c.text.length;
+      if (cur && !cur.done) {
+        cur.end = end; // still gathering one citation's authors
+        cur.done = hasYear;
+      } else if (cur && !hasYear && CITE_LOCATOR.test(c.text)) {
+        // Attaches BACKWARD only when it actually looks like a locator. A
+        // yearless piece after a citation is usually the next citation's
+        // AUTHOR, because APA puts a comma between author and year:
+        // "(Smith et al., 2020; Doe, 2019)" cuts to "Smith et al." / "2020" /
+        // "Doe" / "2019", and merging "Doe" backward lost Doe-2019 entirely.
+        cur.end = end;
+      } else {
+        groups.push({ at: c.at, end, done: hasYear });
       }
+    }
+    for (const g of groups) {
+      const part = m[1].slice(g.at, g.end);
+      const partAt = g.at;
       const year = YEAR.exec(part)?.[0];
       const surname = /\p{Lu}[\p{L}'’-]+/u.exec(part)?.[0];
       if (year && surname && !NOT_A_SURNAME.test(surname)) {
