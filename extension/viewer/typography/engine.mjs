@@ -1343,21 +1343,40 @@ export class TypographyEngine {
       // operator names with the symbols they belong to.
       for (const b of blocks) {
         for (const r of b.rows) {
-          if (r.items.length < 3 || proseWords(r) > 0) continue;
+          if (r.items.length < 3) continue;
           const rowText = r.items.map((p) => p.item.str).join("");
+          // Space-joined for the WORD analysis below. Items carry no trailing
+          // space, so joining them bare runs neighbouring symbols together —
+          // "exp" and "brc", two separate items of equation (6.6), become the
+          // six-letter "expbrc" and read as prose.
+          const rowTrim = r.items.map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim();
+          // A trailing equation NUMBER — "(5.6)", "(12)", "(A.3)" — is the
+          // typesetting convention's own statement that the row is a displayed
+          // equation, and the strongest tell there is.
+          const numbered = /\((?:[A-Z][.-])?\d+(?:\.\d+)*\)\s*$/.test(rowTrim);
+          // A numbered row must still look like mathematics rather than a
+          // sentence that happens to end in a parenthesised number: nothing
+          // long enough to be a word, and at most a couple of short ones.
+          //
+          // This is what lets a variable PRODUCT through. Equation (6.6) reads
+          // "exp brc + kc + bd − c ( p − 1) . (6.6)" — `brc`, `kc` and `bd`
+          // are variables written side by side, not words, but `proseWords`
+          // counts `brc` as prose and disqualified the whole row, which is how
+          // this equation kept its emphasis after (5.6) was fixed.
+          const words = (rowTrim.match(/[a-zà-ÿ]{3,}/g) ?? []).filter((w) => !MATH_OP.test(w));
+          const eqNumbered = numbered && words.length <= 2 && !words.some((w) => w.length >= 5);
+          if (proseWords(r) > 0 && !eqNumbered) continue;
           let symbolish = 0;
           for (const p of r.items) {
             const t = p.item.str.trim();
             if (!t || t.length < 2 || !/[A-Za-zÀ-ɏ]/.test(t) || isMath(p) || isSpecial(p)) symbolish++;
           }
           const ratio = symbolish / r.items.length;
-          // MATH_SIGNAL is the clearest tell, but it lists relations and does
-          // not carry `+`, `/` or the `∣` of a norm — equation (5.6) of the
-          // Computer Modern paper has no character from it at all. A trailing
-          // equation NUMBER is the other unambiguous tell, and failing both, a
-          // row has to be almost entirely symbols to qualify.
-          const numbered = /\(\d+(?:\.\d+)*\)\s*$/.test(rowText.trim());
-          if (!(ratio >= 0.85 || ((MATH_SIGNAL.test(rowText) || numbered) && ratio >= 0.7))) continue;
+          // For an UNNUMBERED row MATH_SIGNAL is the clearest tell, but it
+          // lists relations and carries neither the `+` nor the `∣` that
+          // equation (5.6) is built from — so a row with no signal at all has
+          // to be almost entirely symbols before it qualifies.
+          if (!(eqNumbered || ratio >= 0.85 || ((MATH_SIGNAL.test(rowText) || numbered) && ratio >= 0.7))) continue;
           for (const p of r.items) {
             if (skip.has(p.div)) continue;
             skip.add(p.div);
