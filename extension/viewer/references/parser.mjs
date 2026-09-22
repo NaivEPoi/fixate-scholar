@@ -847,19 +847,52 @@ export function findCitations(text, options = {}) {
   for (const m of text.matchAll(AUTHOR_YEAR_CITE)) {
     const keys = [];
     const spans = [];
-    // Each ";"-separated citation is a reference of its own, and the run of
-    // text it was written as is what the reader points at: "(Smith 2020;
-    // Jones 2021)" hovers as two different cards, one per name.
-    let at = m.index + m[0].indexOf(m[1]);
-    for (const part of m[1].split(";")) {
-      const partStart = at;
-      at += part.length + 1; // the ";" the split consumed
+    // Each separated citation is a reference of its own, and the run of text it
+    // was written as is what the reader points at: "(Smith 2020; Jones 2021)"
+    // hovers as two different cards, one per name.
+    //
+    // Splitting on ";" alone missed every paper that separates with a COMMA —
+    // "(Smith 2019, Jones 2020)" yielded the single key Smith-2019, so Jones
+    // got no card at all and pointing anywhere in the parenthesis, Jones
+    // included, opened Smith's. AUTHOR_YEAR_CITE accepts either separator, so
+    // this has to as well.
+    //
+    // A comma is ambiguous where a semicolon is not: it separates two citations
+    // in "(Smith 2019, Jones 2020)" and joins authors of ONE in "(Smith, Jones
+    // & Roe 2019)". The year is what tells them apart — a piece carrying no
+    // year of its own is not a citation, so it is merged forward into the piece
+    // that follows it, and the author list stays whole.
+    const base = m.index + m[0].indexOf(m[1]);
+    const cuts = [];
+    {
+      const sep = /[;,]/g;
+      let last = 0;
+      for (let s; (s = sep.exec(m[1])); ) {
+        cuts.push({ text: m[1].slice(last, s.index), at: last });
+        last = s.index + 1;
+      }
+      cuts.push({ text: m[1].slice(last), at: last });
+    }
+    for (let i = 0; i < cuts.length; i++) {
+      let { text: part, at: partAt } = cuts[i];
+      while (!YEAR.test(part) && i + 1 < cuts.length) {
+        const next = cuts[++i];
+        part = m[1].slice(partAt, next.at + next.text.length);
+      }
       const year = YEAR.exec(part)?.[0];
       const surname = /\p{Lu}[\p{L}'’-]+/u.exec(part)?.[0];
       if (year && surname && !NOT_A_SURNAME.test(surname)) {
         const key = `${surname}-${year}`;
         keys.push(key);
-        spans.push({ key, start: partStart, end: partStart + part.length });
+        // The separator's own spacing belongs to neither citation, so the span
+        // is the trimmed run — a hit-target that starts on the space before a
+        // name is one the reader can hit without pointing at anything.
+        const lead = part.length - part.trimStart().length;
+        spans.push({
+          key,
+          start: base + partAt + lead,
+          end: base + partAt + part.trimEnd().length,
+        });
       }
     }
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, keySpans: spans });

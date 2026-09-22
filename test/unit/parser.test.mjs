@@ -843,8 +843,31 @@ test("findCitations puts a bracket range's second key on the KEY, not on a locat
 });
 
 test("findCitations locates the keys of author-year, alpha and narrative citations", () => {
+  // The separator's spacing belongs to neither citation, so each span is the
+  // trimmed run — a target that starts on the space before a name is one the
+  // reader can hit without pointing at anything.
   const [ay] = keySpanSlices("work (Smith 2020; Jones 2021) shows");
-  assert.deepEqual(ay.spans, [["Smith-2020", "Smith 2020"], ["Jones-2021", " Jones 2021"]]);
+  assert.deepEqual(ay.spans, [["Smith-2020", "Smith 2020"], ["Jones-2021", "Jones 2021"]]);
+
+  // A COMMA separates author-year citations just as a semicolon does, and
+  // splitting on ";" alone gave "(Smith 2019, Jones 2020)" a single key whose
+  // span covered both names: Jones had no card, and pointing at Jones opened
+  // Smith's.
+  const [comma] = keySpanSlices("work (Smith 2019, Jones 2020) shows");
+  assert.deepEqual(comma.keys, ["Smith-2019", "Jones-2020"]);
+  assert.deepEqual(comma.spans, [["Smith-2019", "Smith 2019"], ["Jones-2020", "Jones 2020"]]);
+
+  // But a comma also JOINS the authors of one citation, and that must stay one
+  // card. The year is what tells the two uses apart: a piece carrying no year
+  // is not a citation of its own.
+  const [authors] = keySpanSlices("per (Smith, Jones & Roe 2019) we");
+  assert.deepEqual(authors.keys, ["Smith-2019"]);
+  assert.deepEqual(authors.spans, [["Smith-2019", "Smith, Jones & Roe 2019"]]);
+
+  // A trailing page locator is part of the citation, not a second one.
+  const [loc] = keySpanSlices("see (Brown et al. 2021, p. 44) now");
+  assert.deepEqual(loc.keys, ["Brown-2021"]);
+  assert.deepEqual(loc.spans, [["Brown-2021", "Brown et al. 2021"]]);
 
   const [alpha] = keySpanSlices("keys [WL92, SRC07] here");
   assert.deepEqual(alpha.spans, [["WL92", "WL92"], ["SRC07", "SRC07"]]);
