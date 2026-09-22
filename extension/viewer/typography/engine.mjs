@@ -201,6 +201,12 @@ export class TypographyEngine {
   #furnitureBoxes = null; // Map<pageNumber, Array<{x0,x1,y0,y1}>> — running heads/feet
   #contentStart = null; // { page, y, h } — the Abstract heading; front matter above it
   #bodyHeight = null; // document-wide body-text height (from the refs extractor)
+  // What the FILE says about its own structure: hyperref's named destinations
+  // for headings, float captions and numbered equations, in text-item user
+  // space (see typography/pdfhints.mjs). null, or `available: false`, whenever
+  // the document states nothing — the geometry rules below are unchanged and
+  // remain the only path for those documents.
+  #hints = null;
   #ascentCache = new Map(); // fontFamily -> browser ascent ratio (baseline align)
   #spaceInkCache = new Map(); // famKey -> the embedded face PAINTS U+0020
   #measureCtx = null; // offscreen 2d context for ascent measurement
@@ -252,6 +258,7 @@ export class TypographyEngine {
     this.#furnitureBoxes = null;
     this.#contentStart = null;
     this.#bodyHeight = null;
+    this.#hints = null;
     this.#pageFonts.clear();
     this.#inkRetryPages.clear();
     this.#ascentCache.clear();
@@ -271,6 +278,26 @@ export class TypographyEngine {
     if (!h || h === this.#bodyHeight) return Promise.resolve();
     this.#bodyHeight = h;
     if (!this.#enabled || this.#batching) return Promise.resolve();
+    this.#restoreAll();
+    return this.#processAll();
+  }
+
+  /**
+   * What the document states about its own structure — hyperref's named
+   * destinations for headings, float captions and numbered equations, already
+   * resolved to page + user-space position (typography/pdfhints.mjs).
+   *
+   * These are PRIORS for the block classifier, not a replacement for it: the
+   * geometry rules still decide everything the file is silent about, and a
+   * document with no name tree (a pre-hyperref paper) is classified exactly as
+   * before. Nothing is ever treated as body text because a hint is missing.
+   */
+  setStructureHints(hints) {
+    this.#hints = hints?.available ? hints : null;
+    globalThis.__fxHints = this.#hints // test introspection
+      ? { ...this.#hints.counts, pages: this.#hints.headings.size + this.#hints.captions.size }
+      : null;
+    if (!this.#enabled || !this.#hints || this.#batching) return Promise.resolve();
     this.#restoreAll();
     return this.#processAll();
   }
