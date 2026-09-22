@@ -306,6 +306,18 @@ All write to `test/out/`. Add `--headful` (where supported) for real-DPI.
   a processed span with zero runs renders identically to an untouched one, and
   counting it failed one paper on every sweep over something invisible. Those are
   still reported (`processedNoEmphasis=N`), just not fatal.
+- **No emphasis inside a displayed equation**: `node test/eqkeep.mjs --url=<pdf>
+  --all` → 0 violations, and **exit 1** otherwise. Keys on the typesetting
+  convention rather than on the engine's own rule, deliberately: a row carrying
+  a trailing equation number hard against the column's right edge, with no
+  running prose, is a numbered displayed equation and nothing on it may be
+  processed. Asking the question the way the engine asks it could only ever
+  agree with it. `fontkeep` cannot see this class — LaTeX sets `\exp`, `\cos`,
+  `\min` in upright ROMAN, the body face, so the emphasized token is not in a
+  math face and `whyskip` is clean too because nothing was wrongly skipped
+  (R44). Does NOT fail on zero rows examined: many papers number no equations,
+  and inapplicable is not blind — the count is printed so a sweep that examined
+  nothing anywhere is visible.
 - **Kept faces stay kept**: `node test/fontkeep.mjs --url=<pdf> --all` → 0
   violations, i.e. no processed span resolves to a math, monospace, small-caps or
   bold-display face. Reads the font off each processed span and resolves it
