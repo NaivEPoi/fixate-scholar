@@ -590,6 +590,31 @@ test("findInternalRefs matches in-paper pointers, not prose", () => {
   assert.equal(findInternalRefs("the figure shows a table of results").length, 0);
 });
 
+test("findInternalRefs matches the section SYMBOL, not only the spelled-out word", () => {
+  // `§` was in the leader list from the start and never once matched: the
+  // pattern opens on `\b`, a word boundary needs a word character on one side,
+  // and in "see §4.2" both the space and the `§` are non-word — so every
+  // section-symbol reference in every paper went uncoloured while the
+  // "Section 4.2" beside it coloured fine.
+  const text = "As in §4.2 and §§5.1-5.3, described in §7; cf. § 8.2 too.";
+  const found = findInternalRefs(text).map(({ start, end }) => text.slice(start, end));
+  assert.deepEqual(found, ["§4.2", "§§5.1-5.3", "§7", "§ 8.2"]);
+
+  // At the very start of a span, and inside parentheses — both are positions
+  // where the missing boundary would still have bitten.
+  assert.deepEqual(
+    findInternalRefs("§3 covers it").map(({ start, end }) => "§3 covers it".slice(start, end)),
+    ["§3"],
+  );
+  assert.deepEqual(
+    findInternalRefs("(see §4.2)").map(({ start, end }) => "(see §4.2)".slice(start, end)),
+    ["§4.2"],
+  );
+
+  // The symbol without a number is punctuation, not a reference.
+  assert.equal(findInternalRefs("a §-delimited list and the § itself").length, 0);
+});
+
 test("findInternalRefs: a line-wrap with no space after the number is not swallowed", () => {
   // Text-layer spans correspond to PDF-authored lines. A justified line that
   // wraps right after "Chapter 2" carries no trailing space, and the next

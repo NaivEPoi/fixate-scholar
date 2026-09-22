@@ -121,9 +121,23 @@ export async function extractStructureHints(pdfDocument) {
   // One getPageIndex per distinct ref, not per destination: a paper with 159
   // destinations resolves ~20 refs, and the call is a lookup into the page
   // tree rather than a free operation.
+  //
+  // Everything below is driven by the DOCUMENT's name tree, which is untrusted
+  // input — the extension opens whatever PDF the reader points it at. Nothing
+  // here bounds the size of that tree, so the three ceilings are the bound: a
+  // file naming a million destinations would otherwise buy a million pattern
+  // tests and, worse, one page-tree walk per distinct ref. The ceilings sit
+  // two orders of magnitude above the measured corpus (80-159 destinations,
+  // ~20 refs, ≤40 pages), so no real document can reach one; a file that does
+  // is not a paper, and falling back to geometry is the right answer for it.
+  const MAX_SCAN = 50000; // destinations examined at all
+  const MAX_ANCHORS = 4000; // structural anchors kept
+  const MAX_REFS = 400; // distinct refs resolved (one page-tree walk each)
   const pageOfRef = new Map();
   const resolved = [];
+  let scanned = 0;
   for (const [name, dest] of Object.entries(dests)) {
+    if (++scanned > MAX_SCAN || resolved.length >= MAX_ANCHORS) break;
     const info = classifyDestination(name);
     if (!info) continue;
     if (!Array.isArray(dest) || dest.length < 4) continue;
@@ -131,6 +145,7 @@ export async function extractStructureHints(pdfDocument) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     const key = typeof ref === "object" && ref ? `${ref.num}R${ref.gen}` : String(ref);
     if (!pageOfRef.has(key)) {
+      if (pageOfRef.size >= MAX_REFS) continue;
       let idx = null;
       try {
         idx = await pdfDocument.getPageIndex(ref);

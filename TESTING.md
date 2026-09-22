@@ -317,7 +317,28 @@ All write to `test/out/`. Add `--headful` (where supported) for real-DPI.
   math face and `whyskip` is clean too because nothing was wrongly skipped
   (R44). Does NOT fail on zero rows examined: many papers number no equations,
   and inapplicable is not blind — the count is printed so a sweep that examined
-  nothing anywhere is visible.
+  nothing anywhere is visible. **A baseline is not a row.** On a two-column page
+  the left column's closing line and the right column's equation number share
+  one baseline, and grouping on baseline alone splices them into a pair that
+  satisfies every test above — reporting correctly-emphasized body text as an
+  equation violation while masking a real one elsewhere on the same page (R45).
+  It now splits each baseline at the page's gutter, found as the vertical band
+  near the middle that the FEWEST rows cross (rows, not occupied pixels: a
+  full-width title or figure crosses the gutter and would otherwise erase it),
+  and measures each segment against its own column's right edge. The 1% width
+  floor is set from the public corpus — the gutter runs 3.4–3.7% of the page on
+  ACM and USENIX layouts and 1.83% on the IEEE journal one, while single-column
+  papers measure 0% and get no gutter at all.
+- **In-paper references are coloured**: `node test/refcolor.mjs --url=<pdf>
+  [--pages=A-B]` → every in-paper reference inside a PROCESSED span carries an
+  `.fx-ref-c` wrap; uncoloured ones are printed with their surrounding text.
+  This harness keeps its own copy of the parser's pattern, which is the point
+  (an independent criterion) and also its trap: the copy carried the same
+  missing-word-boundary bug as the product, so for as long as both existed it
+  could not report an uncoloured `§4.2` no matter how often it ran. **When
+  `REF_LEADER` or `INTERNAL_REF` changes in `parser.mjs`, change this copy too
+  and re-derive the negative control** — revert the product fix, keep the
+  harness fix, and check the count actually drops (21 → 11 for R45).
 - **Kept faces stay kept**: `node test/fontkeep.mjs --url=<pdf> --all` → 0
   violations, i.e. no processed span resolves to a math, monospace, small-caps or
   bold-display face. Reads the font off each processed span and resolves it

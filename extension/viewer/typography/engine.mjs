@@ -1365,19 +1365,45 @@ export class TypographyEngine {
           // counts `brc` as prose and disqualified the whole row, which is how
           // this equation kept its emphasis after (5.6) was fixed.
           const words = (rowTrim.match(/[a-zà-ÿ]{3,}/g) ?? []).filter((w) => !MATH_OP.test(w));
-          const eqNumbered = numbered && words.length <= 2 && !words.some((w) => w.length >= 5);
-          if (proseWords(r) > 0 && !eqNumbered) continue;
+          const mathSignal = MATH_SIGNAL.test(rowText);
+          // Cheap rejection BEFORE the per-item work below: a row running prose
+          // that carries no equation number cannot qualify however it is built,
+          // and that is nearly every row of nearly every page. The symbol tally
+          // resolves a font per item, so hoisting it above this test would run
+          // it over a whole document's body text to answer a question already
+          // settled.
+          const prose = proseWords(r);
+          const eqBase = numbered && words.length <= 2;
+          if (prose > 0 && !eqBase) continue;
           let symbolish = 0;
           for (const p of r.items) {
             const t = p.item.str.trim();
             if (!t || t.length < 2 || !/[A-Za-zÀ-ɏ]/.test(t) || isMath(p) || isSpecial(p)) symbolish++;
           }
           const ratio = symbolish / r.items.length;
+          // The word-length veto exists to keep a SENTENCE that merely ends in
+          // a parenthesised number from reading as an equation, and it does
+          // that by assuming nothing five letters long belongs in one. Papers
+          // disagree. A displayed equation may bound an operator by a ROMAN
+          // multi-word identifier — `\max` or `\min` applied to a `\mathrm`
+          // name of two or three words — which is ordinary notation, not
+          // prose; when any one of those words reaches five letters the whole
+          // row was disqualified and kept its emphasis. Found on a private
+          // paper, and only once eqkeep stopped splicing two columns into one
+          // row (R45).
+          //
+          // So a long word is forgiven when the row carries a relation glyph
+          // AND is still mostly symbols. Both are needed: a relation such as
+          // `≤`/`∈`/`∀` is what no English sentence has, and the ratio is what
+          // keeps a prose line with one inline relation from qualifying.
+          const eqNumbered = eqBase &&
+            (!words.some((w) => w.length >= 5) || (mathSignal && ratio >= 0.7));
+          if (prose > 0 && !eqNumbered) continue;
           // For an UNNUMBERED row MATH_SIGNAL is the clearest tell, but it
           // lists relations and carries neither the `+` nor the `∣` that
           // equation (5.6) is built from — so a row with no signal at all has
           // to be almost entirely symbols before it qualifies.
-          if (!(eqNumbered || ratio >= 0.85 || ((MATH_SIGNAL.test(rowText) || numbered) && ratio >= 0.7))) continue;
+          if (!(eqNumbered || ratio >= 0.85 || ((mathSignal || numbered) && ratio >= 0.7))) continue;
           for (const p of r.items) {
             if (skip.has(p.div)) continue;
             skip.add(p.div);

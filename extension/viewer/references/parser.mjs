@@ -720,8 +720,19 @@ const REF_ALPHA = "(?:(?<=[a-zA-Z~])|\\b)[A-Z]\\b(?:\\.\\d+)?";
 const REF_ITEM = "(?:" + REF_PAREN_NUM + "|" + REF_NUM + "|" + REF_ROMAN + "|" + REF_ALPHA + ")";
 const REF_SEP = "(?:\\s*(?:[–—\\u2212\\u2015-]|--|to)\\s*|\\s*,\\s*(?:and\\s+|&\\s*)?|\\s+and\\s+|\\s*&\\s*)";
 
+// The leader must start at a word boundary, so "Section 4" is a reference and
+// the "sec" of "consecutive" is not. That test cannot hold for `§`: a word
+// boundary sits between a word and a non-word character, and in "see §4.2"
+// BOTH the space and the `§` are non-word — there is no boundary between them,
+// so `\b` fails and the whole section-symbol form never matched. `§` was in
+// REF_LEADER from the start and silently never fired: "§4.2", "§§4.2-4.3",
+// "described in §5" and "(see §4.2)" all came back unmatched and uncoloured,
+// while the spelled-out "Section 4.2" beside them coloured fine.
+//
+// `§` needs no boundary test of its own — it cannot occur inside a word the
+// way "sec" can — so a plain lookahead is the whole fix.
 const INTERNAL_REF = new RegExp(
-  "(?:\\b|(?<=[a-z])(?=[A-Z]))" + REF_LEADER + "\\s*~?\\s*" + REF_ITEM + "(?:" + REF_SEP + REF_ITEM + ")*",
+  "(?:\\b|(?<=[a-z])(?=[A-Z])|(?=§))" + REF_LEADER + "\\s*~?\\s*" + REF_ITEM + "(?:" + REF_SEP + REF_ITEM + ")*",
   "g"
 );
 
