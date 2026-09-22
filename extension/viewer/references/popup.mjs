@@ -108,10 +108,14 @@ export class CitationPopup {
     return el;
   }
 
-  scheduleShow(entries, anchor) {
+  /** `index` is which of `entries` the reader is pointing at — a multi-key
+   *  citation ("[4, 12]") has a hit-target per printed key, and hovering the
+   *  12 must open [12]'s card, not the first one. The pager still holds the
+   *  whole citation, so the others are one click away. */
+  scheduleShow(entries, anchor, index = 0) {
     if (this.#pinned) return;
     clearTimeout(this.#timer);
-    this.#timer = setTimeout(() => this.showNow(entries, anchor), SHOW_DELAY);
+    this.#timer = setTimeout(() => this.showNow(entries, anchor, { index }), SHOW_DELAY);
   }
 
   scheduleHide() {
@@ -127,11 +131,13 @@ export class CitationPopup {
     this.#entries = [];
   }
 
-  showNow(entries, anchor, { pinned = false } = {}) {
+  showNow(entries, anchor, { pinned = false, index = 0 } = {}) {
     clearTimeout(this.#timer);
     this.#pinned = pinned;
     this.#entries = entries;
-    this.#index = 0;
+    // Clamped: the caller's index comes from a hit-target built when the page
+    // was annotated, and a card list rebuilt since could be shorter.
+    this.#index = Math.min(Math.max(index | 0, 0), Math.max(entries.length - 1, 0));
     this.#anchor = anchor;
     this.#render();
   }

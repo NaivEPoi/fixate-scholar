@@ -782,20 +782,32 @@ const ALPHA_CITE = new RegExp(
 
 /**
  * Find citation-like substrings in a text-layer span's text.
+ *
+ * `keySpans` locates the individual keys of a multi-key citation inside the
+ * match — "[4, 12]" yields a span over "4" and one over "12" — so the
+ * annotator can give each cited reference its own hit-target and pointing at
+ * "12" opens the card for [12] rather than the citation's first card. Only
+ * keys the document actually PRINTS get a span: the implied middle of a range
+ * ("[6-11]") has no glyphs of its own, and the characters no key claims (the
+ * brackets, the separators, a locator, an author run) stay with the citation
+ * as a whole.
+ *
  * @param {string} text
  * @param {{ includeIndexed?: boolean }} [options]
- * @returns Array<{start: number, end: number, keys: string[], precededByIdentifier?: boolean}>
+ * @returns Array<{start: number, end: number, keys: string[],
+ *   keySpans: Array<{key: string, start: number, end: number}>,
+ *   precededByIdentifier?: boolean}>
  */
 export function findCitations(text, options = {}) {
   const out = [];
   for (const m of text.matchAll(NUMERIC_CITE)) {
     const precededByIdentifier = m.index > 0 && /[\p{L}\p{N}_$\]]/u.test(text[m.index - 1]);
     if (!options.includeIndexed && precededByIdentifier) continue;
-    const keys = expandNumericList(m[1]);
+    const { keys, spans } = expandNumericList(m[1], m.index + m[0].indexOf(m[1]));
     // Bibliographies number from [1]: a bracketed list containing 0 is math
     // (a vector/matrix row like "[2, 1, 0]"), not a citation.
     if (keys.includes("0")) continue;
-    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, precededByIdentifier });
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, keySpans: spans, precededByIdentifier });
   }
   for (const m of text.matchAll(NUMERIC_BRACKET_RANGE)) {
     const precededByIdentifier = m.index > 0 && /[\p{L}\p{N}_$\]]/u.test(text[m.index - 1]);
@@ -805,24 +817,49 @@ export function findCitations(text, options = {}) {
     if (a === 0 || b === 0 || a >= b) continue;
     const keys = [];
     for (let n = a; n <= Math.min(b, a + 25); n++) keys.push(String(n));
-    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, precededByIdentifier });
+    // "[6]-[11]" prints exactly two numbers; they are the only two the reader
+    // can point at, and the second one only when the range wasn't truncated.
+    const aAt = m.index + m[0].indexOf(m[1]);
+    const bAt = m.index + m[0].lastIndexOf(m[2]);
+    const spans = [{ key: m[1], start: aAt, end: aAt + m[1].length }];
+    if (keys.at(-1) === m[2]) spans.push({ key: m[2], start: bAt, end: bAt + m[2].length });
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, keySpans: spans, precededByIdentifier });
   }
   for (const m of text.matchAll(AUTHOR_YEAR_CITE)) {
     const keys = [];
+    const spans = [];
+    // Each ";"-separated citation is a reference of its own, and the run of
+    // text it was written as is what the reader points at: "(Smith 2020;
+    // Jones 2021)" hovers as two different cards, one per name.
+    let at = m.index + m[0].indexOf(m[1]);
     for (const part of m[1].split(";")) {
+      const partStart = at;
+      at += part.length + 1; // the ";" the split consumed
       const year = YEAR.exec(part)?.[0];
       const surname = /\p{Lu}[\p{L}'’-]+/u.exec(part)?.[0];
       if (year && surname && !NOT_A_SURNAME.test(surname)) {
-        keys.push(`${surname}-${year}`);
+        const key = `${surname}-${year}`;
+        keys.push(key);
+        spans.push({ key, start: partStart, end: partStart + part.length });
       }
     }
-    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, keySpans: spans });
   }
   for (const m of text.matchAll(ALPHA_CITE)) {
     const precededByIdentifier = m.index > 0 && /[\p{L}\p{N}_$\]]/u.test(text[m.index - 1]);
     if (!options.includeIndexed && precededByIdentifier) continue;
     const keys = m[1].split(/\s*,\s*/).map((k) => k.trim()).filter(Boolean);
-    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, precededByIdentifier });
+    const spans = [];
+    let at = m.index + m[0].indexOf(m[1]);
+    for (const part of m[1].split(",")) {
+      const partStart = at;
+      at += part.length + 1;
+      const key = part.trim();
+      if (!key) continue;
+      const keyAt = partStart + part.indexOf(key);
+      spans.push({ key, start: keyAt, end: keyAt + key.length });
+    }
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, keySpans: spans, precededByIdentifier });
   }
   for (const m of text.matchAll(NARRATIVE_CITE)) {
     // The surname is the LAST multi-letter capitalized token of the run, so
@@ -831,12 +868,23 @@ export function findCitations(text, options = {}) {
     // matches against the entry text).
     const surname = (m[1].match(/\p{Lu}[\p{L}'’-]{1,}/gu) ?? []).at(-1);
     if (!surname || NOT_A_SURNAME.test(surname)) continue;
-    const keys = m[2]
-      .split(/[,;]/)
-      .map((y) => y.trim())
-      .filter(Boolean)
-      .map((y) => `${surname}-${y}`);
-    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys });
+    // "Benioff [1980, 1982a]" cites two papers by one author: each YEAR is the
+    // part that distinguishes them, so each year is its own hit-target and the
+    // name run in front stays with the citation as a whole.
+    const keys = [];
+    const spans = [];
+    let at = m.index + m[0].lastIndexOf(m[2]);
+    for (const part of m[2].split(/[,;]/)) {
+      const partStart = at;
+      at += part.length + 1;
+      const y = part.trim();
+      if (!y) continue;
+      const key = `${surname}-${y}`;
+      keys.push(key);
+      const yAt = partStart + part.indexOf(y);
+      spans.push({ key, start: yAt, end: yAt + y.length });
+    }
+    if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, keySpans: spans });
   }
   out.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
   // Drop overlaps: the annotator wraps each range in the span's text, so two
@@ -854,19 +902,46 @@ export function findCitations(text, options = {}) {
   return kept;
 }
 
-function expandNumericList(list) {
+/**
+ * The keys of a numeric citation list, and where each PRINTED one sits.
+ *
+ * `base` is the offset of `list` within the page text, so the spans come back
+ * in the same coordinates as the citation's own start/end. A range contributes
+ * every key it covers but only two spans: its endpoints are the only numbers
+ * the page actually shows.
+ */
+function expandNumericList(list, base = 0) {
   const keys = [];
+  const spans = [];
+  let at = base;
   for (const part of list.split(/[,;]/)) {
+    const partStart = at;
+    at += part.length + 1; // the separator the split consumed
     const range = /^\s*(\d{1,3})\s*(?:[–—\u2212\u2015-]|--)\s*(\d{1,3})\s*$/.exec(part);
     if (range) {
       const [a, b] = [parseInt(range[1], 10), parseInt(range[2], 10)];
-      for (let n = a; n <= Math.min(b, a + 25); n++) keys.push(String(n));
+      const last = Math.min(b, a + 25);
+      for (let n = a; n <= last; n++) keys.push(String(n));
+      if (a > last) continue;
+      const aAt = partStart + part.indexOf(range[1]);
+      spans.push({ key: range[1], start: aAt, end: aAt + range[1].length });
+      // A truncated range ("[1-300]") never reaches the number it prints at
+      // the far end, so that number is not one of the keys and must not claim
+      // a hit-target of its own.
+      if (last === b && range[2] !== range[1]) {
+        const bAt = partStart + part.lastIndexOf(range[2]);
+        spans.push({ key: range[2], start: bAt, end: bAt + range[2].length });
+      }
     } else {
       const n = /^\s*(\d{1,3})\s*$/.exec(part);
-      if (n) keys.push(n[1]);
+      if (n) {
+        keys.push(n[1]);
+        const nAt = partStart + part.indexOf(n[1]);
+        spans.push({ key: n[1], start: nAt, end: nAt + n[1].length });
+      }
     }
   }
-  return keys;
+  return { keys, spans };
 }
 
 /** Map citation keys to entries. Returns the matched entries (may be empty). */

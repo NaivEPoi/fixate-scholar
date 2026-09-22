@@ -758,6 +758,59 @@ test("findCitations matches across reassembled line wraps", () => {
   assert.deepEqual(found.flatMap((f) => f.keys).sort(), ["12", "13", "Smith-2020"]);
 });
 
+// Each printed key of a multi-key citation has to be locatable on its own:
+// the annotator puts a hit-target on each span, so pointing at the "12" of
+// "[4, 12]" opens [12]'s card instead of [4]'s. A span that is off by even one
+// character lands the target on the wrong glyph, so every case checks the
+// slice of the ORIGINAL text, not just the offsets.
+const keySpanSlices = (text) =>
+  findCitations(text, { includeIndexed: true }).map((c) => ({
+    match: text.slice(c.start, c.end),
+    keys: c.keys,
+    spans: (c.keySpans ?? []).map((s) => [s.key, text.slice(s.start, s.end)]),
+  }));
+
+test("findCitations locates each key of a numeric list", () => {
+  const [cite] = keySpanSlices("as shown in [4, 12]. A malicious");
+  assert.equal(cite.match, "[4, 12]");
+  assert.deepEqual(cite.keys, ["4", "12"]);
+  assert.deepEqual(cite.spans, [["4", "4"], ["12", "12"]]);
+});
+
+test("findCitations spans a range's printed endpoints, not its implied middle", () => {
+  // Both spellings of a range: inside one bracket and across two.
+  for (const text of ["see [6-11] there", "see [6]-[11] there"]) {
+    const [cite] = keySpanSlices(text);
+    assert.deepEqual(cite.keys, ["6", "7", "8", "9", "10", "11"], text);
+    // 7..10 are never printed — those characters stay with the citation.
+    assert.deepEqual(cite.spans, [["6", "6"], ["11", "11"]], text);
+  }
+  // A range truncated at 26 keys never reaches the number at its far end, so
+  // that number must not claim a target for a card that does not exist.
+  const [big] = keySpanSlices("see [1-300] there");
+  assert.equal(big.keys.at(-1), "26");
+  assert.deepEqual(big.spans, [["1", "1"]]);
+});
+
+test("findCitations locates the keys of author-year, alpha and narrative citations", () => {
+  const [ay] = keySpanSlices("work (Smith 2020; Jones 2021) shows");
+  assert.deepEqual(ay.spans, [["Smith-2020", "Smith 2020"], ["Jones-2021", " Jones 2021"]]);
+
+  const [alpha] = keySpanSlices("keys [WL92, SRC07] here");
+  assert.deepEqual(alpha.spans, [["WL92", "WL92"], ["SRC07", "SRC07"]]);
+
+  // Narrative: the years distinguish the two papers, the shared name run does
+  // not, so only the years are pointable.
+  const [narr] = keySpanSlices("Benioff [1980, 1982a] proved");
+  assert.deepEqual(narr.spans, [["Benioff-1980", "1980"], ["Benioff-1982a", "1982a"]]);
+});
+
+test("findCitations: a locator is part of the citation, not of any key", () => {
+  const [cite] = keySpanSlices("see [9, Section 5.2] there");
+  assert.equal(cite.match, "[9, Section 5.2]");
+  assert.deepEqual(cite.spans, [["9", "9"]]);
+});
+
 test("bibAuthors splits a given-name-first list on its commas", () => {
   assert.equal(
     bibAuthors("Syed Rafiul Hussain, Imtiaz Karim, and Elisa Bertino"),

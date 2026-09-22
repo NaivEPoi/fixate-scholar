@@ -212,46 +212,9 @@ export class ReferencesFeature {
     return sec.entries;
   }
 
-  /** Ordered, de-duplicated card list for a citation's keys: each resolved
-   *  entry, plus a stub for any key of a BRACKETED citation the extractor
-   *  didn't parse (so the pager reflects every cited reference and the native
-   *  link is neutralised). Returns [] for an unresolved author-year citation.
-   *
-   *  "Bracketed" covers alpha keys ("[ABB+04]") as well as numeric ones: both
-   *  are entry MARKERS, and a marker the bibliography parse missed is exactly
-   *  the case the stub exists for. Restricting the stub to /^\d+$/ left an
-   *  alpha-keyed paper's unparsed citations with no hit-target at all, so
-   *  reconcileLinks never saw them and a click fell through to the PDF's own
-   *  link — scrolling away to the bibliography, the one thing this must not do. */
+  /** This page's card list for a citation — see buildCards. */
   #buildCards(keys, bracketed, page) {
-    const cards = [];
-    const seen = new Set();
-    const entries = this.#entriesForPage(page);
-    for (const key of keys) {
-      const matches = resolveCitation([key], entries);
-      if (matches.length) {
-        for (const e of matches) {
-          const id = "e:" + (e.number ?? e.label);
-          if (!seen.has(id)) {
-            seen.add(id);
-            cards.push(e);
-          }
-        }
-      } else if (bracketed) {
-        const id = "s:" + key;
-        if (!seen.has(id)) {
-          seen.add(id);
-          cards.push({
-            number: /^\d+$/.test(key) ? parseInt(key, 10) : null,
-            label: key,
-            unresolved: true,
-            raw: "",
-            title: "",
-          });
-        }
-      }
-    }
-    return cards;
+    return buildCards(keys, bracketed, this.#entriesForPage(page));
   }
 
   annotatePage(pageView) {
@@ -370,7 +333,7 @@ export class ReferencesFeature {
         // neutralise the PDF's own link so a click opens our card instead of
         // scrolling to the bibliography. Unresolved AUTHOR-YEAR parentheticals
         // get no card (that pattern false-positives on ordinary parens).
-        const cards = this.#buildCards(cite.keys, bracketed, pageView.id);
+        const { cards, indexOf } = this.#buildCards(cite.keys, bracketed, pageView.id);
         if (!cards.length) continue;
         for (const seg of citeSegs) {
           // Don't annotate the bibliography's own entry "[N]" markers (the engine
@@ -380,13 +343,34 @@ export class ReferencesFeature {
           const localStart = Math.max(0, cite.start - seg.start);
           const localEnd = Math.min(seg.end - seg.start, cite.end - seg.start);
           for (const rect of rangeRects(seg.span, localStart, localEnd)) {
-            hits.push({ rect, cards });
+            hits.push({ rect, cards, index: 0 });
           }
           // Color the citation text itself. A fixed, high-contrast color (set
           // in overlay.css) — not the document's own link color, which is often
           // a low-contrast pastel that's hard to read.
           if (seg.span.dataset.fxDone) {
             wraps.push({ span: seg.span, start: localStart, end: localEnd, className: "fx-cite-c" });
+          }
+        }
+        // A multi-key citation is several references printed as one run of
+        // text, and the reader points at ONE of them: "[4, 12]" hovered over
+        // the 12 must open [12]'s card, not [4]'s. So each printed key gets a
+        // hit-target of its own, over the whole-citation ones pushed above —
+        // later siblings in the layer sit on top, so the precise target wins
+        // wherever it exists and the characters no key claims (the brackets,
+        // the comma, a locator) still open the citation at its first card.
+        if (cards.length > 1) {
+          for (const ks of cite.keySpans ?? []) {
+            const index = indexOf.get(ks.key);
+            if (index === undefined || index === 0) continue;
+            for (const seg of intersecting(segments, ks.start, ks.end)) {
+              if (seg.span.dataset.fxRefs) continue;
+              const localStart = Math.max(0, ks.start - seg.start);
+              const localEnd = Math.min(seg.end - seg.start, ks.end - seg.start);
+              for (const rect of rangeRects(seg.span, localStart, localEnd)) {
+                hits.push({ rect, cards, index });
+              }
+            }
           }
         }
       }
@@ -407,18 +391,18 @@ export class ReferencesFeature {
     // Phase 2 — writes. The hit-targets go in through one fragment (a single
     // insertion instead of one per rect).
     const frag = document.createDocumentFragment();
-    for (const { rect, cards } of hits) {
+    for (const { rect, cards, index } of hits) {
       const a = document.createElement("a");
       a.className = "fx-cite-hit";
       a.style.cssText =
         "position:absolute;pointer-events:auto;cursor:pointer;" +
         `left:${rect.left - layerRect.left}px;top:${rect.top - layerRect.top}px;` +
         `width:${rect.width}px;height:${rect.height}px;`;
-      a.addEventListener("mouseenter", () => this.#popup.scheduleShow(cards, a));
+      a.addEventListener("mouseenter", () => this.#popup.scheduleShow(cards, a, index));
       a.addEventListener("mouseleave", () => this.#popup.scheduleHide());
       a.addEventListener("click", (e) => {
         e.preventDefault();
-        this.#popup.showNow(cards, a, { pinned: true });
+        this.#popup.showNow(cards, a, { pinned: true, index });
       });
       frag.append(a);
     }
@@ -480,6 +464,62 @@ export class ReferencesFeature {
       box.style.pointerEvents = val;
     }
   }
+}
+
+/**
+ * Ordered, de-duplicated card list for a citation's keys: each resolved entry,
+ * plus a stub for any key of a BRACKETED citation the extractor didn't parse
+ * (so the pager reflects every cited reference and the native link is
+ * neutralised). Returns no cards for an unresolved author-year citation.
+ *
+ * "Bracketed" covers alpha keys ("[ABB+04]") as well as numeric ones: both are
+ * entry MARKERS, and a marker the bibliography parse missed is exactly the
+ * case the stub exists for. Restricting the stub to /^\d+$/ left an
+ * alpha-keyed paper's unparsed citations with no hit-target at all, so
+ * reconcileLinks never saw them and a click fell through to the PDF's own link
+ * — scrolling away to the bibliography, the one thing this must not do.
+ *
+ * `indexOf` says which CARD each key produced. A key's position in `keys` is
+ * not its position in the card list: cards are de-duplicated ("[4, 4]", or two
+ * keys resolving to one entry) and a single key can resolve to several
+ * entries. The per-key hit-targets need the card the reader is pointing at, so
+ * they ask this map rather than counting — a key maps to the first card it
+ * contributed.
+ *
+ * Exported for its unit test: the mapping is pure list work over parsed
+ * entries, and getting it wrong shows up as the wrong reference on screen.
+ */
+export function buildCards(keys, bracketed, entries) {
+  const cards = [];
+  const seen = new Map();
+  const indexOf = new Map();
+  for (const key of keys) {
+    const matches = resolveCitation([key], entries);
+    if (matches.length) {
+      for (const e of matches) {
+        const id = "e:" + (e.number ?? e.label);
+        if (!seen.has(id)) {
+          seen.set(id, cards.length);
+          cards.push(e);
+        }
+        if (!indexOf.has(key)) indexOf.set(key, seen.get(id));
+      }
+    } else if (bracketed) {
+      const id = "s:" + key;
+      if (!seen.has(id)) {
+        seen.set(id, cards.length);
+        cards.push({
+          number: /^\d+$/.test(key) ? parseInt(key, 10) : null,
+          label: key,
+          unresolved: true,
+          raw: "",
+          title: "",
+        });
+      }
+      if (!indexOf.has(key)) indexOf.set(key, seen.get(id));
+    }
+  }
+  return { cards, indexOf };
 }
 
 /**

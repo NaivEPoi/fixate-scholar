@@ -40,7 +40,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath } from "./lib/env.mjs";
+import { browserPath, killBrowser } from "./lib/env.mjs";
 
 const FILTER = process.argv[3] ?? "";
 // untouched: ground-truth texts known to live in data tables / algorithm
@@ -445,7 +445,7 @@ try {
   failures++;
   console.error("papers test error:", e);
 } finally {
-  browser.kill();
+  killBrowser(browser);
   await sleep(500);
   try { rmSync(userDataDir, { recursive: true, force: true }); } catch { /* Edge still holds the profile */ }
 }

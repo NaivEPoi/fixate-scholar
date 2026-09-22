@@ -18,7 +18,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { browserPath, extensionDir } from "./lib/env.mjs";
+import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const FILTER = POS[0] ?? "5GShield";
@@ -249,4 +249,4 @@ try {
   console.log(`\nTOTAL offenders: ${total}`);
   if (total > 0) process.exitCode = 1;
 } catch (e) { console.error("tables test error:", e.message || e); process.exitCode = 1; }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
+finally { try { ws?.close(); } catch {} killBrowser(browser); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
