@@ -17,6 +17,7 @@
 
 import { emphasizeParts } from "./segmenter.mjs";
 import { findCitations } from "../references/parser.mjs";
+import { anchorNear } from "./pdfhints.mjs";
 
 const CHUNK = 150;
 const ABSTRACT = /^\s*abstract\s*$/i;
@@ -651,7 +652,7 @@ export class TypographyEngine {
    *   4. classify each block; everything that is not body text is skipped.
    * Captions are skipped whole — treated as part of their figure/table.
    */
-  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0 = 0, isMath = () => false) {
+  #classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0 = 0, isMath = () => false, pageNumber = null) {
     const skip = new Set();
     // Divs whose SURROUNDINGS carry structural canvas art hugging the text (a
     // displayed formula's box frame): masks of neighbouring lines must clamp a
@@ -1705,11 +1706,36 @@ export class TypographyEngine {
         const bx0 = twoColumn && ax >= centerX ? centerX : vx0;
         const bx1 = twoColumn && ax < centerX ? centerX : vx0 + pageW;
         const band = its.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+        const tol = Math.max((lead.item.height || 8) * 1.2, 12);
+        const hAnchor = pageNumber && this.#hints?.headings
+          ? anchorNear(this.#hints.headings, pageNumber, lead.item.transform[5], tol)
+          : null;
+        const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol;
         if (isAlgoLead(leadStr)) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
           // prose between bold keywords.
           for (const p of band) { skip.add(p.div); dbg(p.div, "line-algo"); }
+        } else if (atHeadingAnchor) {
+          let head = runinHeadRun(band, bx0, bx1);
+          if (!head) {
+            for (let j = 0; j < band.length - 1; j++) {
+              const t = band[j].item.str.trim();
+              const isTerminator =
+                (/[.:]$/.test(t) && /[A-Za-zÀ-ɏ]/.test(t)) ||
+                ((t === ":" || t === ".") && j > 0 && /[A-Za-zÀ-ɏ]/.test(band[j - 1].item.str.trim()));
+              if (isTerminator && (hAnchor.depth >= 3 || lowerWords(band.slice(j + 1)) >= 2)) {
+                head = band.slice(0, j + 1);
+                break;
+              }
+            }
+          }
+          if (!head) head = band;
+          for (const p of head) {
+            skip.add(p.div);
+            dbg(p.div, "line-head");
+            if (isItalic(lead)) protect.add(p.div);
+          }
         } else if (HEAD_LEAD.test(leadStr)) {
           if (lowerWords(band) <= 3) {
             // A NUMBERED RUN-IN heading shares its line with the paragraph it
@@ -2571,7 +2597,7 @@ export class TypographyEngine {
       );
     };
     if (globalThis.__fxDebug) globalThis.__fxCurPage = pageNumber;
-    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath);
+    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath, pageNumber);
     for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
     // Tag bibliography-region spans so the references feature can skip annotating
     // the reference list's own "[N]" entry markers with citation cards (F1).
