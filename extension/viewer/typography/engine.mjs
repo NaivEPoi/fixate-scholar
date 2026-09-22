@@ -2036,8 +2036,20 @@ export class TypographyEngine {
           : null;
         for (const p of lines[k].items.filter(inBand)) { skip.add(p.div); dbg(p.div, "caption"); }
         if (capAnchor) {
-          // Bounded by the hyperref caption anchor: absorb the contiguous run
-          // of lines at caption size without guessing end conditions.
+          // Bounded by the hyperref caption anchor. The anchor is why no
+          // arbitrary LINE CAP is needed here: it establishes that this really
+          // is a caption, so a long one is not truncated at four lines the way
+          // a guessed caption must be.
+          //
+          // It does NOT remove the end conditions. hyperref's anchor marks
+          // where a caption STARTS, never where it stops, so everything below
+          // still has to decide where the caption ends — and on a paper whose
+          // captions are set at body size and body leading, gap and size alone
+          // do not separate the caption from the paragraph under it. Dropping
+          // the prose and run-in-heading guards here re-opened exactly the
+          // body-swallowing case the geometric branch documents as F2, with
+          // whole paragraphs marked `caption-absorb` and losing emphasis —
+          // invisible to whyskip, because `caption-absorb` is a reason.
           let prevY = lead.item.transform[5];
           for (let m = k + 1; m < lines.length; m++) {
             const bandM = lines[m].items.filter(inBand);
@@ -2047,6 +2059,12 @@ export class TypographyEngine {
             if (prevY - curY <= 0 || prevY - curY > Math.max(leadH, lineH) * 1.35) break; // gap
             if (Math.abs(lineH - leadH) > leadH * 0.2) break; // size change
             if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
+            // A new in-text reference sentence ("Figure 8 shows …") is body
+            // prose, not caption continuation.
+            if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" "))) break;
+            // A bold run-in heading opens a new body paragraph below the
+            // caption — stop before swallowing it.
+            if (isBold(bandM[0])) break;
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
             prevY = curY;
           }
