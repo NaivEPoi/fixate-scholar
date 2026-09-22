@@ -1316,6 +1316,55 @@ export class TypographyEngine {
         // Body text → process. Strip a leading run-in heading if present.
         if (b.leadBold || HEAD_LEAD.test(b.lead)) skipLeadRun(b);
       }
+
+      // A DISPLAYED EQUATION THE FONT TEST CANNOT SEE.
+      //
+      // `isDisplayEquation` and `isDisplayMathRow` both decide from the math
+      // FACE, and on a great many papers the face is not there to read: PDF.js
+      // resolves an equation's symbols to no font at all (the text layer draws
+      // them in a generic substitute), so the math ratio of a row full of
+      // mathematics reads as ZERO and the row is handed to the body filter.
+      //
+      // Each symbol is then rejected individually — "special-or-short", under
+      // two characters or carrying no Latin letter — and the row looks handled.
+      // The exception is the one kind of token LaTeX deliberately sets in
+      // upright ROMAN: \exp, \cos, \min, \max, \log, \mod and the other
+      // operator names are body-face text by construction, indistinguishable
+      // from prose by any font test. So the operator name alone is processed,
+      // and emphasis is painted inside a displayed equation — on one equation
+      // and not the next, which is exactly what made the defect look arbitrary
+      // when it was found by eye (R43).
+      //
+      // Classify the ROW by what it is made of instead. A row qualifies only
+      // when all three hold: it carries a relation/operator glyph, it runs no
+      // prose, and it is overwhelmingly built from items the body filter would
+      // reject anyway. A prose line with inline math fails the prose test, so
+      // "we apply exp(2πiac/q) here" is untouched; an equation row keeps its
+      // operator names with the symbols they belong to.
+      for (const b of blocks) {
+        for (const r of b.rows) {
+          if (r.items.length < 3 || proseWords(r) > 0) continue;
+          const rowText = r.items.map((p) => p.item.str).join("");
+          let symbolish = 0;
+          for (const p of r.items) {
+            const t = p.item.str.trim();
+            if (!t || t.length < 2 || !/[A-Za-zÀ-ɏ]/.test(t) || isMath(p) || isSpecial(p)) symbolish++;
+          }
+          const ratio = symbolish / r.items.length;
+          // MATH_SIGNAL is the clearest tell, but it lists relations and does
+          // not carry `+`, `/` or the `∣` of a norm — equation (5.6) of the
+          // Computer Modern paper has no character from it at all. A trailing
+          // equation NUMBER is the other unambiguous tell, and failing both, a
+          // row has to be almost entirely symbols to qualify.
+          const numbered = /\(\d+(?:\.\d+)*\)\s*$/.test(rowText.trim());
+          if (!(ratio >= 0.85 || ((MATH_SIGNAL.test(rowText) || numbered) && ratio >= 0.7))) continue;
+          for (const p of r.items) {
+            if (skip.has(p.div)) continue;
+            skip.add(p.div);
+            dbg(p.div, "row-eqn");
+          }
+        }
+      }
     }
 
     // Confirmed table rows (skipped via cells / aligned starts) — collected for
