@@ -138,7 +138,19 @@ try {
 
   // Test 1: Repeated FX Toggle (10 cycles)
   console.log("\n=== 2. Testing 10 FX Toggle Cycles (on <-> off) ===");
-  for (let cycle = 1; cycle <= 10; cycle++) {
+  // The FIRST cycle is a warm-up, and its metrics are the ones this check is
+  // measured against. The initial baseline above is taken while the first page
+  // is still settling, so comparing to it makes ten clean cycles land ~45 nodes
+  // BELOW it — which a strict equality reads as a failure and a `<= 0` reads as
+  // a pass no matter what, hiding any leak smaller than the artefact. Comparing
+  // steady state to steady state removes the artefact instead of tolerating it,
+  // so the assertion below can stay exact.
+  await ev("chrome.storage.sync.set({ enabled: false })");
+  await sleep(600);
+  await ev("chrome.storage.sync.set({ enabled: true })");
+  await sleep(800);
+  const settled = await getMetrics();
+  for (let cycle = 2; cycle <= 10; cycle++) {
     await ev("chrome.storage.sync.set({ enabled: false })");
     await sleep(600);
     await ev("chrome.storage.sync.set({ enabled: true })");
@@ -147,7 +159,7 @@ try {
   const afterToggle = await getMetrics();
   console.log("After 10 Toggles: Heap: " + afterToggle.heapMB + " MB, DOM Nodes: " + afterToggle.nodes + ", Listeners: " + afterToggle.listeners + ", fxDone: " + afterToggle.fxDone);
   const toggleHeapDelta = afterToggle.heapMB - baseline.heapMB;
-  const toggleNodeDelta = afterToggle.nodes - baseline.nodes;
+  const toggleNodeDelta = afterToggle.nodes - settled.nodes;
   console.log("Toggle Delta: Heap " + (toggleHeapDelta >= 0 ? "+" : "") + toggleHeapDelta.toFixed(2) + " MB, Nodes " + (toggleNodeDelta >= 0 ? "+" : "") + toggleNodeDelta);
 
   // Test 2: Font switching across all 6 modes
@@ -198,20 +210,19 @@ try {
   console.log("\n=== Leak Verification Summary ===");
   const totalHeapDelta = afterDisable.heapMB - baseline.heapMB;
   console.log("Total Heap Growth across whole stress run: " + (totalHeapDelta >= 0 ? "+" : "") + totalHeapDelta.toFixed(2) + " MB");
-  console.log("Toggle Node Delta (10 cycles on same page): " + toggleNodeDelta);
+  console.log("Toggle Node Delta (cycles 2-10, vs settled cycle 1): " + toggleNodeDelta);
   console.log("Font Switch Node Delta (7 font swaps): " + (afterFonts.nodes - afterToggle.nodes));
   console.log("Active Masks after disable (must be 0): " + afterDisable.fxMasks);
   console.log("Active Popups (must be <= 1): " + afterDisable.popups);
 
   const heapOk = totalHeapDelta < 15;
-  // A LEAK is node GROWTH. These were written as `=== 0`, which also fails when
-  // the count comes back LOWER than the baseline — and it does: the baseline is
-  // taken while the first page is still settling, so ten clean toggle cycles
-  // land ~46 nodes BELOW it and the run reported "potential memory leak" over a
-  // tidier DOM than it started with. Exact equality is the wrong shape for a
-  // one-sided property; a decrease is evidence of the opposite of a leak.
-  const toggleNodesOk = toggleNodeDelta <= 0;
-  const fontNodesOk = (afterFonts.nodes - afterToggle.nodes) <= 0;
+  // Measured steady-state to steady-state (cycle 1 vs cycle 10), so exact
+  // equality is meaningful again: the warm-up artefact that made this fail on a
+  // TIDIER DOM is gone, and a relaxed `<= 0` is not needed. Relaxing it would
+  // have been the wrong repair anyway — it passes any leak smaller than the
+  // artefact it was hiding, which is precisely the size of leak this looks for.
+  const toggleNodesOk = toggleNodeDelta === 0;
+  const fontNodesOk = (afterFonts.nodes - afterToggle.nodes) === 0;
   const masksCleaned = afterDisable.fxMasks === 0 && afterDisable.fxDone === 0;
   const popupsOk = afterDisable.popups <= 1;
 

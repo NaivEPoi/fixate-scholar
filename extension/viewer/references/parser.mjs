@@ -831,7 +831,15 @@ export function findCitations(text, options = {}) {
     // "[6]-[11]" prints exactly two numbers; they are the only two the reader
     // can point at, and the second one only when the range wasn't truncated.
     const aAt = m.index + m[0].indexOf(m[1]);
-    const bAt = m.index + m[0].lastIndexOf(m[2]);
+    // The second key sits inside the SECOND bracket, so it is located FROM
+    // that bracket rather than by searching the match backwards. This match
+    // may carry a locator, and a locator can repeat the number: in
+    // "[6]-[11, p. 11]" a `lastIndexOf` lands on the page number, putting
+    // [11]'s hit-target on "p. 11" instead of on the key — pointing at "[11"
+    // then opened [6]'s card, which is the very defect per-key targets exist
+    // to prevent (R45).
+    const secondBracket = m[0].indexOf("[", m[0].indexOf("]"));
+    const bAt = m.index + m[0].indexOf(m[2], secondBracket);
     const spans = [{ key: m[1], start: aAt, end: aAt + m[1].length }];
     if (keys.at(-1) === m[2]) spans.push({ key: m[2], start: bAt, end: bAt + m[2].length });
     if (keys.length) out.push({ start: m.index, end: m.index + m[0].length, keys, keySpans: spans, precededByIdentifier });
