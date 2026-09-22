@@ -7,6 +7,7 @@ import { TypographyEngine } from "./typography/engine.mjs";
 import { getSettings, setSettings, onSettingsChange } from "./settings-client.mjs";
 import { ReferencesFeature } from "./references/citations.mjs";
 import { HyphenVocabulary, installFlowCopy, loadWordList } from "./copytext.mjs";
+import { extractStructureHints } from "./typography/pdfhints.mjs";
 import { currentFileUrl } from "./file-param.mjs";
 
 // Crisper page canvases: PDF.js rasterizes each page at devicePixelRatio.
@@ -475,6 +476,20 @@ function handleDocumentLoaded() {
   if (!doc || doc === lastLoadedDoc) return;
   lastLoadedDoc = doc;
   engine.onDocumentLoaded();
+  // What the FILE says about its own structure, before anything is classified
+  // from geometry: hyperref's named destinations for headings, float captions
+  // and numbered equations (typography/pdfhints.mjs). Deliberately NOT awaited
+  // — the reference analysis below must start immediately, and the hints are a
+  // refinement that re-processes the rendered pages when they land, exactly as
+  // the four document-wide setters already do. A document that states nothing
+  // (a pre-hyperref paper) resolves to `available: false` and changes nothing.
+  extractStructureHints(doc)
+    .then((hints) => {
+      if (app.pdfDocument !== doc) return; // a newer document won the race
+      return engine.setStructureHints(hints);
+    })
+    .then(afterEngineChange)
+    .catch((e) => console.warn("FixateScholar: structure hints failed", e));
   references.onDocumentLoaded(doc);
   // The viewer's 30s render-queue-idle cleanup evicts the document's
   // FontFaces (pdfDocument.cleanup(false)). No font event fires on eviction,
