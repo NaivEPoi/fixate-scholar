@@ -771,10 +771,21 @@ const NUMERIC_BRACKET_RANGE =
 // "Dix" as roman numerals — so an APA initial swallowed the citation after it.
 // Front matter is paginated "p. ix", never "P. IX".
 const LOC_PREFIX = "(?:pp?\\.|§{1,2}|¶)";
-const LOC_NUM = "(?:\\d+(?:[.\\-\\u2013\\u2014]\\d+)*|[ivxlcdm]+)";
+// Ranges count on BOTH sides of the alternation: front matter is cited
+// "pp. ix-xii" as readily as "pp. 3-4", and a roman numeral without the range
+// made that whole parenthetical fail to be a citation.
+const LOC_NUM =
+  "(?:\\d+(?:[.\\-\\u2013\\u2014]\\d+)*|[ivxlcdm]+(?:[-\\u2013\\u2014][ivxlcdm]+)*)";
 const LOC_BODY = `${LOC_PREFIX}\\s*${LOC_NUM}`;
+// An undated work is a legitimate member of a citation list even though it can
+// never key a card, and the list grammar has to admit one. It did not, and the
+// consequence was out of all proportion: in "(Jones 2020; Smith n.d.)" the
+// trailing segment matched no alternative, so the WHOLE parenthetical failed to
+// be a citation and the perfectly good Jones 2020 was lost with it. A shape
+// this regex does not know should cost its own segment, never its neighbours.
+const UNDATED_SEG = "[^();]*?(?:n\\.\\s*d\\.|in press|forthcoming)";
 const AUTHOR_YEAR_CITE = new RegExp(
-  `\\(([^()]{2,120}?(?:19|20)\\d{2}[a-z]?(?:\\s*[;,]\\s*(?:${LOC_BODY}|[^();]*?(?:19|20)\\d{2}[a-z]?))*)\\)`,
+  `\\(([^()]{2,120}?(?:19|20)\\d{2}[a-z]?(?:\\s*[;,]\\s*(?:${LOC_BODY}|${UNDATED_SEG}|[^();]*?(?:19|20)\\d{2}[a-z]?))*)\\)`,
   "g",
 );
 

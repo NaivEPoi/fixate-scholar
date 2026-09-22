@@ -1035,3 +1035,30 @@ test("findCitations: an undated marker can arrive after the name it belongs to",
     assert.deepEqual(c.keys, ["Jones-2020"], text);
   }
 });
+
+test("findCitations: an unknown segment costs its own segment, not its neighbours", () => {
+  const keys = (t) => (findCitations(t, { includeIndexed: true })[0] ?? {}).keys ?? null;
+
+  // An undated work is a legitimate member of a citation list even though it
+  // can never key a card. The list grammar did not admit one, so the whole
+  // parenthetical stopped being a citation and the good Jones 2020 went with
+  // it — a failure out of all proportion to the unknown segment.
+  assert.deepEqual(keys("see (Jones 2020; Smith n.d.) here"), ["Jones-2020"]);
+  assert.deepEqual(keys("see (Jones 2020, Smith in press) here"), ["Jones-2020"]);
+  assert.deepEqual(
+    keys("see (Jones 2020; Smith forthcoming; Roe 2021) here"),
+    ["Jones-2020", "Roe-2021"],
+  );
+
+  // Roman page RANGES are cited as readily as arabic ones; without the range
+  // the whole parenthetical failed to be a citation at all.
+  assert.deepEqual(keys("see (Smith 2019, pp. ix-xii) here"), ["Smith-2019"]);
+  assert.deepEqual(
+    keys("see (Smith 2019, pp. ix-xii; Jones 2020) here"),
+    ["Smith-2019", "Jones-2020"],
+  );
+
+  // And the parentheticals that are not citations still are not.
+  assert.equal(findCitations("in the year (2020)").length, 0);
+  assert.equal(findCitations("(Figure 2020 shows this)").length, 0);
+});
