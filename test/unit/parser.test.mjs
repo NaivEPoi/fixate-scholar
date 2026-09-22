@@ -1062,3 +1062,36 @@ test("findCitations: an unknown segment costs its own segment, not its neighbour
   assert.equal(findCitations("in the year (2020)").length, 0);
   assert.equal(findCitations("(Figure 2020 shows this)").length, 0);
 });
+
+test("findCitations: shapes the split-and-repair parser could not express", () => {
+  const slice = (t) => {
+    const [c] = findCitations(t, { includeIndexed: true });
+    return c ? (c.keySpans ?? []).map((k) => [k.key, t.slice(k.start, k.end)]) : null;
+  };
+
+  // A comma page list is ONE locator. Cutting on commas isolated "14", which
+  // had no page mark of its own and so leaked into the next citation's target.
+  assert.deepEqual(slice("see (Smith 2019, pp. 12, 14, Jones 2020) here"), [
+    ["Smith-2019", "Smith 2019, pp. 12, 14"],
+    ["Jones-2020", "Jones 2020"],
+  ]);
+
+  // Two works by one author. The second year has no author of its own and was
+  // dropped; it belongs to the author before it.
+  assert.deepEqual(slice("see (Smith 2019, 2020) here"), [
+    ["Smith-2019", "Smith 2019"],
+    ["Smith-2020", "2020"],
+  ]);
+
+  // A narrative prefix is not a surname. Taking the first capitalised word gave
+  // the key "See-2019", for a reference that cannot exist, so the card never
+  // resolved.
+  assert.deepEqual(slice("see (See Smith 2019) here"), [["Smith-2019", "Smith 2019"]]);
+  assert.deepEqual(slice("see (Cf. Smith 2019) here"), [["Smith-2019", "Smith 2019"]]);
+
+  // An initial is not a surname either: "P. Dix" keyed on "P".
+  assert.deepEqual(slice("see (Smith, 2019; P. Dix, 2020) here"), [
+    ["Smith-2019", "Smith, 2019"],
+    ["Dix-2020", "P. Dix, 2020"],
+  ]);
+});
