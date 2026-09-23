@@ -349,7 +349,18 @@ try {
     await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:false},r))`).catch(() => {});
     await ev(`window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(zoom)}`);
     await sleep(1500);
-    await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`).catch(() => {});
+    // Enabling must SUCCEED, and the engine must visibly run, before a page is
+    // read. Both used to be taken on trust (the enable's failure was swallowed),
+    // and under a loaded gate a whole zoom was measured with nothing processed:
+    // 1,276 "zoom flips" on one paper whose every flip was body prose at 0
+    // emphasis at that zoom — and 0 flips when the paper was re-run alone.
+    await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`);
+    let running = false;
+    for (let i = 0; i < 60 && !running; i++) {
+      await sleep(1000);
+      running = (await ev(`document.querySelectorAll(".textLayer span[data-fx-done]").length`).catch(soft(0))) > 0;
+    }
+    if (!running) throw new Error(`the engine never processed a span at zoom ${zoom} — no verdict`);
     const scale = await ev(`window.PDFViewerApplication.pdfViewer.currentScale`);
     const pages = await ev(`window.PDFViewerApplication.pagesCount`);
     const from = RANGE[0] || 1, to = Math.min(RANGE[1] || pages, pages);
