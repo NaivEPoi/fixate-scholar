@@ -100,7 +100,10 @@ const READ = `(() => {
   const cr0 = pv.canvas.getBoundingClientRect();
   const tl = pv.textLayer.div.getBoundingClientRect();
   const dims = { textLayer: [+(tl.left - cr0.left).toFixed(1), +tl.width.toFixed(1), +tl.height.toFixed(1)], canvasH: +cr0.height.toFixed(1), canvasCss: +cr0.width.toFixed(1), divCss: +box.width.toFixed(1), viewport: +pv.viewport.width.toFixed(1), canvasPx: pv.canvas.width };
-  return { dims, scale: z, rules, history, zoneLines: zl, spans, probe };
+  const bl = globalThis.__fxBaseline || [];
+  const baseline = { renders: bl.length, maxMs: Math.max(0, ...bl.map((b) => b.ms)), failed: bl.filter((b) => b.outcome !== "ok").map((b) => b.page + ":" + b.outcome),
+    thisPage: bl.filter((b) => b.page === ${PAGE}).map((b) => b.ms + "ms/" + b.outcome) };
+  return { baseline, dims, scale: z, rules, history, zoneLines: zl, spans, probe };
 })()`;
 
 let cdp;
@@ -130,6 +133,11 @@ try {
     await ev(`window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(zoom)}`);
     await sleep(1500);
     await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`);
+    // --walk: arrive the way tables.mjs does, page by page from 1, instead of
+    // jumping — prefetch and font loads then re-process pages on the way.
+    if (process.argv.includes("--walk")) {
+      for (let p = 1; p < PAGE; p++) { await ev(`window.PDFViewerApplication.page = ${p}`); await sleep(2000); }
+    }
     await ev(`window.PDFViewerApplication.page = ${PAGE}`);
     let st = null;
     for (let i = 0; i < 60; i++) {
@@ -151,6 +159,7 @@ try {
   for (const r of results) {
     console.log(`\n== zoom ${r.zoom} (scale ${(+r.scale).toFixed(3)}, rules from ${r.rules?.source ?? "?"}) handled ${JSON.stringify(r.handled)}`);
     console.log(`rule passes (rules@source): ${r.history}  dims ${JSON.stringify(r.dims)}`);
+    console.log(`baseline renders: ${JSON.stringify(r.baseline)}`);
     if (r.probe) console.log(`probe (dev px/page px ${r.probe.devPxPerPageUnit}, from dev y ${r.probe.y0dev}): ${r.probe.ink}`);
     const mine = r.rules?.rules ?? [];
     const others = results.filter((o) => o !== r).map((o) => o.rules?.rules ?? []);

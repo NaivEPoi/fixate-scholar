@@ -383,11 +383,18 @@ export class ReferencesFeature {
     // In-paper references (Figure 3, Table 9, Section 5, Algorithm 2, …) get a
     // distinct fixed high-contrast color, also from overlay.css. Queued after
     // the citation wraps, exactly as they were applied before.
-    // Not inside a citation: a locator there ("[9, §5.2]", "[4, Section 3]")
-    // points into the CITED work, not this paper, and was painted in the
-    // reference colour nested inside the citation colour.
+    // Not a citation's LOCATOR: "[9, §5.2]", "[4, Section 3]", "(Smith 2020,
+    // Section 3)" point into the CITED work, not this paper, and were painted
+    // in the reference colour nested inside the citation colour. A locator
+    // follows its key — a number or year earlier in the same citation, with no
+    // ";" between — so "(see Section 3; Smith 2020)" still refers to this paper.
+    const isLocator = (ref) => citeRanges.some(([a, b]) => {
+      if (!(ref.start < b && ref.end > a)) return false;
+      const before = joined.slice(a, ref.start);
+      return /\d/.test(before.slice(before.lastIndexOf(";") + 1));
+    });
     for (const ref of findInternalRefs(joined)) {
-      if (citeRanges.some(([a, b]) => ref.start < b && ref.end > a)) continue;
+      if (isLocator(ref)) continue;
       for (const seg of intersecting(segments, ref.start, ref.end)) {
         if (!seg.span.dataset.fxDone) continue;
         const localStart = Math.max(0, ref.start - seg.start);

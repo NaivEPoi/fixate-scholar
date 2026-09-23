@@ -76,5 +76,8 @@ export function add(state, p, r) {
 
 export function summarize(state) {
   const nested = state.N ? ` nested=${state.N}` : "";
-  return { ok: !(state.T > state.C) && !state.N, out: [`\nTOTAL refs=${state.T} colored=${state.C}${nested}`], err: [] };
+  const out = [`\nTOTAL refs=${state.T} colored=${state.C}${nested}`];
+  // No page read at all is no measurement: "0 refs, 0 colored" used to pass.
+  if (!state.pages) out.push("  FAIL no page was probed — the check proved nothing");
+  return { ok: state.pages > 0 && !(state.T > state.C) && !state.N, out, err: [] };
 }

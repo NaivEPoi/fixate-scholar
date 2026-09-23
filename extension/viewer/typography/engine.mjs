@@ -169,7 +169,12 @@ function joinRuns(allPairs) {
     const h = Math.min(ia.height || 0, ib.height || 0);
     if (!(h > 0)) continue;
     if (Math.abs(ia.transform[5] - ib.transform[5]) > h * 0.3) continue; // different lines
-    if (ib.transform[4] - (ia.transform[4] + (ia.width ?? 0)) >= h * 0.15) continue; // a space fits
+    const gap = ib.transform[4] - (ia.transform[4] + (ia.width ?? 0));
+    // A space fits — or the next span starts well BEHIND this one's end: not a
+    // word continuing but a jump back (another column on the same baseline).
+    // A TeX accent sits over the letter after it, so a continuation may start
+    // a little behind; never a line height behind.
+    if (gap >= h * 0.15 || gap < -h) continue;
     const head = HEAD_FRAG.exec(a.div.textContent ?? "")?.[0];
     const tail = TAIL_FRAG.exec(b.div.textContent ?? "")?.[0];
     if (!head || !tail) continue;
@@ -212,6 +217,9 @@ const RULE_SAME_GAP = 2; // padded rule rects this close are one visual rule —
 // page px — whatever the viewer's zoom (#baselineRules). 2 is the 100% zoom
 // on a 2x display: the resolution the constants above were tuned against.
 const RULE_PPU = 2;
+// A baseline render that has not settled by then is cancelled: they run one
+// at a time, so one that never settled would hold every later page's rules.
+const RULE_RENDER_MS = 8000;
 // Table-zone line buckets. Five CSS px at the page-fit (~1.24) that tables.mjs
 // validated; a paragraph continuation may sit ≤ ZONE_CONT_LINES buckets below.
 const ZONE_LINE_Q = 4;
@@ -391,6 +399,7 @@ export class TypographyEngine {
   #snapCtx = null; // offscreen willReadFrequently context for canvas pixel reads
   #ruleBaseline = new WeakMap(); // pdfPage -> its rules in page px (#baselineRules)
   #ruleQueue = Promise.resolve(); // baseline renders, one at a time
+  #ruleGen = 0; // bumped per document: a queued render of a closed one is skipped
   #pageFonts = new Map(); // pageNumber -> Set<famKey> used by processed spans
   #inkRetryPages = new Set(); // pages whose ink decisions used a capped-resolution canvas
   #batching = false; // document-wide setters record only; endBatch re-processes once
@@ -440,6 +449,7 @@ export class TypographyEngine {
     this.#bodyHeight = null;
     this.#hints = null;
     this.#pageFonts.clear();
+    this.#ruleGen++;
     this.#inkRetryPages.clear();
     this.#ascentCache.clear();
     this.#spaceInkCache.clear();
@@ -2675,27 +2685,41 @@ export class TypographyEngine {
     const entry = { rotation, w: unit.width, h: unit.height, rules: undefined };
     this.#ruleBaseline.set(page, entry);
     const ppu = globalThis.__fxRulePPU > 0 ? globalThis.__fxRulePPU : RULE_PPU; // test override
+    const gen = this.#ruleGen;
     this.#ruleQueue = this.#ruleQueue.then(async () => {
+      if (gen !== this.#ruleGen) { entry.rules = null; return; } // its document is gone
+      const t0 = performance.now();
+      let outcome = "ok";
+      let task = null, timer = 0;
       const canvas = document.createElement("canvas");
       try {
         const vp = page.getViewport({ scale: ptScale * ppu, rotation });
         canvas.width = Math.round(vp.width);
         canvas.height = Math.round(vp.height);
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
-        await page.render({
+        task = page.render({
           canvasContext: ctx,
           viewport: vp,
           annotationMode: globalThis.pdfjsLib?.AnnotationMode?.ENABLE_FORMS,
           optionalContentConfigPromise: pageView._optionalContentConfigPromise ?? null,
-        }).promise;
+        });
+        timer = setTimeout(() => task.cancel(), RULE_RENDER_MS);
+        await task.promise;
         const W = canvas.width, H = canvas.height;
         const kx = W / entry.w, ky = H / entry.h;
         entry.rules = scanRules(ctx.getImageData(0, 0, W, H).data, W, H, kx, ky)
           .map((b) => [b.x0 / kx, b.y0 / ky, b.x1 / kx, b.y1 / ky]);
-      } catch {
+      } catch (e) {
         entry.rules = null; // the pass falls back to the live canvas
+        outcome = String(e?.name || e).slice(0, 60);
       } finally {
+        clearTimeout(timer);
         canvas.width = canvas.height = 0; // release the bitmap now, not at GC
+        if (globalThis.__fxDebug) {
+          (globalThis.__fxBaseline ??= []).push({
+            page: pageView.id, ms: Math.round(performance.now() - t0), outcome, rules: entry.rules?.length ?? null,
+          }); // test introspection
+        }
       }
     });
     return entry;
@@ -3573,7 +3597,7 @@ export class TypographyEngine {
               const cx = (r.left + r.right) / 2;
               const cy = (r.top + r.bottom) / 2;
               const zi = zones.findIndex(
-                (z) => cx >= z.x0 && cx <= z.x1 && cy > z.yTop + 1 && cy < z.yBot - 1,
+                (z) => cx >= z.x0 && cx <= z.x1 && cy > z.yTop + zoom && cy < z.yBot - zoom, // one page px
               );
               if (zi < 0) continue;
               const key = zi + ":" + lineOf(r);

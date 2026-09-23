@@ -111,14 +111,15 @@ const soft = (d) => (e) => { if (fatal(e)) throw e; return d; };
 const handled = (page) => `(() => {
   const d = window.PDFViewerApplication.pdfViewer.getPageView(${page - 1})?.textLayer?.div;
   if (!d) return null;
-  let prose = 0, handled = 0;
+  let prose = 0, handled = 0, done = 0;
   for (const s of d.querySelectorAll("span")) {
     if (s.matches(".fx-cite-c, .fx-ref-c, .fx-sp") || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
     if (((s.textContent || "").match(/[a-z]{2,}/g) || []).length < 2) continue;
     prose++;
     if (s.closest("[data-fx-done], [data-fx-why], [data-fx-keep], [data-fx-table]")) handled++;
+    if (s.closest("[data-fx-done]")) done++;
   }
-  return { prose, handled };
+  return { prose, handled, done };
 })()`;
 // Whether the engine has processed anything in this document yet.
 let engineSeen = false;
@@ -202,11 +203,18 @@ try {
     // reason it was left (tables.mjs's wait — read before it, a page's
     // unprocessed tail becomes whyskip's "unreasoned" and tables' misses).
     // Bounded: a span the engine never marks cannot hold the run hostage.
+    let st = null;
     for (let i = 0; i < 30 && sig !== null; i++) {
-      const st = await ev(handled(pg)).catch(soft(null));
+      st = await ev(handled(pg)).catch(soft(null));
       if (!st || st.prose < 3 || st.handled === st.prose) break;
       await sleep(1000);
       sig = await settle(pg);
+    }
+    // Prose still undecided and nothing processed: the engine never finished
+    // this page (restored for a re-process, never re-processed). No verdict —
+    // reading it would score an unprocessed page as the product's output.
+    if (engineSeen && st && st.prose >= 3 && st.done === 0 && st.handled < st.prose) {
+      throw new Error(`p${pg} was never processed by the engine (${st.prose - st.handled} prose spans undecided) — no verdict`);
     }
     // A page with no text layer after a full settle is one thing; three in a
     // row is the viewer no longer producing them at all (seen as "p6..p16: no
