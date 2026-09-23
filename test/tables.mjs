@@ -292,6 +292,22 @@ const SPANS = (p) => `(() => {
 })()`;
 
 // Processed/emphasis counts of page p, for the settle loop.
+// Has the engine HANDLED page p yet? A page with prose on it is handled once
+// any prose span is processed or carries the reason it was left (__fxDebug is
+// on). Settling on counts alone accepted a page that had not been processed
+// YET: under a loaded gate a whole zoom read that way, and every emphasized
+// span of it became a "zoom flip" (925 on one paper, 0 when re-run alone).
+const HANDLED = (p) => `(() => {
+  const d = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;
+  if (!d) return false;
+  let prose = 0;
+  for (const s of d.querySelectorAll(":scope > span")) {
+    if (((s.textContent || "").match(/[a-z]{2,}/g) || []).length < 2) continue;
+    prose++;
+    if (s.hasAttribute("data-fx-done") || s.dataset.fxWhy || s.hasAttribute("data-fx-keep") || s.hasAttribute("data-fx-table")) return true;
+  }
+  return prose < 3;
+})()`;
 const COUNTS = (p) => `(() => { const d = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;
   return d ? d.querySelectorAll("span[data-fx-done]").length + "/" + d.querySelectorAll(".fx-b").length : "-"; })()`;
 
@@ -349,18 +365,9 @@ try {
     await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:false},r))`).catch(() => {});
     await ev(`window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(zoom)}`);
     await sleep(1500);
-    // Enabling must SUCCEED, and the engine must visibly run, before a page is
-    // read. Both used to be taken on trust (the enable's failure was swallowed),
-    // and under a loaded gate a whole zoom was measured with nothing processed:
-    // 1,276 "zoom flips" on one paper whose every flip was body prose at 0
-    // emphasis at that zoom — and 0 flips when the paper was re-run alone.
+    // Enabling must SUCCEED: its failure used to be swallowed, and under a
+    // loaded gate a whole zoom was then measured with the engine off.
     await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`);
-    let running = false;
-    for (let i = 0; i < 60 && !running; i++) {
-      await sleep(1000);
-      running = (await ev(`document.querySelectorAll(".textLayer span[data-fx-done]").length`).catch(soft(0))) > 0;
-    }
-    if (!running) throw new Error(`the engine never processed a span at zoom ${zoom} — no verdict`);
     const scale = await ev(`window.PDFViewerApplication.pdfViewer.currentScale`);
     const pages = await ev(`window.PDFViewerApplication.pagesCount`);
     const from = RANGE[0] || 1, to = Math.min(RANGE[1] || pages, pages);
@@ -369,6 +376,9 @@ try {
     for (let p = from; p <= to; p++) {
       await ev(`window.PDFViewerApplication.page = ${p}`);
       await settle(p);
+      let handled = false;
+      for (let i = 0; i < 30 && !handled; i++) { handled = await ev(HANDLED(p)).catch(soft(false)); if (!handled) { await sleep(1000); await settle(p); } }
+      if (!handled) throw new Error(`p${p} was never processed by the engine at zoom ${zoom} — no verdict`);
       const res = await ev(CHECK(p)).catch((e) => ({ error: String(e).slice(0, 120) }));
       const rows = await ev(SPANS(p)).catch(() => null);
       if (rows) {
