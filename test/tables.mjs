@@ -11,10 +11,28 @@
 // Some prose CAN legally sit between two nearby unrelated rules (stacked
 // tables with a paragraph between) — treat new flags as leads and confirm
 // with a capture before "fixing" the engine (TESTING.md §6).
-// Usage: node test/tables.mjs <paper> [--pages=A-B]  (exit 1 on offenders)
+//
+// ZOOM SWEEP (R47). The engine finds rules by reading the PAINTED canvas, and
+// that canvas changes with the viewer zoom — its resolution, its anti-aliasing,
+// and above ~1.5x PDF.js's maxCanvasPixels CAP, which drops the base render
+// below one device pixel per CSS pixel. So a page is checked at every zoom in
+// --zooms, each in a FRESH viewer tab (zoom set before the engine is enabled —
+// a standalone run, as R47 measured it), and two things are reported:
+//   1. offenders, per zoom, as above. The oracle's rules come from its OWN
+//      render of the page at a fixed ORACLE_SCALE, not from the viewer canvas,
+//      so the oracle's zones are the same at every zoom and only the engine's
+//      decisions move;
+//   2. EMPHASIS FLIPS: the same span (text + occurrence index on its page)
+//      carrying a different number of .fx-b runs at two zooms. Counted from the
+//      .fx-b runs actually present, not from data-fx-done, which can be set on
+//      a span that produced no emphasis. A changed processed-span TOTAL is
+//      printed for reference but is never a pass/fail on its own.
+// Both exit 1. One zoom (e.g. --zooms=page-fit) is the pre-R47 behaviour.
+// Usage: node test/tables.mjs <paper> [--pages=A-B] [--zooms=page-fit,1.0,1.8]
+//        [--url=<pdf>] [--why] [--noexempt] [--dump=<file>]
 
 import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -25,7 +43,18 @@ const FILTER = POS[0] ?? "5GShield";
 const WHY = process.argv.slice(2).includes("--why"); // dump the prose-exemption inputs per offender
 const NOEXEMPT = process.argv.slice(2).includes("--noexempt"); // control: disable the prose exemption
 const URL_OVERRIDE = process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6); // any PDF URL, e.g. a local test server
+// --dump=<file>: every zoom's per-span rows as JSON, for comparing two builds
+// of the engine span by span (same paper, same zooms).
+const DUMP = process.argv.slice(2).find((a) => a.startsWith("--dump="))?.slice(7);
 const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
+// Default sweep: the page-fit this check always ran at, plus 100% and the 180%
+// the fontkeep/whyskip stages use — the two zooms R47 measured apart.
+const ZOOMS = (process.argv.slice(2).find((a) => a.startsWith("--zooms="))?.slice(8) ?? "page-fit,1.0,1.8")
+  .split(",").map((z) => z.trim()).filter(Boolean);
+// The oracle's own render, in device px per PDF point. ~4 is what the
+// page-fit canvas at devicePixelRatio 2 used to give it, so the rule-length and
+// merge constants below keep the meaning they were validated with.
+const ORACLE_SCALE = 4;
 const PAPERS = {
   "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
   "USENIX (code + algorithms)": "https://yilud.me/usenixsecurity24-tu.pdf",
@@ -64,17 +93,33 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
 });
 const ev = async (expr) => { const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception?.description || r.exceptionDetails.text || "").slice(0, 300)); return r.result.value; };
 
-// In-page: rules from the canvas backing, zones from rule pairs, offenders
-// from processed-span centers inside zones (all in CSS px via the canvas rect).
-const CHECK = (p) => `(() => {
+// In-page: rules from the oracle's own render, zones from rule pairs, offenders
+// from processed-span centers inside zones (span rects mapped through the
+// viewer canvas rect, which covers exactly the page).
+//
+// The render is the oracle's, at ORACLE_SCALE px/pt whatever the viewer zoom:
+// reading the viewer's canvas made the oracle exactly as zoom-dependent as the
+// engine it checks (at 1.8 that canvas is capped to ~0.7 device px per CSS px
+// and a 0.4pt frame edge reads light), so a zoom sweep would have compared two
+// moving things. Line grouping is likewise in page units (LINE_Q zoom-1 px per
+// bucket, ~5 CSS px at the page-fit it used to run at).
+const CHECK = (p) => `(async () => {
   const pv = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});
   const canvas = pv.canvas || pv.div.querySelector("canvas");
   const layer = pv.textLayer && pv.textLayer.div;
-  if (!canvas || !layer) return { error: "no canvas/layer" };
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  const W = canvas.width, H = canvas.height;
+  if (!canvas || !layer || !pv.pdfPage) return { error: "no canvas/layer" };
+  const own = document.createElement("canvas");
+  const vp = pv.pdfPage.getViewport({ scale: ${ORACLE_SCALE}, rotation: pv.viewport.rotation });
+  own.width = Math.round(vp.width); own.height = Math.round(vp.height);
+  const ctx = own.getContext("2d", { willReadFrequently: true });
+  try { await pv.pdfPage.render({ canvasContext: ctx, viewport: vp }).promise; } catch (e) { return { error: "oracle render: " + e }; }
+  const W = own.width, H = own.height;
   let img; try { img = ctx.getImageData(0, 0, W, H); } catch (e) { return { error: String(e) }; }
+  own.width = own.height = 0; // release the buffer; the pixels are copied out
   const d = img.data;
+  const LINE_Q = 3; // zoom-1 CSS px per line bucket
+  const zs = pv.scale || 1; // viewer zoom: CSS px per zoom-1 CSS px
+  const lineKeyOf = (r, top) => Math.round((r.top - top) / zs / LINE_Q);
   const dark = (i) => d[i + 3] > 40 && (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) < 165;
   const minLen = Math.max(180, W * 0.15);
   const rows = [];
@@ -137,7 +182,7 @@ const CHECK = (p) => `(() => {
     if (!s.textContent.trim() || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
     const r = s.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) continue;
-    const key = Math.round((r.top - cr.top) / 5);
+    const key = lineKeyOf(r, cr.top);
     if (!lineMap.has(key)) lineMap.set(key, []);
     lineMap.get(key).push(s);
   }
@@ -159,7 +204,14 @@ const CHECK = (p) => `(() => {
     const xs = line.map((el) => el.getBoundingClientRect());
     const w = (Math.max(...xs.map((q) => q.right)) - Math.min(...xs.map((q) => q.left))) * sx;
     const wideProse = lw >= 4 && zones.some((z) => w >= (z.x1 - z.x0) * 0.55);
-    const contPrev = lw >= 2 && (proseKeys.has(key - 3) || proseKeys.has(key - 4) || proseKeys.has(key - 5));
+    // Continuation: a prose line 6-21 page px above (2-7 buckets). The old
+    // 3-5 buckets (9-15 px) was narrower than 12pt leading (~16 px), so
+    // whether the previous line counted came down to rounding — at 180% a
+    // processed line's few-px shift dropped IEEE p4's "the response from"
+    // (prose between two framed listings) out of the window and it read as
+    // an offender. 21 px mirrors the engine's own window (ZONE_CONT_LINES).
+    let contPrev = false;
+    for (let k = 2; k <= 7 && !contPrev; k++) contPrev = lw >= 2 && proseKeys.has(key - k);
     if (wideProse || contPrev) proseKeys.add(key);
   }
   // --noexempt: drop the prose exemption entirely. A control for the exemption
@@ -182,7 +234,7 @@ const CHECK = (p) => `(() => {
       // two stacked framed listings/tables). Exemption is per-SPAN within
       // the prose line (mirrors the engine): a short label sharing a
       // baseline with a wordy cell is still an offender if processed.
-      if (proseKeys.has(Math.round((r.top - cr.top) / 5))) {
+      if (proseKeys.has(lineKeyOf(r, cr.top))) {
         const t = s.textContent.trim();
         const slw = words(t);
         if (slw >= 2 || (slw >= 1 && t.length >= 12)) break; // part of the prose flow
@@ -190,7 +242,7 @@ const CHECK = (p) => `(() => {
       // --why: the inputs the prose exemption above judged, so a FALSE POSITIVE
       // can be diagnosed instead of guessed at. lineW/zoneW are canvas px; the
       // exemption needs lineW >= zoneW * 0.55 on a line of >= 4 lowercase words.
-      const key = Math.round((r.top - cr.top) / 5);
+      const key = lineKeyOf(r, cr.top);
       const line = lineMap.get(key) ?? [];
       const lxs = line.map((el) => el.getBoundingClientRect());
       const lineW = lxs.length ? (Math.max(...lxs.map((q) => q.right)) - Math.min(...lxs.map((q) => q.left))) * sx : 0;
@@ -212,41 +264,150 @@ const CHECK = (p) => `(() => {
   return { zones: zones.length, offenders: offenders.slice(0, 20) };
 })()`;
 
+// In-page: every text-layer leaf span of page p as [key, fx-b runs, processed,
+// reason]. The key is the span's text plus its occurrence index among spans
+// with the same text on that page — the text layer's order comes from
+// getTextContent and does not depend on the zoom, while any geometric key
+// would (a processed span's rect moves with its re-rendered face). Our own
+// inline wrappers are not leaves; PDF.js's markedContent containers are not
+// either.
+const SPANS = (p) => `(() => {
+  const pv = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});
+  const layer = pv && pv.textLayer && pv.textLayer.div;
+  if (!layer) return null;
+  const OURS = ".fx-cite-c,.fx-ref-c,.fx-sp";
+  const nth = new Map();
+  const out = [];
+  for (const s of layer.querySelectorAll("span")) {
+    if (s.matches(OURS) || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
+    const t = s.textContent.replace(/\\s+/g, " ").trim();
+    if (!t) continue;
+    const n = (nth.get(t) || 0) + 1;
+    nth.set(t, n);
+    out.push([t + "#" + n, s.querySelectorAll(".fx-b").length, s.hasAttribute("data-fx-done") ? 1 : 0,
+      s.dataset.fxWhy || (s.dataset.fxTable ? "table" : "")]);
+  }
+  return out;
+})()`;
+
+// Processed/emphasis counts of page p, for the settle loop.
+const COUNTS = (p) => `(() => { const d = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;
+  return d ? d.querySelectorAll("span[data-fx-done]").length + "/" + d.querySelectorAll(".fx-b").length : "-"; })()`;
+
+// Wait until page p's engine output stops changing. A capped base canvas is
+// re-processed once its DETAIL canvas lands (engine.onDetailRendered), so the
+// first non-empty state is not necessarily the final one.
+async function settle(p) {
+  let last = "", stable = 0;
+  for (let i = 0; i < 45; i++) {
+    await sleep(400);
+    const st = await ev(COUNTS(p)).catch(() => "-");
+    if (st === last && st !== "-") {
+      // An empty page (figure-only, blank) settles too, just not in a hurry.
+      if (++stable >= (st.startsWith("0/") ? 10 : 5)) return st;
+    } else { stable = 0; last = st; }
+  }
+  return last;
+}
+
+let tabId = null;
+async function openViewer(extId, url) {
+  const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(url)}`, "PUT");
+  tabId = tab.id;
+  ws = new WebSocket(tab.webSocketDebuggerUrl);
+  await new Promise((r) => (ws.onopen = r));
+  await send("Page.enable"); await sleep(2500);
+  let ok = false;
+  for (let i = 0; i < 40 && !ok; i++) { ok = await ev(`!!(window.PDFViewerApplication?.pdfDocument && window.PDFViewerApplication.pdfViewer)`).catch(() => false); if (!ok) await sleep(500); }
+  if (!ok) throw new Error("viewer never loaded");
+}
+async function closeViewer() {
+  try { ws?.close(); } catch {}
+  ws = null;
+  if (tabId) { try { await fetch(`http://127.0.0.1:${PORT}/json/close/${tabId}`); } catch {} tabId = null; }
+  await sleep(500);
+}
+
 try {
   let version = null;
   for (let i = 0; i < 50 && !version; i++) { try { version = await http("/json/version"); } catch { await sleep(300); } }
   let extId = null;
   for (let i = 0; i < 60 && !extId; i++) { const t = await http("/json/list"); const sw = t.find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs")); if (sw) extId = new URL(sw.url).hostname; else await sleep(300); }
-  const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent((URL_OVERRIDE ?? PAPERS[FILTER]))}`, "PUT");
-  ws = new WebSocket(tab.webSocketDebuggerUrl);
-  await new Promise((r) => (ws.onopen = r));
-  await send("Page.enable"); await sleep(2500);
-  let appOk = false;
-  for (let i = 0; i < 30; i++) { appOk = await ev(`!!(window.PDFViewerApplication && window.PDFViewerApplication.pdfViewer)`).catch(() => false); if (appOk) break; await sleep(500); }
-  if (!appOk) throw new Error("viewer never loaded");
-  console.log(`Browser: ${version.Browser}  paper: ${FILTER}`);
-  await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`).catch(() => {});
-  for (let i = 0; i < 40; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 60) break; }
-  await ev(`window.PDFViewerApplication.pdfViewer.currentScaleValue = "page-fit"`).catch(() => {});
-  await sleep(1200);
-  const pages = await ev(`window.PDFViewerApplication.pagesCount`);
-  const from = RANGE[0] || 1, to = Math.min(RANGE[1] || pages, pages);
-  let total = 0;
-  for (let p = from; p <= to; p++) {
-    await ev(`window.PDFViewerApplication.page = ${p}`);
-    for (let i = 0; i < 20; i++) { await sleep(300); const ok = await ev(`(()=>{const d=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;return !!(d&&d.querySelector('[data-fx-done]'))})()`).catch(() => false); if (ok) break; }
-    await sleep(1400);
-    const res = await ev(CHECK(p)).catch((e) => ({ error: String(e).slice(0, 120) }));
-    if (res.error) { console.log(`p${p}: ${res.error}`); continue; }
-    total += res.offenders.length;
-    const tag = res.offenders.length ? "  <<< PROCESSED IN TABLE" : "";
-    console.log(`p${p}: zones=${res.zones} offenders=${res.offenders.length}${tag}`);
-    for (const o of res.offenders) {
-      console.log(`   y${o.zone[0]}-${o.zone[1]}: "${o.t}"`);
-      if (WHY && o.why) console.log(`      why: ${JSON.stringify(o.why)}`);
+  if (!extId) throw new Error("extension did not load");
+  console.log(`Browser: ${version.Browser}  paper: ${FILTER}  zooms: ${ZOOMS.join(", ")}`);
+  const url = URL_OVERRIDE ?? PAPERS[FILTER];
+  const runs = []; // {zoom, scale, spans: Map(page -> rows), processed, emphasized, offenders}
+  for (const zoom of ZOOMS) {
+    await openViewer(extId, url);
+    // Engine OFF while the zoom is set — the profile remembers `enabled` from
+    // the previous pass, and a pass that starts at the restored zoom and then
+    // re-processes is not the standalone run R47 measured.
+    await ev(`globalThis.__fxDebug = true`);
+    await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:false},r))`).catch(() => {});
+    await ev(`window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(zoom)}`);
+    await sleep(1500);
+    await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`).catch(() => {});
+    const scale = await ev(`window.PDFViewerApplication.pdfViewer.currentScale`);
+    const pages = await ev(`window.PDFViewerApplication.pagesCount`);
+    const from = RANGE[0] || 1, to = Math.min(RANGE[1] || pages, pages);
+    console.log(`\n== zoom ${zoom} (scale ${(+scale).toFixed(3)})`);
+    const run = { zoom, scale, spans: new Map(), processed: 0, emphasized: 0, offenders: 0 };
+    for (let p = from; p <= to; p++) {
+      await ev(`window.PDFViewerApplication.page = ${p}`);
+      await settle(p);
+      const res = await ev(CHECK(p)).catch((e) => ({ error: String(e).slice(0, 120) }));
+      const rows = await ev(SPANS(p)).catch(() => null);
+      if (rows) {
+        run.spans.set(p, rows);
+        for (const r of rows) { run.processed += r[2]; if (r[1] > 0) run.emphasized++; }
+      }
+      if (res.error) { console.log(`p${p}: ${res.error}`); continue; }
+      run.offenders += res.offenders.length;
+      const tag = res.offenders.length ? "  <<< PROCESSED IN TABLE" : "";
+      if (res.offenders.length || res.zones) console.log(`p${p}: zones=${res.zones} offenders=${res.offenders.length}${tag}`);
+      for (const o of res.offenders) {
+        console.log(`   y${o.zone[0]}-${o.zone[1]}: "${o.t}"`);
+        if (WHY && o.why) console.log(`      why: ${JSON.stringify(o.why)}`);
+      }
+    }
+    await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:false},r))`).catch(() => {});
+    await closeViewer();
+    runs.push(run);
+  }
+
+  // Cross-zoom: the same span must carry the same emphasis at every zoom.
+  let flips = 0, unmatched = 0;
+  if (runs.length > 1) {
+    console.log(`\n== emphasis per span across zooms (${runs.map((r) => r.zoom).join(" / ")})`);
+    const allPages = [...new Set(runs.flatMap((r) => [...r.spans.keys()]))].sort((a, b) => a - b);
+    for (const p of allPages) {
+      const maps = runs.map((r) => new Map((r.spans.get(p) ?? []).map((row) => [row[0], row])));
+      if (maps.some((m) => !m.size)) { console.log(`p${p}: text layer missing at some zoom — not compared`); continue; }
+      const lines = [];
+      for (const key of maps[0].keys()) {
+        const rows = maps.map((m) => m.get(key));
+        if (rows.some((r) => !r)) { unmatched++; continue; }
+        if (rows.every((r) => r[1] === rows[0][1])) continue;
+        flips++;
+        const states = rows.map((r, i) => `${runs[i].zoom}:${r[1]}${r[3] ? "(" + r[3] + ")" : ""}`).join("  ");
+        lines.push(`   "${key.replace(/#1$/, "").slice(0, 44)}"  ${states}`);
+      }
+      for (const m of maps.slice(1)) for (const key of m.keys()) if (!maps[0].has(key)) unmatched++;
+      if (lines.length) {
+        console.log(`p${p}: ${lines.length} span(s) change emphasis with the zoom  <<< ZOOM-DEPENDENT`);
+        for (const l of lines.slice(0, 15)) console.log(l);
+        if (lines.length > 15) console.log(`   ... ${lines.length - 15} more`);
+      }
     }
   }
-  console.log(`\nTOTAL offenders: ${total}`);
-  if (total > 0) process.exitCode = 1;
+
+  if (DUMP) writeFileSync(DUMP, JSON.stringify(runs.map((r) => ({ zoom: r.zoom, scale: r.scale, spans: Object.fromEntries(r.spans) }))));
+  console.log(`\n== summary`);
+  for (const r of runs) console.log(`zoom ${r.zoom.padEnd(8)} processed=${r.processed} emphasized=${r.emphasized} offenders=${r.offenders}`);
+  console.log(`(processed/emphasized totals are for reference only; they are not the pass/fail)`);
+  const offenders = runs.reduce((n, r) => n + r.offenders, 0);
+  console.log(`\nTOTAL offenders: ${offenders}`);
+  if (runs.length > 1) console.log(`TOTAL zoom flips: ${flips}${unmatched ? `  (${unmatched} span key(s) present at only some zooms, not compared)` : ""}`);
+  if (offenders > 0 || flips > 0) process.exitCode = 1;
 } catch (e) { console.error("tables test error:", e.message || e); process.exitCode = 1; }
-finally { try { ws?.close(); } catch {} killBrowser(browser); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
+finally { await closeViewer(); killBrowser(browser); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }

@@ -7,7 +7,11 @@
 //      it in-page (data URL → Image → canvas) — a rule whose pixels are now
 //      mostly WHITE was masked by the text mask.
 // Reports per page: rules found / rules masked (with y/x position + white%).
-// Usage: node test/diag-dividers.mjs <paper> [--headful] [--pages=1-99]
+// Usage: node test/diag-dividers.mjs <paper> [--headful] [--pages=1-99] [--zoom=page-fit] [--control]
+// --zoom: any currentScaleValue ("page-fit", "1.8", ...). The engine's rule
+// scan depends on the canvas resolution (R47), so masks are worth checking
+// at the zooms readers use, not only at page-fit. Rules outside the viewport
+// at a large zoom fall outside the captured clip and are skipped, not scored.
 
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
@@ -15,11 +19,16 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath } from "./lib/env.mjs";
+import { browserPath, killBrowser } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const FILTER = POS[0] ?? "USENIX (code + algorithms)";
 const HEADFUL = process.argv.includes("--headful");
+// --control: paint a white strip over the first horizontal rule of every page
+// before the capture — a synthetic whiteout. Each such page MUST then report
+// masked >= 1; if it does not, the check is blind and its zeros mean nothing.
+const CONTROL = process.argv.includes("--control");
+const ZOOM = process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "page-fit";
 const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const PAPERS = {
   "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
@@ -112,6 +121,8 @@ const CHECK_BANDS = `async (payload) => {
   c.width = img.width; c.height = img.height;
   const ctx = c.getContext("2d");
   ctx.drawImage(img, 0, 0);
+  const px = ctx.getImageData(0, 0, c.width, c.height).data;
+  const lumAt = (x, y) => { const i = (y * c.width + x) * 4; return 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]; };
   const fx = img.width / clip.width;   // composite px per CSS px
   const fy = img.height / clip.height;
   const sx = meta.cssW / meta.W;       // CSS px per canvas backing px
@@ -134,17 +145,32 @@ const CHECK_BANDS = `async (payload) => {
         pts.push([x, Math.round(cssY * fy)]);
       }
     }
-    // Sample a 3-px window PERPENDICULAR to the rule and score its darkest
-    // pixel: rounding may land the point one composite px off a thin rule,
-    // and a rule antialiased across two rows never reaches full black.
+    // LOCATE the rule before scoring it. Its position comes from the base
+    // canvas, which above ~1.5x PDF.js caps (1.39 CSS px per canvas px at
+    // 180%) and whose pixel grid does not map exactly onto its CSS box
+    // (canvas.width is floored), so near a page's foot the prediction drifts
+    // ~3 px off a sharp 1-px hairline. Scoring at the predicted row then read
+    // every framed listing as "masked" — identically with and without the
+    // engine change being tested (R47). So: take the band-wide row, within two
+    // base-canvas px of the prediction, that has the most dark samples, and
+    // score THAT row. A masked rule has no dark row anywhere in the range and
+    // still scores white. At page-fit the range is the old ±1-2 composite px.
+    const reach = Math.max(1, Math.ceil(2 * (b.dir === "h" ? sy * fy : sx * fx)));
+    const inside = ([x, y]) => x >= reach + 1 && y >= reach + 1 && x < c.width - reach - 1 && y < c.height - reach - 1;
+    const at = (x, y, o) => (b.dir === "h" ? lumAt(x, y + o) : lumAt(x + o, y));
+    let best = 0, bestDark = -1;
+    for (let o = -reach; o <= reach; o++) {
+      let d = 0;
+      for (const pt of pts) if (inside(pt) && at(pt[0], pt[1], o) < 165) d++;
+      if (d > bestDark || (d === bestDark && Math.abs(o) < Math.abs(best))) { bestDark = d; best = o; }
+    }
+    // Then the old score around that row: darkest pixel in a 3-px window
+    // (a rule antialiased across two rows never reaches full black).
     let white = 0, dark = 0, n = 0;
-    for (const [x, y] of pts) {
-      if (x < 1 || y < 1 || x >= c.width - 1 || y >= c.height - 1) continue;
+    for (const pt of pts) {
+      if (!inside(pt)) continue;
       let lum = 255;
-      for (let o = -1; o <= 1; o++) {
-        const p = b.dir === "h" ? ctx.getImageData(x, y + o, 1, 1).data : ctx.getImageData(x + o, y, 1, 1).data;
-        lum = Math.min(lum, 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]);
-      }
+      for (let o = best - 1; o <= best + 1; o++) lum = Math.min(lum, at(pt[0], pt[1], o));
       n++;
       if (lum > 215) white++; else if (lum < 165) dark++;
     }
@@ -158,7 +184,7 @@ try {
   for (let i = 0; i < 50 && !version; i++) { try { version = await http("/json/version"); } catch { await sleep(300); } }
   let extId = null;
   for (let i = 0; i < 60 && !extId; i++) { const t = await http("/json/list"); const sw = t.find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs")); if (sw) extId = new URL(sw.url).hostname; else await sleep(300); }
-  console.log(`Browser: ${version.Browser}  paper: ${FILTER}  headful: ${HEADFUL}`);
+  console.log(`Browser: ${version.Browser}  paper: ${FILTER}  headful: ${HEADFUL}  zoom: ${ZOOM}`);
   // --url=: any PDF the viewer can fetch (the private corpus is served on
   // localhost under neutral aliases). See the note in diagnose.mjs.
   const URL_OVERRIDE = process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6);
@@ -168,7 +194,7 @@ try {
   await send("Page.enable"); await sleep(2500);
   await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`).catch(() => {});
   for (let i = 0; i < 40; i++) { await sleep(800); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 60) break; }
-  await ev(`window.PDFViewerApplication.pdfViewer.currentScaleValue = "page-fit"`).catch(() => {});
+  await ev(`window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(ZOOM)}`).catch(() => {});
   await sleep(1200);
   const pages = await ev(`window.PDFViewerApplication.pagesCount`);
   const from = RANGE[0] || 1, to = Math.min(RANGE[1] || pages, pages);
@@ -177,8 +203,33 @@ try {
     await ev(`window.PDFViewerApplication.page = ${p}`);
     for (let i = 0; i < 20; i++) { await sleep(300); const ok = await ev(`(()=>{const d=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;return !!(d&&d.childElementCount)})()`).catch(() => false); if (ok) break; }
     await sleep(1400);
+    // Then until the page's engine output stops changing: after a zoom change
+    // the page is re-processed, and a capped base canvas once more when its
+    // detail canvas lands — scoring masks mid-way scores a transitional state.
+    for (let i = 0, last = "", stable = 0; i < 30 && stable < 4; i++) {
+      const st = await ev(`(()=>{const d=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;return d?d.querySelectorAll("[data-fx-done]").length+"/"+d.querySelectorAll(".fx-b").length:"-"})()`).catch(() => "-");
+      stable = st === last ? stable + 1 : 0; last = st;
+      if (stable < 4) await sleep(400);
+    }
     const meta = await ev(FIND_RULES(p));
     if (meta.error || !meta.bands?.length) { if (meta.error) console.log(`p${p}: ${meta.error}`); continue; }
+    if (CONTROL) {
+      await ev(`(() => {
+        const pv = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});
+        const cr = (pv.canvas || pv.div.querySelector("canvas")).getBoundingClientRect();
+        const b = ${JSON.stringify(meta.bands.find((x) => x.dir === "h") ?? null)};
+        if (!b) return false;
+        const sx = cr.width / ${meta.W}, sy = cr.height / ${meta.H};
+        const d = document.createElement("div");
+        d.className = "fx-divider-control";
+        d.style.cssText = "position:fixed;background:#fff;z-index:99999;pointer-events:none;" +
+          "left:" + (cr.left + b.x0 * sx) + "px;width:" + ((b.x1 - b.x0) * sx) + "px;" +
+          "top:" + (cr.top + ((b.y + b.yEnd) / 2) * sy - 6) + "px;height:12px";
+        document.body.appendChild(d);
+        return true;
+      })()`);
+      await sleep(150);
+    }
     const clip = await ev(`(()=>{const r=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1}).div.getBoundingClientRect();return {x:Math.max(0,r.left),y:Math.max(0,r.top),width:Math.min(r.width,innerWidth),height:Math.min(r.height,innerHeight)};})()`);
     // Capture at the canvas's own backing scale (the F20 override renders at
     // a minimum of 2×): at scale 1 a 2-backing-px rule downscales to one
@@ -193,6 +244,7 @@ try {
       if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception?.description || "").slice(0, 200));
       return r.result.value;
     })();
+    if (CONTROL) await ev(`document.querySelectorAll(".fx-divider-control").forEach((e) => e.remove())`);
     const masked = res.filter((b) => b.whiteFrac != null && b.whiteFrac > 0.35);
     totalRules += res.length; totalMasked += masked.length;
     const tag = masked.length ? "  <<< MASKED" : "";
@@ -204,5 +256,5 @@ try {
   // corpus sweep driving this by exit code reports a real verdict rather than a
   // PASS that only means the harness ran.
   if (totalMasked > 0) { console.log(`FAIL masked=${totalMasked}`); process.exitCode = 1; }
-} catch (e) { console.error("divider diag error:", e.message); }
-finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
+} catch (e) { console.error("divider diag error:", e.message); process.exitCode = 1; }
+finally { try { ws?.close(); } catch {} killBrowser(browser); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
