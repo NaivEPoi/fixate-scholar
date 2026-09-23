@@ -29,10 +29,12 @@ export function connect(wsUrl, { where = "cdp", onEvent = () => {}, timeoutMs = 
   let nextId = 0;
   let closed = false;
   const pending = new Map();
+  let failOpen = () => {};
   const ready = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${where}: socket did not open within ${timeoutMs}ms`)), timeoutMs);
+    failOpen = (why) => { clearTimeout(timer); reject(new Error(`${where}: ${why}`)); };
     ws.onopen = () => { clearTimeout(timer); resolve(); };
-    ws.onerror = (e) => { clearTimeout(timer); reject(new Error(`${where}: socket error before open${e?.message ? `: ${e.message}` : ""}`)); };
+    ws.onerror = (e) => failOpen(`socket error before open${e?.message ? `: ${e.message}` : ""}`);
   });
   ready.catch(() => {}); // a caller that never awaits `ready` must not crash the process
   ws.onmessage = (e) => {
@@ -42,6 +44,10 @@ export function connect(wsUrl, { where = "cdp", onEvent = () => {}, timeoutMs = 
   };
   ws.onclose = () => {
     closed = true;
+    // A target that goes away before the socket ever opens (no error event
+    // either) must not leave `ready` waiting out the whole deadline. Once
+    // opened, `ready` has settled and this is a no-op.
+    failOpen("socket closed before open");
     for (const settle of [...pending.values()]) settle({ error: { message: `${where}: socket closed` } });
   };
 
