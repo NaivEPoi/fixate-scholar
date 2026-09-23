@@ -290,6 +290,9 @@ export class ReferencesFeature {
       );
     };
 
+    // The character ranges this pass annotates as citations: what an in-paper
+    // reference must stay out of (below).
+    const citeRanges = [];
     if (this.#shouldAnnotate()) {
       for (const cite of findCitations(joined, { includeIndexed: true })) {
         const bracketed = joined[cite.start] === "[";
@@ -335,6 +338,7 @@ export class ReferencesFeature {
         // get no card (that pattern false-positives on ordinary parens).
         const { cards, indexOf } = this.#buildCards(cite.keys, bracketed, pageView.id);
         if (!cards.length) continue;
+        citeRanges.push([cite.start, cite.end]);
         for (const seg of citeSegs) {
           // Don't annotate the bibliography's own entry "[N]" markers (the engine
           // tags refs-region spans data-fx-refs): the reference list is left as the
@@ -379,7 +383,11 @@ export class ReferencesFeature {
     // In-paper references (Figure 3, Table 9, Section 5, Algorithm 2, …) get a
     // distinct fixed high-contrast color, also from overlay.css. Queued after
     // the citation wraps, exactly as they were applied before.
+    // Not inside a citation: a locator there ("[9, §5.2]", "[4, Section 3]")
+    // points into the CITED work, not this paper, and was painted in the
+    // reference colour nested inside the citation colour.
     for (const ref of findInternalRefs(joined)) {
+      if (citeRanges.some(([a, b]) => ref.start < b && ref.end > a)) continue;
       for (const seg of intersecting(segments, ref.start, ref.end)) {
         if (!seg.span.dataset.fxDone) continue;
         const localStart = Math.max(0, ref.start - seg.start);
