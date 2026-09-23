@@ -186,6 +186,32 @@ function joinRuns(allPairs) {
 const MAX_SPACE_STRETCH = 0.45;
 const MAX_SPACE_TRIM = 0.02;
 
+// Canvas line-art detection (#detectCanvasRules) and the rule-bounded table
+// zones built from it, in PAGE units: CSS px at 100% zoom (0.75 pt each). They
+// used to be CSS px at whatever the zoom was, and thresholded each device pixel
+// on its own, so the same page yielded different rules at different zooms —
+// R47, 12 spans on the ACL paper flipping emphasis between 100% and 180%. Each
+// value below is what the constant was at a zoom the gate had validated —
+// named beside it — and for the rule-finding lengths the most inclusive of
+// those, so no zoom loses an obstacle it used to have.
+//
+// RULE_STROKE is the stroke the scan must find in a pixel column, summed over
+// the rows the anti-aliasing spread it across. A 0.4pt hairline lands as one
+// dark pixel or two light ones depending on sub-pixel phase, and at 180% the
+// base canvas is CAPPED below one device px per CSS px (maxCanvasPixels) — the
+// per-pixel "luminance < 140" test read the same frame edge as a rule at 100%
+// and as nothing at 180%. Coverage summed across the spread is the stroke width
+// times its darkness at any resolution and any phase.
+const RULE_STROKE = 0.25; // min stroke, page px (~0.19pt of black)
+const RULE_MIN_LEN = 34; // ~60 CSS px at 180%
+const RULE_MAX_THICK = 3; // 3 CSS px at 100%
+const RULE_MIN_WIDTH = 22; // hRule width for table zones — ~40 CSS px at 180%
+const RULE_SAME_GAP = 2; // padded rule rects this close are one visual rule — 2 CSS px at 100%
+// Table-zone line buckets. Five CSS px at the page-fit (~1.24) that tables.mjs
+// validated; a paragraph continuation may sit ≤ ZONE_CONT_LINES buckets below.
+const ZONE_LINE_Q = 4;
+const ZONE_CONT_LINES = 5;
+
 // Key a font by its bare leading family name: the same face reaches spans as
 // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12, sans-serif'
 // (PDF.js's own), and both must hit the same entry. Module scope because
@@ -2434,14 +2460,51 @@ export class TypographyEngine {
       // every pixel. One byte per pixel cuts that stride to W and the whole
       // page is classified once instead of up to three times. Same predicate,
       // same bands.
-      const dark = new Uint8Array(W * H);
-      for (let p = 0, i = 0; p < dark.length; p++, i += 4) {
-        dark[p] =
-          data[i + 3] > 40 &&
-          0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] < 140
-            ? 1
-            : 0;
+      //
+      // Resolution-independent (R47): `ppu` is device px per page px (CSS px
+      // at 100%) of THIS canvas — capped base renders included, since it is
+      // measured from the canvas, not assumed from the zoom — and every length
+      // below is RULE_* × ppu. A pixel counts as rule ink when the ink summed
+      // over it and its two neighbours ACROSS the rule (rows for a horizontal
+      // rule, columns for a vertical one) reaches RULE_STROKE page px: that sum
+      // is the rasterised stroke width whatever the resolution and sub-pixel
+      // phase. The pixel must carry some ink itself, so a band never grows onto
+      // the blank rows beside it.
+      const zoom = pageView.scale > 0 ? pageView.scale : 1;
+      const ppu = (W / cr.width) * zoom;
+      const ppuY = (H / cr.height) * zoom;
+      const ink = new Uint8Array(W * H);
+      for (let p = 0, i = 0; p < ink.length; p++, i += 4) {
+        if (data[i + 3] > 40) {
+          ink[p] = 255 - (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+        }
       }
+      const need = (k) => Math.min(255 * 2.7, 255 * RULE_STROKE * k); // 3-px window max is 3×255
+      const needH = need(ppuY), needV = need(ppu);
+      // A pixel must carry half the window's requirement — the share of an
+      // evenly split stroke — but never more than the old per-pixel test asked
+      // (ink > 115). The floor is relative: a fixed one outranked the whole
+      // requirement on a low-resolution canvas (ppu ≲ 1) and rejected an evenly
+      // split hairline there. 12 only keeps paper-white noise out.
+      const own = (t) => Math.max(12, Math.min(115, t / 2));
+      const ownH = own(needH), ownV = own(needV);
+      const dark = new Uint8Array(W * H); // horizontal-rule ink (window across rows)
+      const darkV = new Uint8Array(W * H); // vertical-rule ink (window across columns)
+      for (let y = 0; y < H; y++) {
+        const row = y * W;
+        const up = y > 0 ? row - W : -1;
+        const dn = y < H - 1 ? row + W : -1;
+        for (let x = 0; x < W; x++) {
+          const p = row + x;
+          const v = ink[p];
+          if (!v) continue;
+          if (v >= ownH && v + (up >= 0 ? ink[up + x] : 0) + (dn >= 0 ? ink[dn + x] : 0) >= needH) dark[p] = 1;
+          if (v >= ownV && v + (x > 0 ? ink[p - 1] : 0) + (x < W - 1 ? ink[p + 1] : 0) >= needV) darkV[p] = 1;
+        }
+      }
+      // Isolation probes sit one page px outside a band (never under 2 device px).
+      const isoY = Math.max(2, Math.round(ppuY));
+      const isoX = Math.max(2, Math.round(ppu));
       const darkFrac = (x0, x1, y) => {
         if (y < 0 || y >= H) return 0;
         let n = 0, d = 0;
@@ -2449,8 +2512,9 @@ export class TypographyEngine {
         for (let x = x0; x < x1; x += 2) { n++; if (dark[row + x]) d++; }
         return n ? d / n : 0;
       };
-      const minLen = Math.max(24, Math.round(60 / sx)); // ≥60 CSS px
-      const maxThick = Math.max(2, Math.round(3 / sy)); // ≤3 CSS px
+      const minLen = Math.max(24, Math.round(RULE_MIN_LEN * ppu));
+      // +2: the across-window can admit an anti-aliased fringe row on EACH side.
+      const maxThick = Math.max(3, Math.round(RULE_MAX_THICK * ppuY) + 2);
       // Horizontal runs per row → merge vertically adjacent runs into bands.
       const bands = []; // {y0,y1,x0,x1}
       for (let y = 0; y < H; y++) {
@@ -2474,7 +2538,7 @@ export class TypographyEngine {
       for (const b of bands) {
         if (b.y1 - b.y0 + 1 > maxThick) continue; // too thick — a filled area/image
         // Isolation: rows just outside the band are mostly light in its span.
-        if (darkFrac(b.x0, b.x1, b.y0 - 2) > 0.35 || darkFrac(b.x0, b.x1, b.y1 + 2) > 0.35) continue;
+        if (darkFrac(b.x0, b.x1, b.y0 - isoY) > 0.35 || darkFrac(b.x0, b.x1, b.y1 + isoY) > 0.35) continue;
         out.push({
           left: cr.left + b.x0 * sx - 1,
           right: cr.left + b.x1 * sx + 1,
@@ -2488,16 +2552,16 @@ export class TypographyEngine {
       const darkFracV = (y0, y1, x) => {
         if (x < 0 || x >= W) return 0;
         let n = 0, d = 0;
-        for (let y = y0; y < y1; y += 2) { n++; if (dark[y * W + x]) d++; }
+        for (let y = y0; y < y1; y += 2) { n++; if (darkV[y * W + x]) d++; }
         return n ? d / n : 0;
       };
-      const minLenV = Math.max(24, Math.round(60 / sy));
-      const maxThickV = Math.max(2, Math.round(3 / sx));
+      const minLenV = Math.max(24, Math.round(RULE_MIN_LEN * ppuY));
+      const maxThickV = Math.max(3, Math.round(RULE_MAX_THICK * ppu) + 2);
       const vbands = []; // {x0,x1,y0,y1}
       for (let x = 0; x < W; x++) {
         let run = 0, y0 = 0;
         for (let y = 0; y <= H; y++) {
-          if (y < H && dark[y * W + x]) { if (!run) y0 = y; run++; continue; }
+          if (y < H && darkV[y * W + x]) { if (!run) y0 = y; run++; continue; }
           if (run >= minLenV) {
             const y1 = y;
             // Same element as the reverse-copy scan, without copying the list.
@@ -2510,7 +2574,7 @@ export class TypographyEngine {
       }
       for (const b of vbands) {
         if (b.x1 - b.x0 + 1 > maxThickV) continue;
-        if (darkFracV(b.y0, b.y1, b.x0 - 2) > 0.35 || darkFracV(b.y0, b.y1, b.x1 + 2) > 0.35) continue;
+        if (darkFracV(b.y0, b.y1, b.x0 - isoX) > 0.35 || darkFracV(b.y0, b.y1, b.x1 + isoX) > 0.35) continue;
         out.push({
           left: cr.left + b.x0 * sx - 1,
           right: cr.left + (b.x1 + 1) * sx + 1,
@@ -3311,16 +3375,22 @@ export class TypographyEngine {
         // words stays processed.
         zoneDrops = new Set();
         try {
-          const pageHcss = pageView.div.getBoundingClientRect().height || 0;
+          const pageBox = pageView.div.getBoundingClientRect();
+          const pageHcss = pageBox.height || 0;
+          // Page units (R47): the constants are CSS px at 100%, and lines are
+          // bucketed from the PAGE top — bucketing viewport y also moved the
+          // bucket edges with the scroll position.
+          const zoom = pageView.scale > 0 ? pageView.scale : 1;
+          const lineOf = (r) => Math.round((r.top - pageBox.top) / zoom / ZONE_LINE_Q);
           const hRules = canvasRules
-            .filter((r) => r.right - r.left >= (r.bottom - r.top) * 4 && r.right - r.left > 40)
+            .filter((r) => r.right - r.left >= (r.bottom - r.top) * 4 && r.right - r.left > RULE_MIN_WIDTH * zoom)
             .sort((a, b) => a.top - b.top);
           const rulePairs = [];
           for (let a = 0; a < hRules.length; a++) {
             for (let b = a + 1; b < hRules.length; b++) {
               const A = hRules[a];
               const B = hRules[b];
-              if (B.top - A.bottom <= 2) continue; // same visual rule
+              if (B.top - A.bottom <= RULE_SAME_GAP * zoom) continue; // same visual rule
               if (B.top - A.bottom > pageHcss * 0.15) break;
               const lo = Math.max(A.left, B.left);
               const hi = Math.min(A.right, B.right);
@@ -3352,7 +3422,7 @@ export class TypographyEngine {
                 (z) => cx >= z.x0 && cx <= z.x1 && cy > z.yTop + 1 && cy < z.yBot - 1,
               );
               if (zi < 0) continue;
-              const key = zi + ":" + Math.round(r.top / 5);
+              const key = zi + ":" + lineOf(r);
               let arr = byLine.get(key);
               if (!arr) byLine.set(key, (arr = []));
               arr.push({ pr, r, z: zones[zi] });
@@ -3393,7 +3463,7 @@ export class TypographyEngine {
               const exemptLine =
                 clearOfRules &&
                 ((lw >= 4 && gx1 - gx0 >= (z.x1 - z.x0) * 0.55) ||
-                  (lw >= 2 && prev != null && lineKey - prev <= 5));
+                  (lw >= 2 && prev != null && lineKey - prev <= ZONE_CONT_LINES));
               if (exemptLine) lastExempt.set(zi, lineKey);
               if (globalThis.__fxDebug) {
                 (globalThis.__fxZoneLines ??= []).push({

@@ -4301,10 +4301,10 @@ heuristic on invented strings is the failure mode that produced rounds 3-7. So
 this is left for `citepoint` over the two corpora to measure, and tightened, if
 at all, on that evidence.
 
-## R47 — emphasis depends on the reader's zoom (DEFERRED — fix later)
+## R47 — emphasis depends on the reader's zoom (FIXED — see "Fixed" below)
 
-**Status: logged, not fixed.** Pre-existing, not introduced by this release.
-Recorded here so it is not rediscovered from scratch.
+**Status: fixed.** Pre-existing, not introduced by the release it was logged
+in. The original record is kept as written; the fix and its evidence follow it.
 
 ### What was measured
 
@@ -4374,3 +4374,137 @@ PDF's own operators rather than from pixels. Both are real work on a path with
 a history of regressions (masks whiting out table rules), and neither belongs in
 a release whose gate is otherwise green. Anyone starting should first give
 `tables.mjs` a zoom sweep, so the fix has a check that can fail.
+
+### Fixed
+
+**First, a check that can fail.** `tables.mjs` now sweeps zooms
+(`--zooms=page-fit,1.0,1.8` by default), each zoom in a fresh viewer tab with
+the zoom set before the engine is enabled — a standalone run, as measured above.
+It reports two things and exits 1 on either:
+
+- the old offenders (processed span inside a rule-bounded zone), per zoom. The
+  oracle no longer reads the viewer's canvas: it renders the page itself at a
+  fixed 4 px/pt, so its zones are identical at every zoom and only the engine's
+  decisions move. Reading the viewer canvas made the oracle exactly as
+  zoom-dependent as the engine it was checking;
+- **zoom flips**: a span (its text + occurrence index on the page — the text
+  layer's order does not depend on the zoom, a rect does) carrying a different
+  number of `.fx-b` runs at two zooms. Processed-span totals are printed for
+  reference and are not a verdict.
+
+Before any product change, on the unmodified engine:
+
+```
+ACL p24-25   zoom 1.8: 6 offenders ("Suggested Fix", "dns_rcode_noerror", "packet. ...")
+             11 zoom flips, every one table-rules at page-fit/1.0, emphasized at 1.8
+ACL (all)    12 zoom flips — the 12 recorded above — and processed 1819 / 1819 / 1831
+```
+
+**The cause was sharper than "anti-aliasing".** At 180% the page is large
+enough that PDF.js CAPS the base canvas (`maxCanvasPixels`): measured 0.70
+device px per CSS px at 1.8 against 2.0 at 1.0, i.e. 1.27 against 2.0 device px
+per page px. The rule scan reads only that base canvas. A 0.4pt frame edge
+covers ~0.7 of one pixel there, prints at luminance ~125-190 depending on
+sub-pixel phase, and the per-pixel `luminance < 140` test drops it. On p25 the
+Table 20 frame's zone simply did not form at 1.8 (the engine's zone-line
+introspection is empty for it), so the whole box processed. Several constants
+were also raw CSS px — rule length 60, thickness 3, zone rule width 40,
+same-rule gap 2, line buckets `r.top / 5` with a 5-bucket continuation — so
+their meaning in page terms changed with the zoom too. The buckets were also
+taken from VIEWPORT y, so their edges moved with the scroll position.
+
+**The fix** (`#detectCanvasRules` and the zone code in `#processPage`):
+
+- rule ink is judged by COVERAGE, not per pixel: ink (255 − luminance) summed
+  over the pixel and its two neighbours across the rule must reach
+  `RULE_STROKE` page px × `ppu`, where `ppu` is measured from the canvas
+  actually read (so a capped canvas is accounted for). That sum is the
+  rasterised stroke width whatever the resolution and phase. The pixel must
+  carry half of it itself (never more than the old per-pixel test asked), so a
+  band does not grow onto blank rows;
+- every length is in page units (CSS px at 100%) × `ppu`, each set to the
+  value it had at a gate-validated zoom, named in the source; the thickness
+  limit allows the fringe row the window admits on each side;
+- zone lines are bucketed from the PAGE top in page units.
+
+Operator-derived rules were considered and not taken: on PDF.js 6 that means
+following CTMs, form XObjects, clip paths and fill colours to tell a rule from
+a white background rectangle, and it goes blind to rules inside raster images,
+which masks must still clamp around.
+
+**After the fix:**
+
+```
+ACL p24-25   page-fit / 1.0 / 1.8 / 2.5: 0 offenders, 0 zoom flips, processed 60 at every zoom
+wordshot     ACL p25 "considered" at 1.0 / 1.8 / 2.5: processed=false keep=true emph=0, all three
+ACL (all)    page-fit / 1.0 / 1.8: 0 offenders, 0 zoom flips, processed 1819 at every zoom
+corpus       tables.mjs over all 14 public papers x (page-fit, 1.0, 1.8): 0 offenders on all;
+             0 zoom flips on 13; LaTeX article (CM) keeps 2 — not table-rules; a separate
+             zoom dependence, being tracked as R48
+```
+
+Span-by-span against the unmodified engine (`tables.mjs --dump`, same spans,
+same zoom): 13 spans change, all of them at 1.8 and
+all toward what page-fit and 1.0 already showed — R47's 12 on ACL (11 now kept
+as table interior, p16's wordy cell line now emphasized as at the other zooms)
+and IEEE (stamped) p4's prose line below. At page-fit and at 1.0 not one span
+changed on any of the 14 papers (~50k spans per zoom).
+
+The divider sweep, both builds, page-fit and 1.8 (`diag-dividers` gained
+`--zoom`, a per-page settle before scoring, `killBrowser` cleanup instead of the
+`browser.kill()` that leaks the renderer tree, and exit 1 on a harness error
+instead of a silent 0):
+
+```
+page-fit   fixed engine: masked=0 on all 13 papers. Old engine: masked=0 on the 11
+           that completed (2 harness errors under machine contention).
+1.8        residual masked counts IDENTICAL in both builds wherever both completed:
+           5GShield 6, NeurIPS 4, USENIX (baseline) 4, ACL 3, UC-Scheme 3,
+           USENIX (no cover) 3, LaTeX (CM) 2, ACM (short) 1; 0 on 5GCVerif,
+           AFC-Diss, IEEE (stamped). Not caused by this change; NOT yet analysed.
+```
+
+The first 1.8 sweep read 5-49 masked per paper, also identical in both builds,
+and that was the harness: it predicts each rule's row from the base canvas, and
+at 180% (capped, and whose floored pixel grid drifts ~3 px from its CSS box by
+the page foot) a ±1 px window missed sharp hairlines plainly on screen — IEEE
+p4's listing frames, visible in the captured composite at the very rows it
+scored "97% white". `diag-dividers` now LOCATES each rule (the band-wide row with
+the most dark samples within two base-canvas px) before scoring it, and gained
+`--control`, which paints a white strip over each page's first horizontal rule:
+at page-fit and 1.8 on IEEE it reads 0 without the strip and catches 3 of 3 with
+it, and across the corpus at 1.8 it caught the strip on every page where the
+strip fell inside the captured viewport. The residual 1.8 counts above are what
+is left after that correction; whether they are real whiteouts or more harness
+geometry is the open follow-up, and runs are on hold while the release gate
+uses the machine.
+
+**Oracle calibration, found by the sweep.** IEEE (stamped) p4 "the response
+from" — running prose between two framed listings, emphasized at every zoom
+after the fix (the old engine kept it at 1.8 only) — was flagged by the oracle
+at 1.8 alone. Its paragraph-continuation window was 3-5 buckets (9-15 page px),
+narrower than 12pt leading (~16 px), so a processed line's few-px shift at 1.8
+decided it. Widened to 6-21 px, mirroring the engine's own window. The widened
+oracle still reports all 6 offenders and 11 flips on ACL p24-25 against the
+unmodified engine, so it did not go blind to R47. An intermediate version of
+the oracle (3-px buckets) also flagged one line of ACL p16's wordy table cell;
+the HEAD oracle reports 0 there and so does the final one — that flag was the
+bucketing, not the engine.
+
+**Review.** A first-pass cross-model review (Gemini via `agy`) raised seven
+points. Accepted and fixed: the per-pixel floor was absolute (40) and outranked
+the whole requirement on a canvas under ~1 device px per page px; the thickness
+slack admitted a fringe row on one side only; `diag-dividers --zoom` scored
+masks before the page re-settled. Rejected on the code: `.fx-b` is a `<b>`, not
+a span, so the leaf test does not skip emphasized spans (the sweep records
+non-zero `.fx-b` counts on them); `PORT` is defined in `tables.mjs`; rotation
+handling is unchanged from HEAD, which already bucketed by screen y.
+
+### Not fixed here — the table box's first line
+
+Consistency was the defect. Whether the Table 20 box's FIRST line should be
+kept is a separate question: it is kept because its span box touches the top
+frame (`gapTop` −2 in the zone introspection), and the header-row rule
+(`clearOfRules`) treats a line hugging a rule as a header. That was the 100%
+behaviour, the oracle agrees with it, and it is now the behaviour at every zoom.
+
