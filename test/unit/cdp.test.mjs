@@ -72,6 +72,15 @@ test("a socket that errors before opening rejects ready", async () => {
   await assert.rejects(c.ready, /sw: socket error before open: ECONNREFUSED/);
 });
 
+test("a socket that closes before opening rejects ready at once, not at the deadline", async () => {
+  const s = fakeSocket();
+  const c = connect("ws://x", { socket: s, where: "viewer", timeoutMs: 60000 });
+  const t0 = Date.now();
+  s.close();
+  await assert.rejects(c.ready, /viewer: socket closed before open/);
+  assert.ok(Date.now() - t0 < 1000);
+});
+
 test("a socket that never opens rejects ready at the deadline", async () => {
   const s = fakeSocket();
   const c = connect("ws://x", { socket: s, timeoutMs: 30 });
