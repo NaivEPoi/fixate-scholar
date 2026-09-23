@@ -27,10 +27,14 @@
 // R35 class findable instead of silent. Closing the last three gaps (link-annot,
 // url-or-math, overlaps-skipped) is what made it 0 across both corpora.
 //
+// The probe and the verdict live in test/probes/whyskip.mjs, shared with the
+// combined gate runner (test/allprobes.mjs); this file drives one browser.
 // Usage: node test/whyskip.mjs --url=<pdf> [--label=name] [--page=N | --all]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
 import { browserPath, extensionDir, profileDir, killBrowser } from "./lib/env.mjs";
+import { connect } from "./lib/cdp.mjs";
+import * as whyskip from "./probes/whyskip.mjs";
 
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 const ALL = process.argv.includes("--all");
@@ -44,18 +48,11 @@ const browser = spawn(browserPath("edge"), [
   `--load-extension=${extensionDir}`, `--disable-extensions-except=${extensionDir}`, "about:blank",
 ], { stdio: "ignore" });
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
-let ws, nextId = 0;
-const send = (method, params = {}) => new Promise((resolve, reject) => {
-  const id = ++nextId;
-  const h = (e) => { const m = JSON.parse(e.data); if (m.id !== id) return;
-    ws.removeEventListener("message", h); m.error ? reject(new Error(m.error.message)) : resolve(m.result); };
-  ws.addEventListener("message", h); ws.send(JSON.stringify({ id, method, params }));
-});
-const ev = async (expression) => {
-  const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception?.description || "").slice(0, 300));
-  return r.result.value;
-};
+
+let cdp;
+const send = (method, params) => cdp.send(method, params);
+const ev = (expr) => cdp.ev(expr);
+
 try {
   for (let i = 0; i < 60; i++) { try { await http("/json/version"); break; } catch { await sleep(400); } }
   let extId = null;
@@ -63,11 +60,12 @@ try {
     const sw = (await http("/json/list")).find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs"));
     if (sw) extId = new URL(sw.url).hostname; else await sleep(400);
   }
+  if (!extId) throw new Error("extension did not load");
   const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(URL0)}`, "PUT");
   await sleep(2500);
   const live = (await http("/json/list")).find((t) => t.id === tab.id) ?? tab;
-  ws = new WebSocket(live.webSocketDebuggerUrl);
-  await new Promise((r) => (ws.onopen = r));
+  cdp = connect(live.webSocketDebuggerUrl, { where: "viewer" });
+  await cdp.ready;
   await send("Runtime.enable");
   for (let i = 0; i < 40; i++) { if (await ev(`!!(window.PDFViewerApplication?.pdfDocument)`).catch(() => false)) break; await sleep(500); }
   // __fxDebug must be set BEFORE the engine runs, or the reasons are never recorded.
@@ -88,39 +86,8 @@ try {
     if (st === last && !st.startsWith("0/")) { if (++stable >= 8) break; } else { stable = 0; last = st; }
     await sleep(600);
   }
-  const probe = (page) => ev(`(() => {
-    const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page - 1});
-    if (!pv || !pv.textLayer) return null;
-    const pr = pv.div.getBoundingClientRect();
-    const spans = [...pv.textLayer.div.querySelectorAll(":scope > span")]
-      .filter((s) => !s.classList.contains("endOfContent"));
-    const prose = (t) => ((t || "").match(/[a-z]{2,}/g) || []).length >= 2;
-    const rows = [];
-    for (const s of spans) {
-      const t = (s.textContent || "").trim();
-      if (!prose(t) || s.hasAttribute("data-fx-done")) continue;
-      const r = s.getBoundingClientRect();
-      if (r.top - pr.top < 0 || r.bottom - pr.top > pr.height) continue; // page stamps
-      rows.push({ y: Math.round(r.top - pr.top),
-                  why: s.dataset.fxWhy || (s.hasAttribute("data-fx-keep") ? "(keep)" :
-                        s.hasAttribute("data-fx-table") ? "(table)" : "(none)"),
-                  text: t.slice(0, 30) });
-    }
-    const done = [...pv.textLayer.div.querySelectorAll("span[data-fx-done]")]
-      .map((s) => Math.round(s.getBoundingClientRect().bottom - pr.top));
-    const lowest = done.length ? Math.max(...done) : null;
-    const unreasoned = rows.filter((r) => r.why === "(none)");
-    // Is an unreasoned prose span BELOW everything the engine processed? That is
-    // the "last line of the column left alone" shape.
-    const belowAll = lowest === null ? [] : unreasoned.filter((r) => r.y >= lowest - 4);
-    const byWhy = {};
-    for (const r of rows) byWhy[r.why] = (byWhy[r.why] || 0) + 1;
-    return { page: ${page}, unprocessedProse: rows.length, unreasoned: unreasoned.length,
-             trailing: belowAll.length, byWhy,
-             sample: unreasoned.slice(0, 3).map((r) => r.text) };
-  })()`);
 
-  const report = [];
+  const state = whyskip.create();
   if (ALL) {
     const n = await ev(`window.PDFViewerApplication.pdfDocument.numPages`);
     for (let p = 1; p <= n; p++) {
@@ -135,45 +102,27 @@ try {
         if (cur === st) { if (++stab >= 5) break; } else { stab = 0; st = cur; }
         await sleep(500);
       }
-      const r = await probe(p);
-      if (r) report.push(r);
+      const r = await ev(whyskip.probe(p));
+      const { out, err } = whyskip.add(state, p, r);
+      for (const l of out) console.log(l);
+      for (const l of err) console.error(l);
     }
   } else {
-    report.push(await probe(PAGE));
+    const r = await ev(whyskip.probe(PAGE));
+    const { out, err } = whyskip.add(state, PAGE, r);
+    for (const l of out) console.log(l);
+    for (const l of err) console.error(l);
   }
-  const line = `${LABEL} ${JSON.stringify(report)}`;
-  console.log(line);
-  appendFileSync("test/out/whyskip.log", line + String.fromCharCode(10));
-
-  // The verdict, on one line the sweeps can show. Printing the per-page JSON
-  // alone is what let a sweep report PASS without anyone reading a number.
-  const sum = (k) => report.reduce((n, r) => n + (r[k] || 0), 0);
-  const totals = {
-    pages: report.length,
-    unprocessedProse: sum("unprocessedProse"),
-    unreasoned: sum("unreasoned"),
-    trailing: sum("trailing"),
-  };
-  console.log(`TOTALS: ${JSON.stringify(totals)}`);
-
-  // Blind-pass guard: a run that reached no page measured nothing, and would
-  // otherwise report a clean zero. (Zero unprocessed prose is NOT failed on —
-  // a short document can legitimately have none, and `unprocessedProse` is in
-  // the TOTALS line so a suspicious zero is visible.)
-  // Indented "  FAIL …" is the shape a sweep driver greps for, so a failure
-  // arrives with its page and sample attached instead of a bare exit code.
-  if (!totals.pages) {
-    console.error("  FAIL no page was probed");
-    process.exitCode = 1;
-  }
-  const offenders = report.filter((r) => r.unreasoned || r.trailing);
-  for (const r of offenders) {
-    console.error(
-      `  FAIL p${r.page} unreasoned=${r.unreasoned} trailing=${r.trailing} ` +
-        `sample=${JSON.stringify(r.sample)}`,
-    );
-  }
-  if (offenders.length) process.exitCode = 1;
+  const verdict = whyskip.summarize(state, { label: LABEL });
+  for (const l of verdict.out) console.log(l);
+  for (const l of verdict.err) console.error(l);
+  if (verdict.logLine) appendFileSync("test/out/whyskip.log", verdict.logLine + String.fromCharCode(10));
+  if (!verdict.ok) process.exitCode = 1;
 } catch (e) { console.error(`${LABEL} why-probe error: ${e.message || e}`); process.exitCode = 1; }
-finally { try { ws?.close(); } catch {} killBrowser(browser); await sleep(500);
-  try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} process.exit(process.exitCode ?? 0); }
+finally {
+  cdp?.close();
+  killBrowser(browser);
+  await sleep(500);
+  try { rmSync(userDataDir, { recursive: true, force: true }); } catch {}
+  process.exit(process.exitCode ?? 0);
+}
