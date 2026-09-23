@@ -154,8 +154,9 @@ const TAIL_FRAG = new RegExp("^" + WORD_EDGE.source + "+");
  * Two spans continue the same word when they sit on the SAME baseline with no
  * room for a space between them (PDF.js would have emitted the space
  * character) and the characters facing each other across the break are both
- * word characters. Returns div -> {head, tail}: `head` is the fragment the
- * previous span ended with, `tail` the fragment the next span starts with.
+ * word characters. Returns div -> {head, tail, prev, next}: `head` is the
+ * fragment the previous span ended with, `tail` the fragment the next span
+ * starts with, `prev`/`next` those spans' divs.
  */
 function joinRuns(allPairs) {
   const out = new Map();
@@ -172,8 +173,8 @@ function joinRuns(allPairs) {
     const head = HEAD_FRAG.exec(a.div.textContent ?? "")?.[0];
     const tail = TAIL_FRAG.exec(b.div.textContent ?? "")?.[0];
     if (!head || !tail) continue;
-    out.set(a.div, { ...(out.get(a.div) ?? {}), tail });
-    out.set(b.div, { ...(out.get(b.div) ?? {}), head });
+    out.set(a.div, { ...(out.get(a.div) ?? {}), tail, next: b.div });
+    out.set(b.div, { ...(out.get(b.div) ?? {}), head, prev: a.div });
   }
   return out;
 }
@@ -207,10 +208,154 @@ const RULE_MIN_LEN = 34; // ~60 CSS px at 180%
 const RULE_MAX_THICK = 3; // 3 CSS px at 100%
 const RULE_MIN_WIDTH = 22; // hRule width for table zones — ~40 CSS px at 180%
 const RULE_SAME_GAP = 2; // padded rule rects this close are one visual rule — 2 CSS px at 100%
+// Rules are found on ONE render of each page at this resolution — bitmap px per
+// page px — whatever the viewer's zoom (#baselineRules). 2 is the 100% zoom
+// on a 2x display: the resolution the constants above were tuned against.
+const RULE_PPU = 2;
 // Table-zone line buckets. Five CSS px at the page-fit (~1.24) that tables.mjs
 // validated; a paragraph continuation may sit ≤ ZONE_CONT_LINES buckets below.
 const ZONE_LINE_Q = 4;
 const ZONE_CONT_LINES = 5;
+
+// Text set well below body size is FIGURE material — a diagram's labels, a
+// plot's axes, the code or the annotated panel inside a figure — that reached
+// the text layer because the figure is vector art with real text in it. It
+// stays on the canvas, as the figure draws it. Measured over both corpora
+// (test/diag-sizes.mjs): the smallest PROSE convention sits at 0.75-0.8 of
+// body (footnotes, table notes, copyright blocks), and everything processed
+// below 0.7 was figure material — diagram and plot labels down to 0.3 of body,
+// pseudocode tokens, and the explanatory text of boxed figure panels. A size
+// cut alone, not a guess at what reads as prose: grouping small spans into
+// runs and counting their words was tried, and neighbouring diagram labels
+// merged into "sentences".
+const SMALL_TEXT = 0.7;
+
+/**
+ * Long, thin dark runs in an RGBA bitmap of a page — table rules, box frames,
+ * underlines, footnote separators — as {x0, y0, x1, y1} in the bitmap's own
+ * pixels (x1/y1 exclusive). `ppu`/`ppuY` are bitmap px per page px (CSS px at
+ * 100%), and every length is RULE_* × ppu, so the scan means the same thing at
+ * any resolution it is handed. Guards against false positives from glyph rows:
+ * a run must be RULE_MIN_LEN long, at most RULE_MAX_THICK thick after
+ * band-merge, and ISOLATED (the rows just above and below the band are mostly
+ * light within its x-extent — an in-glyph row fails because the glyphs
+ * continue above/below).
+ *
+ * A pixel counts as rule ink when the ink summed over it and its two
+ * neighbours ACROSS the rule (rows for a horizontal rule, columns for a
+ * vertical one) reaches RULE_STROKE page px: that sum is the rasterised stroke
+ * width whatever the resolution and sub-pixel phase. The pixel must carry some
+ * ink itself, so a band never grows onto the blank rows beside it.
+ *
+ * One dark/light byte per pixel, resolved in a single row-major sweep: the band
+ * scans and isolation checks used to re-evaluate the luminance predicate per
+ * pixel through a closure, and the vertical scan walked column-major over the
+ * RGBA buffer, missing cache on essentially every read.
+ */
+export function scanRules(data, W, H, ppu, ppuY) {
+  const out = [];
+  const ink = new Uint8Array(W * H);
+  for (let p = 0, i = 0; p < ink.length; p++, i += 4) {
+    if (data[i + 3] > 40) {
+      ink[p] = 255 - (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+    }
+  }
+  const need = (k) => Math.min(255 * 2.7, 255 * RULE_STROKE * k); // 3-px window max is 3×255
+  const needH = need(ppuY), needV = need(ppu);
+  // A pixel must carry half the window's requirement — the share of an
+  // evenly split stroke — but never more than the old per-pixel test asked
+  // (ink > 115). The floor is relative: a fixed one outranked the whole
+  // requirement on a low-resolution canvas (ppu ≲ 1) and rejected an evenly
+  // split hairline there. 12 only keeps paper-white noise out.
+  const own = (t) => Math.max(12, Math.min(115, t / 2));
+  const ownH = own(needH), ownV = own(needV);
+  const dark = new Uint8Array(W * H); // horizontal-rule ink (window across rows)
+  const darkV = new Uint8Array(W * H); // vertical-rule ink (window across columns)
+  for (let y = 0; y < H; y++) {
+    const row = y * W;
+    const up = y > 0 ? row - W : -1;
+    const dn = y < H - 1 ? row + W : -1;
+    for (let x = 0; x < W; x++) {
+      const p = row + x;
+      const v = ink[p];
+      if (!v) continue;
+      if (v >= ownH && v + (up >= 0 ? ink[up + x] : 0) + (dn >= 0 ? ink[dn + x] : 0) >= needH) dark[p] = 1;
+      if (v >= ownV && v + (x > 0 ? ink[p - 1] : 0) + (x < W - 1 ? ink[p + 1] : 0) >= needV) darkV[p] = 1;
+    }
+  }
+  // Isolation probes sit one page px outside a band (never under 2 device px).
+  const isoY = Math.max(2, Math.round(ppuY));
+  const isoX = Math.max(2, Math.round(ppu));
+  const darkFrac = (x0, x1, y) => {
+    if (y < 0 || y >= H) return 0;
+    let n = 0, d = 0;
+    const row = y * W;
+    for (let x = x0; x < x1; x += 2) { n++; if (dark[row + x]) d++; }
+    return n ? d / n : 0;
+  };
+  const minLen = Math.max(24, Math.round(RULE_MIN_LEN * ppu));
+  // +2: the across-window can admit an anti-aliased fringe row on EACH side.
+  const maxThick = Math.max(3, Math.round(RULE_MAX_THICK * ppuY) + 2);
+  // Horizontal runs per row → merge vertically adjacent runs into bands.
+  const bands = []; // {y0,y1,x0,x1}
+  for (let y = 0; y < H; y++) {
+    let run = 0, x0 = 0;
+    const row = y * W;
+    for (let x = 0; x <= W; x++) {
+      if (x < W && dark[row + x]) { if (!run) x0 = x; run++; continue; }
+      if (run >= minLen) {
+        const x1 = x;
+        // findLast and slice().reverse().find() return the same element,
+        // but `??` fell through to the copy whenever findLast found
+        // NOTHING — the common case — so the O(n) copy of an up-to-800
+        // entry list ran on nearly every completed run.
+        const prev = bands.findLast((b) => b.y1 === y - 1 && x0 < b.x1 + 4 && x1 > b.x0 - 4);
+        if (prev) { prev.y1 = y; prev.x0 = Math.min(prev.x0, x0); prev.x1 = Math.max(prev.x1, x1); }
+        else if (bands.length < 800) bands.push({ y0: y, y1: y, x0, x1 });
+      }
+      run = 0;
+    }
+  }
+  for (const b of bands) {
+    if (b.y1 - b.y0 + 1 > maxThick) continue; // too thick — a filled area/image
+    // Isolation: rows just outside the band are mostly light in its span.
+    if (darkFrac(b.x0, b.x1, b.y0 - isoY) > 0.35 || darkFrac(b.x0, b.x1, b.y1 + isoY) > 0.35) continue;
+    out.push({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 + 1 });
+    if (out.length >= 400) break;
+  }
+  // Vertical rules (cell borders, listing frames) — the same scan
+  // transposed. Column step 1, run down y; merge horizontally adjacent.
+  const darkFracV = (y0, y1, x) => {
+    if (x < 0 || x >= W) return 0;
+    let n = 0, d = 0;
+    for (let y = y0; y < y1; y += 2) { n++; if (darkV[y * W + x]) d++; }
+    return n ? d / n : 0;
+  };
+  const minLenV = Math.max(24, Math.round(RULE_MIN_LEN * ppuY));
+  const maxThickV = Math.max(3, Math.round(RULE_MAX_THICK * ppu) + 2);
+  const vbands = []; // {x0,x1,y0,y1}
+  for (let x = 0; x < W; x++) {
+    let run = 0, y0 = 0;
+    for (let y = 0; y <= H; y++) {
+      if (y < H && darkV[y * W + x]) { if (!run) y0 = y; run++; continue; }
+      if (run >= minLenV) {
+        const y1 = y;
+        // Same element as the reverse-copy scan, without copying the list.
+        const prev = vbands.findLast((b) => b.x1 === x - 1 && y0 < b.y1 + 4 && y1 > b.y0 - 4);
+        if (prev) { prev.x1 = x; prev.y0 = Math.min(prev.y0, y0); prev.y1 = Math.max(prev.y1, y1); }
+        else if (vbands.length < 400) vbands.push({ x0: x, x1: x, y0, y1 });
+      }
+      run = 0;
+    }
+  }
+  for (const b of vbands) {
+    if (b.x1 - b.x0 + 1 > maxThickV) continue;
+    if (darkFracV(b.y0, b.y1, b.x0 - isoX) > 0.35 || darkFracV(b.y0, b.y1, b.x1 + isoX) > 0.35) continue;
+    out.push({ x0: b.x0, y0: b.y0, x1: b.x1 + 1, y1: b.y1 });
+    if (out.length >= 700) break;
+  }
+  return out;
+}
 
 // Key a font by its bare leading family name: the same face reaches spans as
 // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12, sans-serif'
@@ -244,6 +389,8 @@ export class TypographyEngine {
   #spaceInkCache = new Map(); // famKey -> the embedded face PAINTS U+0020
   #measureCtx = null; // offscreen 2d context for ascent measurement
   #snapCtx = null; // offscreen willReadFrequently context for canvas pixel reads
+  #ruleBaseline = new WeakMap(); // pdfPage -> its rules in page px (#baselineRules)
+  #ruleQueue = Promise.resolve(); // baseline renders, one at a time
   #pageFonts = new Map(); // pageNumber -> Set<famKey> used by processed spans
   #inkRetryPages = new Set(); // pages whose ink decisions used a capped-resolution canvas
   #batching = false; // document-wide setters record only; endBatch re-processes once
@@ -2425,168 +2572,133 @@ export class TypographyEngine {
   }
 
   /**
-   * Long, thin dark runs on the PAINTED page canvas — table rules, box frames,
-   * underlines, footnote separators — returned as viewport-CSS rects. This is
-   * canvas ART the text layer knows nothing about, so masks must clamp around
-   * these exactly like text obstacles (otherwise a processed neighbour's mask
-   * whites out the rule/underline). Best-effort: returns [] when the canvas is
-   * unavailable or not yet painted (off-screen prefetch) — correctness never
-   * depends on it, coverage just improves when it works. The canvas is painted
-   * before textlayerrendered fires, so the visible-page process pass sees it.
-   * Guards against false positives from glyph rows: a run must be ≥60 CSS px
-   * long, ≤3 CSS px thick after band-merge, and ISOLATED (the rows just above
-   * and below the band are mostly light within its x-extent — an in-glyph row
-   * fails because the glyphs continue above/below).
+   * The page's canvas line-art — table rules, box frames, underlines,
+   * footnote separators — as viewport-CSS rects. This is canvas ART the text
+   * layer knows nothing about, so masks must clamp around these exactly like
+   * text obstacles (otherwise a processed neighbour's mask whites out the
+   * rule/underline), and table zones are built from the horizontal ones.
+   *
+   * Read from the page's BASELINE render (#baselineRules), not from the
+   * viewer's canvas. That canvas changes with the zoom — its resolution, its
+   * anti-aliasing, and above ~1.5x PDF.js's maxCanvasPixels cap — so a rule
+   * near any threshold was found at one zoom and not at another, and every
+   * decision built on it flipped with the zoom (R47 round 2: a ruled table's
+   * cells emphasized at 180% only; a light-grey listing frame read as a rule at
+   * 180% only, which turned the prose between two listings into table
+   * interior). One fixed-resolution render gives one answer at every zoom;
+   * only its mapping to the screen moves. Each rect is padded by one PAGE px —
+   * the 1 CSS px of padding at 100% — so the padding scales with the page like
+   * everything it is compared against.
+   *
+   * Falls back to scanning the live canvas when the baseline render failed or
+   * is still pending after the pass has waited for it (see work()): zoom-
+   * dependent, but a best-effort obstacle is better than none. Returns [] when
+   * neither is available — correctness never depends on it, coverage just
+   * improves when it works.
    */
   #detectCanvasRules(pageView, snapMemo) {
     const out = [];
     try {
       const canvas = pageView.canvas || pageView.div.querySelector("canvas");
       if (!canvas || !canvas.width) return out;
-      // The snapshot already measured the canvas (and refuses a zero-width
-      // one), so take cr from it rather than reading the box a second time.
-      const snap = this.#snapshotFor(canvas, snapMemo);
-      if (!snap) return out;
-      const cr = snap.cr;
-      if (!(cr.width > 0) || !(cr.height > 0)) return out;
-      const data = snap.d;
-      const W = snap.W, H = snap.H;
-      const sx = cr.width / W, sy = cr.height / H;
-      // One dark/light byte per pixel, resolved in a single row-major sweep.
-      // The two band scans and the two isolation checks below each used to
-      // re-evaluate the luminance predicate through a closure, per pixel — and
-      // the VERTICAL scan walked column-major over the RGBA buffer, so
-      // consecutive reads sat W*4 bytes apart and missed cache on essentially
-      // every pixel. One byte per pixel cuts that stride to W and the whole
-      // page is classified once instead of up to three times. Same predicate,
-      // same bands.
-      //
-      // Resolution-independent (R47): `ppu` is device px per page px (CSS px
-      // at 100%) of THIS canvas — capped base renders included, since it is
-      // measured from the canvas, not assumed from the zoom — and every length
-      // below is RULE_* × ppu. A pixel counts as rule ink when the ink summed
-      // over it and its two neighbours ACROSS the rule (rows for a horizontal
-      // rule, columns for a vertical one) reaches RULE_STROKE page px: that sum
-      // is the rasterised stroke width whatever the resolution and sub-pixel
-      // phase. The pixel must carry some ink itself, so a band never grows onto
-      // the blank rows beside it.
       const zoom = pageView.scale > 0 ? pageView.scale : 1;
-      const ppu = (W / cr.width) * zoom;
-      const ppuY = (H / cr.height) * zoom;
-      const ink = new Uint8Array(W * H);
-      for (let p = 0, i = 0; p < ink.length; p++, i += 4) {
-        if (data[i + 3] > 40) {
-          ink[p] = 255 - (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+      const base = this.#baselineRules(pageView);
+      let source = "base";
+      if (base?.rules) {
+        const cr = canvas.getBoundingClientRect();
+        if (!(cr.width > 0) || !(cr.height > 0)) return out;
+        const sx = cr.width / base.w, sy = cr.height / base.h;
+        for (const [x0, y0, x1, y1] of base.rules) {
+          out.push({
+            left: cr.left + x0 * sx - sx,
+            right: cr.left + x1 * sx + sx,
+            top: cr.top + y0 * sy - sy,
+            bottom: cr.top + y1 * sy + sy,
+          });
+        }
+      } else {
+        source = "live";
+        // The snapshot already measured the canvas (and refuses a zero-width
+        // one), so take cr from it rather than reading the box a second time.
+        const snap = this.#snapshotFor(canvas, snapMemo);
+        if (!snap) return out;
+        const cr = snap.cr;
+        if (!(cr.width > 0) || !(cr.height > 0)) return out;
+        const sx = cr.width / snap.W, sy = cr.height / snap.H;
+        // ppu is measured from the canvas, not assumed from the zoom, so a
+        // capped base render is scanned at the resolution it really has.
+        for (const b of scanRules(snap.d, snap.W, snap.H, (snap.W / cr.width) * zoom, (snap.H / cr.height) * zoom)) {
+          out.push({
+            left: cr.left + b.x0 * sx - 1,
+            right: cr.left + b.x1 * sx + 1,
+            top: cr.top + b.y0 * sy - 1,
+            bottom: cr.top + b.y1 * sy + 1,
+          });
         }
       }
-      const need = (k) => Math.min(255 * 2.7, 255 * RULE_STROKE * k); // 3-px window max is 3×255
-      const needH = need(ppuY), needV = need(ppu);
-      // A pixel must carry half the window's requirement — the share of an
-      // evenly split stroke — but never more than the old per-pixel test asked
-      // (ink > 115). The floor is relative: a fixed one outranked the whole
-      // requirement on a low-resolution canvas (ppu ≲ 1) and rejected an evenly
-      // split hairline there. 12 only keeps paper-white noise out.
-      const own = (t) => Math.max(12, Math.min(115, t / 2));
-      const ownH = own(needH), ownV = own(needV);
-      const dark = new Uint8Array(W * H); // horizontal-rule ink (window across rows)
-      const darkV = new Uint8Array(W * H); // vertical-rule ink (window across columns)
-      for (let y = 0; y < H; y++) {
-        const row = y * W;
-        const up = y > 0 ? row - W : -1;
-        const dn = y < H - 1 ? row + W : -1;
-        for (let x = 0; x < W; x++) {
-          const p = row + x;
-          const v = ink[p];
-          if (!v) continue;
-          if (v >= ownH && v + (up >= 0 ? ink[up + x] : 0) + (dn >= 0 ? ink[dn + x] : 0) >= needH) dark[p] = 1;
-          if (v >= ownV && v + (x > 0 ? ink[p - 1] : 0) + (x < W - 1 ? ink[p + 1] : 0) >= needV) darkV[p] = 1;
-        }
-      }
-      // Isolation probes sit one page px outside a band (never under 2 device px).
-      const isoY = Math.max(2, Math.round(ppuY));
-      const isoX = Math.max(2, Math.round(ppu));
-      const darkFrac = (x0, x1, y) => {
-        if (y < 0 || y >= H) return 0;
-        let n = 0, d = 0;
-        const row = y * W;
-        for (let x = x0; x < x1; x += 2) { n++; if (dark[row + x]) d++; }
-        return n ? d / n : 0;
-      };
-      const minLen = Math.max(24, Math.round(RULE_MIN_LEN * ppu));
-      // +2: the across-window can admit an anti-aliased fringe row on EACH side.
-      const maxThick = Math.max(3, Math.round(RULE_MAX_THICK * ppuY) + 2);
-      // Horizontal runs per row → merge vertically adjacent runs into bands.
-      const bands = []; // {y0,y1,x0,x1}
-      for (let y = 0; y < H; y++) {
-        let run = 0, x0 = 0;
-        const row = y * W;
-        for (let x = 0; x <= W; x++) {
-          if (x < W && dark[row + x]) { if (!run) x0 = x; run++; continue; }
-          if (run >= minLen) {
-            const x1 = x;
-            // findLast and slice().reverse().find() return the same element,
-            // but `??` fell through to the copy whenever findLast found
-            // NOTHING — the common case — so the O(n) copy of an up-to-800
-            // entry list ran on nearly every completed run.
-            const prev = bands.findLast((b) => b.y1 === y - 1 && x0 < b.x1 + 4 && x1 > b.x0 - 4);
-            if (prev) { prev.y1 = y; prev.x0 = Math.min(prev.x0, x0); prev.x1 = Math.max(prev.x1, x1); }
-            else if (bands.length < 800) bands.push({ y0: y, y1: y, x0, x1 });
-          }
-          run = 0;
-        }
-      }
-      for (const b of bands) {
-        if (b.y1 - b.y0 + 1 > maxThick) continue; // too thick — a filled area/image
-        // Isolation: rows just outside the band are mostly light in its span.
-        if (darkFrac(b.x0, b.x1, b.y0 - isoY) > 0.35 || darkFrac(b.x0, b.x1, b.y1 + isoY) > 0.35) continue;
-        out.push({
-          left: cr.left + b.x0 * sx - 1,
-          right: cr.left + b.x1 * sx + 1,
-          top: cr.top + b.y0 * sy - 1,
-          bottom: cr.top + (b.y1 + 1) * sy + 1,
-        });
-        if (out.length >= 400) break;
-      }
-      // Vertical rules (cell borders, listing frames) — the same scan
-      // transposed. Column step 1, run down y; merge horizontally adjacent.
-      const darkFracV = (y0, y1, x) => {
-        if (x < 0 || x >= W) return 0;
-        let n = 0, d = 0;
-        for (let y = y0; y < y1; y += 2) { n++; if (darkV[y * W + x]) d++; }
-        return n ? d / n : 0;
-      };
-      const minLenV = Math.max(24, Math.round(RULE_MIN_LEN * ppuY));
-      const maxThickV = Math.max(3, Math.round(RULE_MAX_THICK * ppu) + 2);
-      const vbands = []; // {x0,x1,y0,y1}
-      for (let x = 0; x < W; x++) {
-        let run = 0, y0 = 0;
-        for (let y = 0; y <= H; y++) {
-          if (y < H && darkV[y * W + x]) { if (!run) y0 = y; run++; continue; }
-          if (run >= minLenV) {
-            const y1 = y;
-            // Same element as the reverse-copy scan, without copying the list.
-            const prev = vbands.findLast((b) => b.x1 === x - 1 && y0 < b.y1 + 4 && y1 > b.y0 - 4);
-            if (prev) { prev.x1 = x; prev.y0 = Math.min(prev.y0, y0); prev.y1 = Math.max(prev.y1, y1); }
-            else if (vbands.length < 400) vbands.push({ x0: x, x1: x, y0, y1 });
-          }
-          run = 0;
-        }
-      }
-      for (const b of vbands) {
-        if (b.x1 - b.x0 + 1 > maxThickV) continue;
-        if (darkFracV(b.y0, b.y1, b.x0 - isoX) > 0.35 || darkFracV(b.y0, b.y1, b.x1 + isoX) > 0.35) continue;
-        out.push({
-          left: cr.left + b.x0 * sx - 1,
-          right: cr.left + (b.x1 + 1) * sx + 1,
-          top: cr.top + b.y0 * sy - 1,
-          bottom: cr.top + b.y1 * sy + 1,
-        });
-        if (out.length >= 700) break;
+      if (globalThis.__fxDebug) {
+        // Page units, so two zooms' rules can be compared line for line. The
+        // page is laid out to whole CSS px, so its scale is not exactly the zoom.
+        const cr = canvas.getBoundingClientRect();
+        const k = cr.width / (pageView.viewport.width / zoom);
+        const pu = (v, o) => Math.round(((v - o) / k) * 10) / 10;
+        (globalThis.__fxRules ??= []).push({
+          page: pageView.id, zoom, source,
+          rules: out.map((r) => [pu(r.left, cr.left), pu(r.top, cr.top), pu(r.right, cr.left), pu(r.bottom, cr.top)]),
+        }); // test introspection
       }
     } catch {
       /* best-effort */
     }
     return out;
+  }
+
+  /**
+   * The page's rules from ONE render at RULE_PPU, in page px, cached per PDF
+   * page (and rotation) for every later pass and every zoom: `{ w, h, rules }`
+   * once ready (`rules` null if that render failed), `rules` undefined while
+   * it is pending, and null without a page. The first call starts the render.
+   * Renders are queued one at a time — each holds a page-sized bitmap — and
+   * use the viewer's annotation mode, so PDF.js reuses the page's operator
+   * list for the same rendering intent instead of parsing the page again.
+   */
+  #baselineRules(pageView) {
+    const page = pageView.pdfPage;
+    if (!page || !(pageView.scale > 0) || !pageView.viewport) return null;
+    const rotation = pageView.viewport.rotation ?? 0;
+    const cached = this.#ruleBaseline.get(page);
+    if (cached && cached.rotation === rotation) return cached;
+    // viewport.scale is PDF.js's px per PDF point at this zoom; divided by
+    // the zoom it is px per point at 100% — one page px per unit.
+    const ptScale = pageView.viewport.scale / pageView.scale;
+    const unit = page.getViewport({ scale: ptScale, rotation });
+    const entry = { rotation, w: unit.width, h: unit.height, rules: undefined };
+    this.#ruleBaseline.set(page, entry);
+    const ppu = globalThis.__fxRulePPU > 0 ? globalThis.__fxRulePPU : RULE_PPU; // test override
+    this.#ruleQueue = this.#ruleQueue.then(async () => {
+      const canvas = document.createElement("canvas");
+      try {
+        const vp = page.getViewport({ scale: ptScale * ppu, rotation });
+        canvas.width = Math.round(vp.width);
+        canvas.height = Math.round(vp.height);
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        await page.render({
+          canvasContext: ctx,
+          viewport: vp,
+          annotationMode: globalThis.pdfjsLib?.AnnotationMode?.ENABLE_FORMS,
+          optionalContentConfigPromise: pageView._optionalContentConfigPromise ?? null,
+        }).promise;
+        const W = canvas.width, H = canvas.height;
+        const kx = W / entry.w, ky = H / entry.h;
+        entry.rules = scanRules(ctx.getImageData(0, 0, W, H).data, W, H, kx, ky)
+          .map((b) => [b.x0 / kx, b.y0 / ky, b.x1 / kx, b.y1 / ky]);
+      } catch {
+        entry.rules = null; // the pass falls back to the live canvas
+      } finally {
+        canvas.width = canvas.height = 0; // release the bitmap now, not at GC
+      }
+    });
+    return entry;
   }
 
   /** True when the item is set in a math/symbol/mono/small-caps/bold face.
@@ -2880,12 +2992,36 @@ export class TypographyEngine {
       if (globalThis.__fxDebug && div && !div.dataset.fxWhy) div.dataset.fxWhy = why;
       return false;
     };
+    // WORDS SPLIT ACROSS SPANS. PDF.js opens a new span at every font change,
+    // so one word can arrive in pieces: TeX composes an accented letter from
+    // two glyphs ("naïve" = "na" + "¨" + "ıve"), and an italic math letter
+    // inside a word does the same ("ith" = math "i" + "th"). Emphasized
+    // piece by piece, that bolds a prefix of EACH piece — two bold runs inside
+    // one word. Stitch them: the piece that starts the word sizes its prefix
+    // against the whole word; the pieces that continue it get none. Computed
+    // over allPairs, not candidates, because the piece next door is often the
+    // math glyph that is deliberately left on the canvas.
+    const joins = joinRuns(allPairs);
+    // A piece of such a word follows the block pass: when any piece of the
+    // word was kept for what it IS (a heading, a run-in lead, a table cell),
+    // the whole word stays with it. Judged piece by piece, a run-in heading
+    // whose first word TeX composed from an accent ("Mo¨" + "bius maps:")
+    // lost its first fragment to the body — emphasized, beside a kept rest.
+    const keptWord = (div) => {
+      for (const dir of ["prev", "next"]) {
+        let d = div;
+        for (let hop = 0; hop < 6 && (d = joins.get(d)?.[dir]); hop++) if (skipSet.has(d)) return true;
+      }
+      return false;
+    };
     const pairs = allPairs.filter((pair) => {
       const { div, item } = pair;
       if (!div?.isConnected || div.dataset.fxDone) return false;
       const text = div.textContent;
       const trimmed = text ? text.trim() : "";
       if (!trimmed) return false;
+      // Size relative to body, for the size probes (test introspection).
+      if (globalThis.__fxDebug && dominant && item?.height) div.dataset.fxH = (item.height / dominant).toFixed(2);
       // Math/special glyphs stay on the CANVAS in the document's own face and
       // are never processed: a special-font run (math/mono/small-caps/bold
       // display), a span with no Latin letters (subscripts, operators,
@@ -2912,10 +3048,12 @@ export class TypographyEngine {
       if (dominant && item?.height && item.height < dominant * 0.8 && trimmed.length <= 4) {
         return reject(div, "script-size");
       }
+      if (dominant && item?.height && item.height < dominant * SMALL_TEXT) return reject(div, "figure-text");
       // Block classification (#classifyBlocks) owns content-type: anything not
       // body text — headings, captions, tables, figures, equations — is here.
       // #classifyBlocks already recorded its own, more specific reason here.
       if (skipSet.has(div)) return reject(div, "block");
+      if (keptWord(div)) return reject(div, "split-word");
       // Backup net for an over-sized heading/title the block pass let through.
       // Only the LARGER-than-body cut remains: a smaller-than-body cut would
       // drop legitimate small body text (footnotes, and appendices or notes set
@@ -3000,17 +3138,6 @@ export class TypographyEngine {
     });
 
     const settings = this.#settings;
-    // WORDS SPLIT ACROSS SPANS. PDF.js opens a new span at every font change,
-    // so one word can arrive in pieces: TeX composes an accented letter from
-    // two glyphs ("naïve" = "na" + "¨" + "ıve"), and an italic math letter
-    // inside a word does the same ("ith" = math "i" + "th"). Emphasized
-    // piece by piece, that bolds a prefix of EACH piece — two bold runs inside
-    // one word. Stitch them: the piece that starts the word sizes its prefix
-    // against the whole word; the pieces that continue it get none. Computed
-    // over allPairs, not candidates, because the piece next door is often the
-    // math glyph that is deliberately left on the canvas.
-    const joins = joinRuns(allPairs);
-
     // Obstacles: every inked text-layer span we are NOT rendering on top (skip
     // set, headings, captions, tables, refs, size-filtered). Masks cover only
     // the canvas duplicate of spans we redraw — they must never white out an
@@ -3087,6 +3214,18 @@ export class TypographyEngine {
         (pageView.renderingState !== undefined && pageView.renderingState !== 3) ||
         (pageView.detailView && pageView.detailView.renderingState !== undefined && pageView.detailView.renderingState !== 3);
       if (!obstacleRects && paintPending && (holder.paintWaits = (holder.paintWaits || 0) + 1) <= 40) {
+        setTimeout(() => {
+          if (holder.cancelled) holder.resolve();
+          else requestIdleCallback(work, { timeout: 200 });
+        }, 150);
+        return;
+      }
+      // Rules come from the page's baseline render, started here on the
+      // page's first pass and cached for every later one. Wait for it (up to
+      // ~15 s, once per page): a pass that went ahead would scan the live
+      // canvas instead, and its decisions would depend on the zoom again.
+      const baseline = obstacleRects ? null : this.#baselineRules(pageView);
+      if (baseline && baseline.rules === undefined && (holder.ruleWaits = (holder.ruleWaits || 0) + 1) <= 100) {
         setTimeout(() => {
           if (holder.cancelled) holder.resolve();
           else requestIdleCallback(work, { timeout: 200 });
