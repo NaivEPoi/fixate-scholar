@@ -90,12 +90,17 @@ const signature = (page) => `(() => {
          pv.div.querySelectorAll(".fx-cite-hit").length;
 })()`;
 const settle = async (page) => {
+  const t0 = Date.now();
   let last = "", stable = 0;
   for (let i = 0; i < 60; i++) {
     const cur = await ev(signature(page)).catch(() => "x");
     // Five reads 500 ms apart: at least as patient as every harness it
-    // replaces (fontkeep and eqkeep take 5 at 400, whyskip 5 at 500).
-    if (cur === last && cur !== "x") { if (++stable >= 5) return true; } else { stable = 0; last = cur; }
+    // replaces (fontkeep and eqkeep take 5 at 400, whyskip 5 at 500). A page
+    // with NOTHING processed yet is not accepted as settled for its first 8 s:
+    // a short document read before the engine reached it holds "0/0" just as
+    // still as a finished figure page does, and fontkeep then "proved nothing".
+    const early = cur.startsWith("0/") && Date.now() - t0 < 8000;
+    if (cur === last && cur !== "x" && !early) { if (++stable >= 5) return true; } else if (cur !== last) { stable = 0; last = cur; }
     await sleep(500);
   }
   return false;
@@ -200,14 +205,17 @@ try {
     const v = MODULES[c].summarize(state[c], { label: LABEL });
     emit(c, v);
     if (v.logLine) appendFileSync(`${outDir()}/${c}.log`, v.logLine + String.fromCharCode(10));
-    let ok = v.ok;
-    if (!measured[c]) { ok = false; lines[c].push(`  FAIL ${c} measured no page at all — the check proved nothing`); }
-    if (!ok) failed++;
-    if (unmeasured[c].length) {
-      blind++;
-      lines[c].push(`  NO VERDICT on ${unmeasured[c].length} page(s): p${unmeasured[c].join(",p")} — not measured, so not a pass`);
-    }
-    verdicts.push(`${c}=${!ok ? "FAIL" : unmeasured[c].length ? "UNMEASURED" : "ok"}`);
+    // A check's own blind guard ("resolved no font names — the check proved
+    // nothing", "no page was probed") prints FAIL, but it reports that nothing
+    // was measured, not that the product failed. Same for a check that never
+    // got a page. Those are UNMEASURED: no verdict, never a pass.
+    const provedNothing = !measured[c] || [...v.out, ...v.err].some((l) => /the check proved nothing|FAIL no page was probed/.test(l));
+    if (!measured[c]) lines[c].push(`  NO VERDICT ${c} measured no page at all — the check proved nothing`);
+    if (unmeasured[c].length) lines[c].push(`  NO VERDICT on ${unmeasured[c].length} page(s): p${unmeasured[c].join(",p")} — not measured, so not a pass`);
+    const verdict = provedNothing ? "UNMEASURED" : !v.ok ? "FAIL" : unmeasured[c].length ? "UNMEASURED" : "ok";
+    if (verdict === "FAIL") failed++;
+    if (verdict === "UNMEASURED") blind++;
+    verdicts.push(`${c}=${verdict}`);
   }
   for (const c of CHECKS) {
     console.log(`--- ${c} ---`);
