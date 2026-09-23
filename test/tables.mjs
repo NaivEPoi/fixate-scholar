@@ -292,21 +292,27 @@ const SPANS = (p) => `(() => {
 })()`;
 
 // Processed/emphasis counts of page p, for the settle loop.
-// Has the engine HANDLED page p yet? A page with prose on it is handled once
-// any prose span is processed or carries the reason it was left (__fxDebug is
-// on). Settling on counts alone accepted a page that had not been processed
-// YET: under a loaded gate a whole zoom read that way, and every emphasized
-// span of it became a "zoom flip" (925 on one paper, 0 when re-run alone).
+// How much of page p's prose the engine has HANDLED: a prose span is handled
+// once it is processed or carries the reason it was left (__fxDebug is on;
+// every prose span of both corpora ends up one or the other). Settling on
+// counts alone accepted a page the engine had not reached, or was half-way
+// through, and every span it had not got to yet became a "zoom flip" (925 on
+// one paper, 0 when re-run alone). LEAF spans, not the layer's children: a
+// tagged PDF nests its text spans in marked-content spans, and reading only
+// direct children saw no prose at all on one such document.
 const HANDLED = (p) => `(() => {
   const d = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;
-  if (!d) return false;
-  let prose = 0;
-  for (const s of d.querySelectorAll(":scope > span")) {
+  if (!d) return null;
+  let prose = 0, handled = 0;
+  for (const s of d.querySelectorAll("span")) {
+    if (s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
+    if (s.matches(".fx-cite-c, .fx-ref-c, .fx-sp")) continue; // the engine's own runs inside a span
     if (((s.textContent || "").match(/[a-z]{2,}/g) || []).length < 2) continue;
     prose++;
-    if (s.hasAttribute("data-fx-done") || s.dataset.fxWhy || s.hasAttribute("data-fx-keep") || s.hasAttribute("data-fx-table")) return true;
+    const h = s.closest("[data-fx-done], [data-fx-why], [data-fx-keep], [data-fx-table]");
+    if (h) handled++;
   }
-  return prose < 3;
+  return { prose, handled };
 })()`;
 const COUNTS = (p) => `(() => { const d = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;
   return d ? d.querySelectorAll("span[data-fx-done]").length + "/" + d.querySelectorAll(".fx-b").length : "-"; })()`;
@@ -376,9 +382,18 @@ try {
     for (let p = from; p <= to; p++) {
       await ev(`window.PDFViewerApplication.page = ${p}`);
       await settle(p);
-      let handled = false;
-      for (let i = 0; i < 30 && !handled; i++) { handled = await ev(HANDLED(p)).catch(soft(false)); if (!handled) { await sleep(1000); await settle(p); } }
-      if (!handled) throw new Error(`p${p} was never processed by the engine at zoom ${zoom} — no verdict`);
+      // Wait until the engine has handled ALL of the page's prose, then read.
+      // Bounded: after 30 s a page with nothing handled at all is no verdict;
+      // one partly handled is read as it stands (a span the engine truly never
+      // marks cannot hold the run hostage).
+      let st = null;
+      for (let i = 0; i < 30; i++) {
+        st = await ev(HANDLED(p)).catch(soft(null));
+        if (st && (st.prose < 3 || st.handled === st.prose)) break;
+        await sleep(1000);
+        await settle(p);
+      }
+      if (!st || (st.prose >= 3 && st.handled === 0)) throw new Error(`p${p} was never processed by the engine at zoom ${zoom} — no verdict`);
       const res = await ev(CHECK(p)).catch((e) => ({ error: String(e).slice(0, 120) }));
       const rows = await ev(SPANS(p)).catch(() => null);
       if (rows) {
