@@ -129,8 +129,13 @@ export const probe = (page) => `(() => {
       // with the "(" 1 px after the name - four false violations in one gate.
       let k = seg.length - 1;
       while (k > 0 && !seg[k].s.textContent.includes("(")) k--;
-      if (!seg[k].s.textContent.trim().startsWith("(")) continue;
-      if (k > 0 && seg[k].r.left - seg[k - 1].r.right < 0.3 * seg[k].r.height) continue;
+      const own = seg[k].s.textContent.trim().startsWith("(");
+      // Some exporters emit an equation line as ONE run, number included; the
+      // number is still set apart there, by a run of spaces or a tab. A
+      // sentence's "(3)" follows a single space.
+      const spaced = /(?:\\s{2,}|\\t)\\(\\s*(?:[A-Z]\\s*[.-]\\s*)?\\d+(?:\\.\\d+)*\\s*\\)\\s*$/.test(seg[k].s.textContent);
+      if (!own && !spaced) continue;
+      if (own && k > 0 && seg[k].r.left - seg[k - 1].r.right < 0.3 * seg[k].r.height) continue;
       // No running prose: three or more ordinary lowercase words means a
       // sentence that merely ends in a parenthesised number, not an equation.
       const words = (text.match(/\\b[a-z]{3,}\\b/g) || [])

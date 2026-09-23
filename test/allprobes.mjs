@@ -101,25 +101,19 @@ const fatal = (e) => /timed out after|socket closed/.test(e?.message ?? "");
 const soft = (d) => (e) => { if (fatal(e)) throw e; return d; };
 // Whether the engine has processed anything in this document yet.
 let engineSeen = false;
+/** This page's settled signature, or null if it never held still. */
 const settle = async (page) => {
-  const t0 = Date.now();
   let last = "", stable = 0;
   for (let i = 0; i < 60; i++) {
     const cur = await ev(signature(page)).catch(soft("x"));
     // Five reads 500 ms apart: at least as patient as every harness it
-    // replaces (fontkeep and eqkeep take 5 at 400, whyskip 5 at 500). Until
-    // the engine has processed ANY span in this document, an all-zero page is
-    // not accepted as settled for its first 8 s: a short document read before
-    // the engine started holds "0/0" as still as a finished figure page, and
-    // fontkeep then "proved nothing". Once the engine is known to be running,
-    // an all-zero page (bibliography, figure) is simply what it looks like.
-    const early = !engineSeen && cur.startsWith("0/") && Date.now() - t0 < 8000;
-    if (cur === last && cur !== "x" && !early) {
-      if (++stable >= 5) { if (!cur.startsWith("0/")) engineSeen = true; return true; }
+    // replaces (fontkeep and eqkeep take 5 at 400, whyskip 5 at 500).
+    if (cur === last && cur !== "x") {
+      if (++stable >= 5) { if (!cur.startsWith("0/")) engineSeen = true; return cur; }
     } else if (cur !== last) { stable = 0; last = cur; }
     await sleep(500);
   }
-  return false;
+  return null;
 };
 
 const state = Object.fromEntries(CHECKS.map((c) => [c, MODULES[c].create()]));
@@ -173,16 +167,26 @@ try {
   const numPages = await ev(`window.PDFViewerApplication.pdfDocument.numPages`);
   const pages = ALL ? Array.from({ length: numPages }, (_, i) => i + 1) : [PAGE];
   let blankRun = 0;
-  for (const pg of pages) {
+  // A page that settles with NOTHING processed before the engine has processed
+  // anything in this document is not measured yet, only deferred: a short
+  // document read before the engine started holds "0/0" as still as a finished
+  // figure page does, and measuring it then makes fontkeep "prove nothing" and
+  // whyskip report every line of prose as unreasoned — a product FAIL out of a
+  // slow start. Deferred pages are revisited once the engine has been seen.
+  const deferred = [];
+  const measurePage = async (pg, revisit) => {
     const citing = CHECKS.includes("citepoint") && state.citepoint.examined < MAX;
     await ev(`(() => { window.PDFViewerApplication.page = ${pg}; return true; })()`);
     await sleep(citing ? 2200 : 1200);
-    const settled = await settle(pg);
+    const sig = await settle(pg);
+    if (!revisit && !engineSeen && sig?.startsWith("0/")) { deferred.push(pg); return; }
     // A page with no text layer after a full settle is one thing; three in a
     // row is the viewer no longer producing them at all (seen as "p6..p16: no
     // layer" in one gate). Grinding on costs minutes a page in re-reads and
-    // measures nothing, so stop and let the sweep run the document again.
-    const hasLayer = settled || await ev(`!!window.PDFViewerApplication.pdfViewer.getPageView(${pg - 1})?.textLayer`).catch(soft(false));
+    // measures nothing, so stop and let the sweep run the document again. (A
+    // full-page figure still has a text layer, just an empty one: over 773
+    // pages of both corpora not one page lacked it.)
+    const hasLayer = sig !== null || await ev(`!!window.PDFViewerApplication.pdfViewer.getPageView(${pg - 1})?.textLayer`).catch(soft(false));
     blankRun = hasLayer ? 0 : blankRun + 1;
     if (blankRun >= 3) throw new Error(`viewer stopped producing text layers (p${pg - 2}..p${pg}) — no verdict`);
     if (citing) {
@@ -222,7 +226,19 @@ try {
       measured[c]++;
       emit(c, MODULES[c].add(state[c], pg, r));
     }
+  };
+  for (const pg of pages) await measurePage(pg, false);
+  if (deferred.length && !engineSeen) {
+    // One last, longer look before concluding the engine never ran here.
+    await ev(`(() => { window.PDFViewerApplication.page = ${deferred[0]}; return true; })()`);
+    for (let i = 0; i < 30 && !engineSeen; i++) {
+      await sleep(1000);
+      const n = await ev(`document.querySelectorAll(".textLayer span[data-fx-done]").length`).catch(soft(0));
+      if (n > 0) engineSeen = true;
+    }
+    if (!engineSeen) throw new Error(`the engine never processed a span in this document (${pages.length} page(s)) — no verdict`);
   }
+  for (const pg of deferred) await measurePage(pg, true);
 
   let failed = 0, blind = 0;
   const verdicts = [];
