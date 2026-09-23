@@ -4,7 +4,7 @@
 //
 // The probe and the verdict live in test/probes/refcolor.mjs, shared with the
 // combined gate runner (test/allprobes.mjs); this file drives one browser.
-// Usage: node test/refcolor.mjs <url> [--pages=A-B]
+// Usage: node test/refcolor.mjs <url> [--pages=A-B] [--zoom=Z]
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import * as refcolor from "./probes/refcolor.mjs";
 const URL0 =
   process.argv.slice(2).find((a) => a.startsWith("--url="))?.slice(6) ??
   process.argv.slice(2).find((a) => !a.startsWith("--"));
+const ZOOM = process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? null;
 const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const EXT = extensionDir;
 const PORT = 9071 + (process.pid % 130);
@@ -48,6 +49,9 @@ try {
   let appOk = false;
   for (let i = 0; i < 30; i++) { appOk = await ev(`!!(window.PDFViewerApplication && window.PDFViewerApplication.pdfViewer)`).catch(() => false); if (appOk) break; await sleep(500); }
   if (!appOk) throw new Error("viewer never loaded");
+  // --zoom: the gate runs every check at one zoom; without it, the viewer's
+  // default — what this check was validated at.
+  if (ZOOM) await ev(`(() => { window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(ZOOM)}; return true; })()`);
   for (let i = 0; i < 40; i++) {
     await sleep(800);
     const ready = await ev(`({

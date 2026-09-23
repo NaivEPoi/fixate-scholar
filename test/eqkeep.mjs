@@ -24,7 +24,7 @@
 //
 // The probe and the verdict live in test/probes/eqkeep.mjs, shared with the
 // combined gate runner (test/allprobes.mjs); this file drives one browser.
-// Usage: node test/eqkeep.mjs --url=<pdf> [--label=name] [--page=N | --all]
+// Usage: node test/eqkeep.mjs --url=<pdf> [--label=name] [--page=N | --all] [--zoom=Z]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
 
@@ -33,6 +33,7 @@ import { connect } from "./lib/cdp.mjs";
 import * as eqkeep from "./probes/eqkeep.mjs";
 
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
+const ZOOM = arg("zoom", null);
 const URL0 = arg("url");
 const LABEL = arg("label", "doc");
 const PAGE = parseInt(arg("page", "6"), 10);
@@ -88,6 +89,9 @@ try {
   await cdp.ready;
   await send("Runtime.enable");
   for (let i = 0; i < 40; i++) { if (await ev(`!!window.PDFViewerApplication?.pdfDocument`).catch(() => false)) break; await sleep(500); }
+  // --zoom: the gate runs every check at one zoom; without it, the viewer's
+  // default — what this check was validated at. Set before the engine runs.
+  if (ZOOM) await ev(`(() => { window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(ZOOM)}; return true; })()`);
   await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
 
   const pages = ALL ? await ev(`window.PDFViewerApplication.pdfDocument.numPages`) : null;

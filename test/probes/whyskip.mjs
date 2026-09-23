@@ -36,8 +36,13 @@ export const probe = (page) => `(() => {
     const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page - 1});
     if (!pv || !pv.textLayer) return null;
     const pr = pv.div.getBoundingClientRect();
-    const spans = [...pv.textLayer.div.querySelectorAll(":scope > span")]
-      .filter((s) => !s.classList.contains("endOfContent"));
+    // LEAF spans, not the layer's children: a tagged PDF nests its text spans
+    // in marked-content spans, and reading only direct children saw no prose
+    // on such a document at all — every page "clean", measured blind. Our own
+    // inline wrappers (citation/reference colour, spacing) are not leaves.
+    const spans = [...pv.textLayer.div.querySelectorAll("span")]
+      .filter((s) => !s.classList.contains("endOfContent") && !s.matches(".fx-cite-c, .fx-ref-c, .fx-sp") &&
+        !s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)"));
     const prose = (t) => ((t || "").match(/[a-z]{2,}/g) || []).length >= 2;
     const rows = [];
     for (const s of spans) {

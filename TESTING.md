@@ -94,7 +94,7 @@ papers):
 node test/diag-dividers.mjs "<paper>"   # canvas rules/underlines/frames vs masks — masked MUST be 0 on every page (add --zoom=1.8 if you touched rule detection)
 node test/audit.mjs "<paper>"           # classification issue classes — keepFallback/tableLeak/capProse ≈ 0
 node test/diagnose.mjs "<paper>"        # whiteout MUST be 0; watch the peek total for regressions
-node test/tables.mjs "<paper>"          # NO processed span inside a rule-bounded table zone, AND the same emphasis per span at page-fit/1.0/1.8 (exit 1 on offenders or zoom flips)
+node test/tables.mjs "<paper>"          # NO processed span inside a rule-bounded table zone, AND the same emphasis per span at page-fit/1.0/1.8 (exit 1 on offenders or zoom flips) — run this one whenever the engine reads the canvas differently
 node test/skipline.mjs "<paper>"        # unprocessed PROSE lines — only front matter/refs/headings may appear
 node test/refbold.mjs "<paper>"         # NO processed span inside the bibliography (exit 1 on offenders)
 ```
@@ -104,30 +104,33 @@ node test/refbold.mjs "<paper>"         # NO processed span inside the bibliogra
 OPENERS, so continuation lines, unnumbered bibliographies and lines the box list
 never received all pass it.
 
-### 1b. The release gate's DOM checks — one render per zoom, not per check
+### 1b. The release gate's DOM checks — one render, one zoom
 
-The release gate runs fontkeep, whyskip, eqkeep, refcolor and citepoint over
-every page of every corpus document. Run one at a time, each renders every
-document itself, and the render is almost the whole cost. They cannot all share
-ONE render either: **zoom can change classification** (R47: the same paper
-processed 1819 spans at 1.0 and 1831 at 1.8 until table-rule detection was made
-resolution-independent), so a check is held to the zoom it was validated at. `test/allprobes.mjs` therefore groups them by
-the render each was validated on:
+The release gate runs fontkeep, whyskip, eqkeep, refcolor, tables and citepoint
+over every page of every corpus document. Run one at a time, each renders every
+document itself, and the render is almost the whole cost. `test/allprobes.mjs`
+runs all six over ONE render of each document, at ONE zoom:
 
-| pass | checks | render |
-|---|---|---|
-| `--pass=A` | fontkeep, whyskip | zoom 1.8, 2600×2400 window, sidebar hidden, `__fxDebug` on before the engine runs |
-| `--pass=B` | eqkeep, refcolor, citepoint | the viewer's default zoom, 1400×2000 window; citepoint runs LAST on each page (it clicks), and stops at `--max` multi-key citations like its harness |
+| checks | render |
+|---|---|
+| fontkeep, whyskip, eqkeep, refcolor, tables, citepoint | `--zoom` (1.0), 1400×2000 window, sidebar hidden, `__fxDebug` on before the engine runs; each page is read once every prose span is processed or carries its skip reason; citepoint runs LAST on each page (it clicks) and stops at `--max` multi-key citations like its harness |
 
-`tables.mjs` (a fresh viewer tab per zoom — page-fit, 1.0, 1.8 — comparing
-emphasis span by span across them) and `console.mjs` (reloads, toggles reading
-mode) cannot share a render and stay separate stages.
+The checks used to be split by zoom — fontkeep/whyskip at 1.8, the rest at the
+default, tables at three zooms compared span by span — because the engine's
+decisions moved with the zoom (R47). The input they moved with, the canvas
+rules, now comes from one fixed-resolution render of each page whatever the
+zoom (the engine's `#baselineRules`, R50), so one zoom stands for all of them:
+100%, the resolution that render is made at. Whether the engine really is
+zoom-independent is a question for `test/tables.mjs --zooms=page-fit,1.0,1.8`,
+run when the engine's canvas reads change — not a stage of every gate.
+`console.mjs` (reloads, toggles reading mode) cannot share a render and stays
+a separate stage.
 
 - **One copy of each check.** Its page probe and verdict live in
   `test/probes/<check>.mjs` (`probe(page, opts)`, `create()`, `add()`,
   `summarize()`); the standalone harness and `allprobes.mjs` both import it, and
   each check prints exactly its harness's lines under a `--- <check> ---`
-  header. Adding a check to a pass means writing that module, never copying a
+  header. Adding a check to the runner means writing that module, never copying a
   probe — `refcolor.mjs` once kept its own copy of the parser's pattern, the copy
   carried the product's bug, and the check could not see the thing it existed for.
 - **No blind passes.** A check that was asked for and measured nothing FAILS. A
@@ -137,7 +140,7 @@ mode) cannot share a render and stay separate stages.
   The standalone harnesses used to skip such a page in silence, which is how a
   document "passed" on 9 of its 16 pages.
 - **A combined run must report what the standalone runs report.** After
-  changing a pass, a probe module or the settle, run both over both corpora and
+  changing the runner, a probe module or the settle, run both over both corpora and
   compare them document by document and line by line, with no tolerance on the
   numbers — but against MORE THAN ONE standalone run. Two standalone runs of
   identical code do not always agree: a standalone harness skips a page it
@@ -271,6 +274,14 @@ embedded font at original size, mask the canvas duplicate):
 - **Table cells** — rows with ≥3 wide column gaps (but NOT justified prose, which
   is spared by the ≥4-lowercase-words-per-line rule).
 - **Figure labels, axis labels, displayed equations.**
+- **Figure-size text** — any span below 0.7 of the document's body height
+  (`SMALL_TEXT`): a vector figure's labels, a plot's axes, the code or the
+  annotated panel inside a figure. The smallest prose convention (footnotes,
+  table notes) sits at 0.75–0.8 of body; below 0.7 both corpora carried only
+  figure material (`test/diag-sizes.mjs`).
+- **The rest of a word the block pass kept.** PDF.js splits a word at every
+  font change (TeX composes an accented letter from two glyphs); a piece joined
+  to a piece kept as a heading, run-in lead or table cell is kept with it.
 - **Pseudocode / algorithm listings** (line-number/`Require:`/keyword leads).
 - **Math / symbol / monospace / small-caps / bold-display fonts**; any span with
   no Latin letter (subscripts, operators, bracketed numbers, version strings);
@@ -299,6 +310,8 @@ embedded font at original size, mask the canvas duplicate):
   neutralized (its wrapping `section.linkAnnotation` gets `pointer-events:none`).
 - **In-paper references** "Figure 3", "Table 9", "Section 5", "Eq. 2" → colored
   strong **red** (`#b91c1c`); the native in-document jump link is PRESERVED.
+  NOT inside a citation: a locator ("[9, §5.2]", "[24, Section 3]") points into
+  the CITED work and stays the citation's blue.
 
 ### RENDER QUALITY (verify visually + with probes):
 - Overlay glyphs sit on the **canvas baseline**: the engine MEASURES the
@@ -343,6 +356,19 @@ All write to `test/out/`. Add `--headful` (where supported) for real-DPI.
   above the Abstract is skipped by design — counted, it failed every paper with a
   3-line author block).
   Per-page deep dive: `node test/probe.mjs <paper> <page> <query> [--shot]`.
+- **A span whose decision changes with the zoom** (a `tables.mjs --zooms` flip):
+  `node test/diag-zones.mjs --url=<pdf> --page=N --find="text" [--zooms=page-fit,1.0,1.8] [--all] [--probe=x,y0,y1]`
+  prints, per zoom and in page units, the canvas rules the engine used (and
+  whether they came from its baseline render or the live canvas), which of them
+  another zoom did not find, the zone lines the prose exemption judged, and
+  what overlaps the span. `--probe` dumps the base canvas's ink down one column
+  — how a light-grey frame read as a rule at one resolution and not another.
+- **How small is the processed text?** `node test/diag-sizes.mjs --url=<pdf> [--below=0.7]`
+  — processed characters by height / body height, and every processed span
+  below `--below`. What the engine's figure-text cut (`SMALL_TEXT`) was chosen from.
+- **Author-year citations that resolve** (R46's widened grammar):
+  `node test/diag-authoryear.mjs --url=<pdf> [--list]` — every annotated
+  author-year citation, SUSPECT where its words are mostly lowercase prose.
 - **A page with NO emphasis at all** (`data-fx-why="table-aligned"` over body
   prose): `node test/diag-aligned.mjs --url=<pdf> --page=N` prints every run the
   aligned-gap table rule seeded on that page — its band, its row count, and the

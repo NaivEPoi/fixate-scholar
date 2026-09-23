@@ -1,25 +1,27 @@
-// Several gate checks over ONE render of a document instead of one render each.
+// Every in-page gate check over ONE render of a document instead of one each.
 //
 // The checks are read-only probes over the same settled page: each enables the
 // extension, walks the document a page at a time and evaluates an expression
-// against the rendered DOM, and the render is almost the whole cost. But they
-// cannot all share one, because ZOOM IS NOT COSMETIC: it changes layout, layout
-// can change classification, and classification is what they measure (R47 —
-// the same paper processed 1819 spans at 1.0 and 1831 at 1.8 until table-rule
-// detection was fixed). So the checks are grouped by the render they were
-// validated on, and a group is a PASS:
+// against the rendered DOM, and the render is almost the whole cost. They share
+// ONE zoom. Zoom used to split them into two passes, because the engine's
+// decisions moved with it (R47: the same paper processed 1819 spans at 1.0 and
+// 1831 at 1.8); the canvas rules they moved with now come from one fixed
+// render of each page whatever the zoom (engine #baselineRules), so a single
+// zoom — the 100% that render is made at — stands for all of them:
 //
-//   A  fontkeep, whyskip           zoom 1.8, 2600x2400 window, sidebar hidden,
-//                                  __fxDebug on before the engine runs
-//   B  eqkeep, refcolor, citepoint the viewer's default zoom, 1400x2000 window
+//   fontkeep whyskip eqkeep refcolor tables citepoint
+//                        zoom --zoom (1.0), 1400x2000 window, sidebar hidden,
+//                        __fxDebug on before the engine runs
 //
-// tables (a fresh tab per zoom, compared across zooms) and console (reloads,
-// toggles reading mode) cannot share one and stay standalone stages. Each
-// check's probe and verdict come from its module in test/probes/, the same
-// code its standalone harness runs, and every
-// check prints exactly the lines its harness prints, under a `--- <check> ---`
-// header, so a combined log and a standalone log can be compared line for line
-// (local/gate-compare.mjs does).
+// Whether the engine really is zoom-independent is a separate question with
+// its own harness (test/tables.mjs --zooms=page-fit,1.0,1.8), run when the
+// engine's canvas reads change — not a stage of every gate. console (reloads,
+// toggles reading mode) cannot share a render and stays a standalone stage.
+// Each check's probe and verdict come from its module in test/probes/, the
+// same code its standalone harness runs, and every check prints exactly the
+// lines its harness prints, under a `--- <check> ---` header, so a combined
+// log and a standalone log can be compared line for line (local/gate-compare.mjs
+// does).
 //
 // Exit 0 all checks pass; 1 a check FAILED; 75 no check failed but something
 // was never measured — a page (probe error, or no text layer however long it
@@ -29,7 +31,7 @@
 // drops a check is worse than a slow one. A viewer that stops answering (a CDP
 // deadline, a closed socket) ends the run at once rather than being polled.
 //
-// Usage: node test/allprobes.mjs --url=<pdf> --pass=A|B [--label=name]
+// Usage: node test/allprobes.mjs --url=<pdf> [--label=name] [--zoom=1.0]
 //        [--all | --page=N] [--max=N] [--checks=a,b]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
@@ -41,29 +43,31 @@ import * as whyskip from "./probes/whyskip.mjs";
 import * as eqkeep from "./probes/eqkeep.mjs";
 import * as refcolor from "./probes/refcolor.mjs";
 import * as citepoint from "./probes/citepoint.mjs";
+import * as tables from "./probes/tables.mjs";
 
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 const URL0 = arg("url");
 const LABEL = arg("label", "doc");
-const PASS = arg("pass");
+const ZOOM = arg("zoom", "1.0");
 const ALL = process.argv.includes("--all");
 const PAGE = parseInt(arg("page", "1"), 10);
 // citepoint clicks every multi-key citation and each click fires a lookup, so a
 // citation-dense paper is capped — the same cap and default as its harness.
 const MAX = parseInt(arg("max", "40"), 10);
 
-const PASSES = {
-  A: { checks: ["fontkeep", "whyskip"], window: "2600,2400", zoom: "1.8", debug: true, hideSidebar: true },
-  B: { checks: ["eqkeep", "refcolor", "citepoint"], window: "1400,2000", zoom: null, debug: false, hideSidebar: false },
-};
-const MODULES = { fontkeep, whyskip, eqkeep, refcolor, citepoint };
-const cfg = PASSES[PASS];
-const CHECKS = arg("checks", cfg?.checks.join(","))?.split(",").filter(Boolean) ?? [];
-if (!URL0 || !cfg || !CHECKS.length || CHECKS.some((c) => !cfg.checks.includes(c))) {
-  console.error("usage: node test/allprobes.mjs --url=<pdf> --pass=A|B [--label=name] [--all|--page=N] [--max=N] [--checks=a,b]");
-  console.error(`  pass A: ${PASSES.A.checks.join(", ")}   pass B: ${PASSES.B.checks.join(", ")}`);
+// citepoint last on every page: it CLICKS, and every other probe reads an
+// untouched page. Printed in this order too.
+const MODULES = { fontkeep, whyskip, eqkeep, refcolor, tables, citepoint };
+const CHECKS = Object.keys(MODULES).filter((c) => arg("checks", Object.keys(MODULES).join(",")).split(",").includes(c));
+const unknown = arg("checks", "").split(",").filter((c) => c && !MODULES[c]);
+if (!URL0 || !CHECKS.length || unknown.length) {
+  console.error("usage: node test/allprobes.mjs --url=<pdf> [--label=name] [--zoom=1.0] [--all|--page=N] [--max=N] [--checks=a,b]");
+  console.error(`  checks: ${Object.keys(MODULES).join(", ")}`);
   process.exit(2);
 }
+// Per-call deadline: the tables oracle renders the page itself at its own scale
+// inside one evaluation; citepoint clicks every citation it examines.
+const PROBE_MS = { tables: 90000, citepoint: 120000 };
 
 const PORT = 17200 + (process.pid % 300);
 const userDataDir = profileDir(`allprobes-${PORT}`);
@@ -72,7 +76,7 @@ const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`
 
 const browser = spawn(browserPath("edge"), [
   `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
-  "--no-default-browser-check", "--disable-sync", `--window-size=${cfg.window}`,
+  "--no-default-browser-check", "--disable-sync", "--window-size=1400,2000",
   `--user-data-dir=${userDataDir}`, `--load-extension=${extensionDir}`,
   `--disable-extensions-except=${extensionDir}`, "about:blank",
 ], { stdio: "ignore" });
@@ -80,7 +84,7 @@ const browser = spawn(browserPath("edge"), [
 let cdp;
 const ev = (expr, opts) => cdp.ev(expr, opts);
 
-// One page's settle, shared by every check in the pass — so it has to be at
+// One page's settle, shared by every check — so it has to be at
 // least as patient as the most patient of them, and it watches the UNION of
 // what they wait for. Annotation runs after emphasis: a settle on the
 // typography counts alone returns while references are still being coloured,
@@ -101,6 +105,21 @@ const signature = (page) => `(() => {
 const fatal = (e) => /timed out after|socket closed/.test(e?.message ?? "");
 /** A .catch that answers `d` for an ordinary evaluation error and rethrows a fatal one. */
 const soft = (d) => (e) => { if (fatal(e)) throw e; return d; };
+// How much of page's prose the engine has HANDLED: processed, or marked with
+// the reason it was left (__fxDebug). LEAF spans — a tagged PDF nests its text
+// spans in marked-content ones — and never our own inline wrappers.
+const handled = (page) => `(() => {
+  const d = window.PDFViewerApplication.pdfViewer.getPageView(${page - 1})?.textLayer?.div;
+  if (!d) return null;
+  let prose = 0, handled = 0;
+  for (const s of d.querySelectorAll("span")) {
+    if (s.matches(".fx-cite-c, .fx-ref-c, .fx-sp") || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
+    if (((s.textContent || "").match(/[a-z]{2,}/g) || []).length < 2) continue;
+    prose++;
+    if (s.closest("[data-fx-done], [data-fx-why], [data-fx-keep], [data-fx-table]")) handled++;
+  }
+  return { prose, handled };
+})()`;
 // Whether the engine has processed anything in this document yet.
 let engineSeen = false;
 /** This page's settled signature, or null if it never held still. */
@@ -146,24 +165,20 @@ try {
   if (!loaded) throw new Error("document never loaded");
   // Before any page is processed, as whyskip does it, so the engine records
   // its skip reasons from the first pass rather than from a re-process.
-  if (cfg.debug) await ev(`(() => { globalThis.__fxDebug = true; return true; })()`);
-  if (cfg.hideSidebar) {
-    await ev(`(() => { const s = document.createElement("style");
-      s.textContent = "#sidebarContainer{display:none!important}#outerContainer.sidebarOpen #viewerContainer{inset-inline-start:0!important}";
-      document.head.appendChild(s); return true; })()`);
-  }
+  await ev(`(() => { globalThis.__fxDebug = true; return true; })()`);
+  await ev(`(() => { const s = document.createElement("style");
+    s.textContent = "#sidebarContainer{display:none!important}#outerContainer.sidebarOpen #viewerContainer{inset-inline-start:0!important}";
+    document.head.appendChild(s); return true; })()`);
+  // The zoom BEFORE the engine runs, so every page is processed once, at it.
+  await ev(`(() => { window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(ZOOM)}; return true; })()`);
+  await sleep(1500);
   await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
-  if (cfg.zoom) await ev(`(() => { window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(cfg.zoom)}; return true; })()`);
-  if (PASS === "B") {
-    // The document-wide warm-up refcolor and citepoint wait for: enough
-    // emphasis to know the engine is running, and the reference index built.
-    for (let i = 0; i < 40; i++) {
-      await sleep(800);
-      const w = await ev(`({ b: document.querySelectorAll('.textLayer .fx-b').length, refs: globalThis.__fxRefCount ?? -1 })`).catch(soft(null));
-      if (w && w.b > 80 && w.refs >= 0) break;
-    }
-  } else {
-    await sleep(4000); // fontkeep's first-render wait; each page then settles on its own counts
+  // The document-wide warm-up refcolor and citepoint wait for: enough
+  // emphasis to know the engine is running, and the reference index built.
+  for (let i = 0; i < 40; i++) {
+    await sleep(800);
+    const w = await ev(`({ b: document.querySelectorAll('.textLayer .fx-b').length, refs: globalThis.__fxRefCount ?? -1 })`).catch(soft(null));
+    if (w && w.b > 80 && w.refs >= 0) break;
   }
 
   const numPages = await ev(`window.PDFViewerApplication.pdfDocument.numPages`);
@@ -180,8 +195,19 @@ try {
     const citing = CHECKS.includes("citepoint") && state.citepoint.examined < MAX;
     await ev(`(() => { window.PDFViewerApplication.page = ${pg}; return true; })()`);
     await sleep(citing ? 2200 : 1200);
-    const sig = await settle(pg);
+    let sig = await settle(pg);
     if (!revisit && !engineSeen && sig?.startsWith("0/")) { deferred.push(pg); return; }
+    // Counts that hold still are not a finished page: the engine can pause
+    // between chunks. Wait until every prose span is processed or carries the
+    // reason it was left (tables.mjs's wait — read before it, a page's
+    // unprocessed tail becomes whyskip's "unreasoned" and tables' misses).
+    // Bounded: a span the engine never marks cannot hold the run hostage.
+    for (let i = 0; i < 30 && sig !== null; i++) {
+      const st = await ev(handled(pg)).catch(soft(null));
+      if (!st || st.prose < 3 || st.handled === st.prose) break;
+      await sleep(1000);
+      sig = await settle(pg);
+    }
     // A page with no text layer after a full settle is one thing; three in a
     // row is the viewer no longer producing them at all (seen as "p6..p16: no
     // layer" in one gate). Grinding on costs minutes a page in re-reads and
@@ -208,7 +234,7 @@ try {
       let r = null;
       for (let attempt = 0; attempt < (hasLayer ? 3 : 1); attempt++) {
         try {
-          r = await ev(expr, { ms: c === "citepoint" ? 120000 : 30000 });
+          r = await ev(expr, { ms: PROBE_MS[c] ?? 30000 });
         } catch (e) {
           if (fatal(e)) throw e;
           r = { error: `probe threw: ${(e.message || String(e)).slice(0, 160)}` };
@@ -264,7 +290,7 @@ try {
     console.log(`--- ${c} ---`);
     for (const l of lines[c]) console.log(l);
   }
-  const line = `${LABEL} pass=${PASS} pages=${pages.length} ${verdicts.join(" ")}`;
+  const line = `${LABEL} zoom=${ZOOM} pages=${pages.length} ${verdicts.join(" ")}`;
   console.log(line);
   appendFileSync(`${outDir()}/allprobes.log`, line + String.fromCharCode(10));
   process.exitCode = failed ? 1 : blind ? 75 : 0;

@@ -198,6 +198,33 @@ try {
     await sleep(1200);
   }
 
+  // The page in view, once the engine has HANDLED it: every prose span
+  // processed or carrying the reason it was left (same test as tables.mjs).
+  // Read before that — the walk gives each page 1.2 s — and a document the
+  // engine had not processed at all was reported "silent": its console was
+  // never exercised by the thing this check exists to watch.
+  const viewBolded = () => ev(`(() => { const d = window.PDFViewerApplication.pdfViewer.getPageView(${last - 1})?.textLayer?.div;
+    return d ? d.querySelectorAll(".fx-b").length : -1; })()`);
+  const handled = () => ev(`(() => {
+    const d = window.PDFViewerApplication.pdfViewer.getPageView(${last - 1})?.textLayer?.div;
+    if (!d) return null;
+    let prose = 0, handled = 0;
+    for (const s of d.querySelectorAll("span")) {
+      if (s.matches(".fx-cite-c, .fx-ref-c, .fx-sp") || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
+      if (((s.textContent || "").match(/[a-z]{2,}/g) || []).length < 2) continue;
+      prose++;
+      if (s.closest("[data-fx-done], [data-fx-keep], [data-fx-table]")) handled++;
+    }
+    return { prose, handled };
+  })()`);
+  if (!FXOFF) {
+    for (let i = 0; i < 60; i++) {
+      const st = await handled();
+      if (st && (st.prose < 3 || st.handled === st.prose)) break;
+      await sleep(500);
+    }
+  }
+
   // DOM assertion state after walking all visited pages
   let domState = null;
   if (!FXOFF) {
@@ -212,13 +239,22 @@ try {
     }))()`);
   }
 
-  // Toggle off and on: restore + re-process is where late errors surface.
+  // Toggle off and on: restore + re-process is where late errors surface —
+  // and the page in view must get its emphasis BACK. Waited for (bounded) and
+  // timed, not read once after a fixed sleep: read at 2.5 s it showed 0 runs
+  // on 11 of 49 documents, which said nothing about whether they returned.
   let reprocessState = null;
+  let reprocessMs = null;
+  const before = FXOFF ? -1 : await viewBolded();
   if (!FXOFF) {
     await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: false }, r))`);
     await sleep(1500);
+    const t0 = Date.now();
     await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
-    await sleep(2500);
+    for (let i = 0; i < 120 && reprocessMs === null; i++) {
+      await sleep(250);
+      if ((await viewBolded()) >= before) reprocessMs = Date.now() - t0;
+    }
     reprocessState = await ev(`(() => ({
       bolded: document.querySelectorAll('.textLayer .fx-b').length,
       processedSpans: document.querySelectorAll('.textLayer span[data-fx-done]').length,
@@ -259,7 +295,7 @@ try {
   console.log(
     `${FILTER}: pages=${last}/${total} captured=${real.length} loud=${loud.length} allowed-upstream=${allowed} PROBLEMS=${bad.length}` +
     (domState ? ` [DOM: bolded=${domState.bolded} processedSpans=${domState.processedSpans} refs=${domState.refsCount} cites=${domState.citesCount} fxOn=${domState.fxOn}]` : "") +
-    (reprocessState ? ` [Reprocess: bolded=${reprocessState.bolded} fxOn=${reprocessState.fxOn}]` : ""),
+    (reprocessState ? ` [Reprocess: bolded=${reprocessState.bolded} fxOn=${reprocessState.fxOn} in-view=${reprocessMs === null ? "not back after 30 s" : `${(reprocessMs / 1000).toFixed(1)} s`}]` : ""),
   );
   if (ARGV.includes("--json")) {
     console.log(`JSON_RESULT: ${JSON.stringify({
@@ -290,6 +326,16 @@ try {
     console.log(`  [${m.where}/${m.level}] ${m.text.slice(0, 220).replace(/\s+/g, " ")}`);
   }
   if (bad.length) process.exitCode = 1;
+  // Product outcomes of the toggle, and a run that exercised nothing.
+  if (!FXOFF && before > 0 && reprocessMs === null) {
+    console.log(`  REPROCESS FAIL: the page in view had ${before} emphasis runs before reading mode was switched off and on, and ${await viewBolded()} 30 s after`);
+    process.exitCode = 1;
+  }
+  if (!FXOFF && domState && domState.processedSpans === 0 && !process.exitCode) {
+    // No verdict (75): the sweep retries it rather than scoring silence.
+    console.log("  NO VERDICT — the engine processed no span of this document, so its console was not exercised");
+    process.exitCode = 75;
+  }
   try { swConn.ws.close(); page.ws.close(); } catch {}
 } catch (e) {
   console.error("console harness error:", e.message || e);
