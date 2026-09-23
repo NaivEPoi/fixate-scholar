@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
+import { connect } from "./lib/cdp.mjs";
 
 // Upstream-warning allowlist — two entries, each earned by a failing sweep.
 //
@@ -127,52 +128,21 @@ const browser = spawn(browserPath("edge"), [
   `--disable-extensions-except=${EXT}`, "about:blank",
 ], { stdio: "ignore" });
 
-/** One CDP connection with console capture wired up. */
-function connect(wsUrl, where, sink) {
-  const ws = new WebSocket(wsUrl);
-  let id = 0;
-  const pending = new Map();
-  const ready = new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
-    if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
-    const p = m.params;
-    if (m.method === "Runtime.consoleAPICalled") {
-      const text = (p.args ?? []).map((a) => a.value ?? a.description ?? a.type).join(" ");
-      sink({ where, level: p.type, text });
-    } else if (m.method === "Runtime.exceptionThrown") {
-      const d = p.exceptionDetails ?? {};
-      sink({ where, level: "exception", text: d.exception?.description ?? d.text ?? "exception" });
-    } else if (m.method === "Log.entryAdded") {
-      sink({ where, level: p.entry.level, text: `${p.entry.source}: ${p.entry.text}` });
-    }
-  };
-  // Every CDP call gets a deadline. Without one, a wedged target (Edge's
-  // extension service worker going idle, a tab that stops responding) leaves a
-  // promise pending forever and node exits 13 "unsettled top-level await" — a
-  // hang that reads like a mystery failure instead of naming its cause. Seen on
-  // UC-Scheme during the all-pages sweep.
-  const send = (method, params = {}, ms = 30000) => new Promise((res, rej) => {
-    const i = ++id;
-    const timer = setTimeout(() => {
-      pending.delete(i);
-      rej(new Error(`${where}: ${method} timed out after ${ms}ms`));
-    }, ms);
-    pending.set(i, (m) => {
-      clearTimeout(timer);
-      m.error ? rej(new Error(`${method}: ${m.error.message}`)) : res(m.result);
-    });
-    try { ws.send(JSON.stringify({ id: i, method, params })); }
-    catch (e) { clearTimeout(timer); pending.delete(i); rej(e); }
-  });
-  ws.onclose = () => {
-    for (const [i, fn] of pending) { pending.delete(i); fn({ error: { message: `${where}: socket closed` } }); }
-  };
-  return { ws, ready, send };
-}
-
 const msgs = [];
 const sink = (m) => { if (m.text && m.text.trim()) msgs.push(m); };
+/** The console-capture events of one target, as `{ where, level, text }`. */
+const capture = (where) => (m) => {
+  const p = m.params;
+  if (m.method === "Runtime.consoleAPICalled") {
+    const text = (p.args ?? []).map((a) => a.value ?? a.description ?? a.type).join(" ");
+    sink({ where, level: p.type, text });
+  } else if (m.method === "Runtime.exceptionThrown") {
+    const d = p.exceptionDetails ?? {};
+    sink({ where, level: "exception", text: d.exception?.description ?? d.text ?? "exception" });
+  } else if (m.method === "Log.entryAdded") {
+    sink({ where, level: p.entry.level, text: `${p.entry.source}: ${p.entry.text}` });
+  }
+};
 
 try {
   let version = null;
@@ -189,13 +159,13 @@ try {
   }
   if (!sw) throw new Error("extension service worker never appeared");
   const extId = new URL(sw.url).hostname;
-  const swConn = connect(sw.webSocketDebuggerUrl, "service-worker", sink);
+  const swConn = connect(sw.webSocketDebuggerUrl, { where: "service-worker", onEvent: capture("service-worker") });
   await swConn.ready;
   await swConn.send("Runtime.enable");
   await swConn.send("Log.enable");
 
   const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(TARGET)}`, "PUT");
-  const page = connect(tab.webSocketDebuggerUrl, "viewer", sink);
+  const page = connect(tab.webSocketDebuggerUrl, { where: "viewer", onEvent: capture("viewer") });
   await page.ready;
   await page.send("Runtime.enable");
   await page.send("Log.enable");

@@ -41,6 +41,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { browserPath, killBrowser } from "./lib/env.mjs";
+import { connect } from "./lib/cdp.mjs";
 
 const FILTER = process.argv[3] ?? "";
 // untouched: ground-truth texts known to live in data tables / algorithm
@@ -95,45 +96,6 @@ async function http(path, method = "GET") {
   return res.json();
 }
 
-class CDP {
-  constructor(wsUrl) {
-    this.ws = new WebSocket(wsUrl);
-    this.id = 0;
-    this.pending = new Map();
-    this.ready = new Promise((resolve, reject) => {
-      this.ws.onopen = resolve;
-      this.ws.onerror = reject;
-    });
-    this.ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.id && this.pending.has(msg.id)) {
-        this.pending.get(msg.id)(msg);
-        this.pending.delete(msg.id);
-      }
-    };
-  }
-  send(method, params = {}) {
-    const id = ++this.id;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, (msg) =>
-        msg.error ? reject(new Error(`${method}: ${msg.error.message}`)) : resolve(msg.result),
-      );
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-  async eval(expression) {
-    const r = await this.send("Runtime.evaluate", {
-      expression,
-      returnByValue: true,
-      awaitPromise: true,
-    });
-    if (r.exceptionDetails) throw new Error(r.exceptionDetails.text);
-    return r.result.value;
-  }
-  close() {
-    this.ws.close();
-  }
-}
 
 const browser = spawn(
   browserPath("edge", process.argv[2]),
@@ -189,16 +151,19 @@ try {
       : paper.url;
     const viewerUrl = `chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(fetchUrl)}`;
     const tab = await http(`/json/new?${viewerUrl}`, "PUT");
-    const cdp = new CDP(tab.webSocketDebuggerUrl);
+    // Two minutes, not the default 30 s: the deep checks below navigate to the
+    // reference pages and the last page inside ONE evaluation, sleeping several
+    // seconds at each. Bounded is what matters — a hang still fails, just later.
+    const cdp = connect(tab.webSocketDebuggerUrl, { where: "viewer", timeoutMs: 120000 });
     await cdp.ready;
     await sleep(1500);
-    await cdp.eval(`chrome.storage.sync.set({ enabled: true })`);
+    await cdp.ev(`chrome.storage.sync.set({ enabled: true })`);
 
     let state = null;
     for (let i = 0; i < 45; i++) {
       await sleep(1000);
       try {
-        state = await cdp.eval(`(() => ({
+        state = await cdp.ev(`(() => ({
           pages: window.PDFViewerApplication?.pagesCount ?? 0,
           spans: document.querySelectorAll('.textLayer span').length,
           bolded: document.querySelectorAll('.textLayer .fx-b').length,
@@ -222,7 +187,7 @@ try {
     // Early ground-truth probes, before navigation virtualizes early pages.
     let earlyOk = true;
     for (const probe of paper.untouchedEarly ?? []) {
-      const hit = await cdp.eval(`(() => {
+      const hit = await cdp.ev(`(() => {
         const span = [...document.querySelectorAll('.textLayer span')]
           .find(s => s.textContent.includes(${JSON.stringify(probe)}));
         if (!span) return 'missing';
@@ -237,12 +202,12 @@ try {
     // whole content page skipped by mis-classification (navigate there first
     // so the page is rendered).
     if (paper.processedOnPage) {
-      await cdp.eval(`(async () => {
+      await cdp.ev(`(async () => {
         window.PDFViewerApplication.page = ${paper.processedPage};
         await new Promise(r => setTimeout(r, 3500));
       })()`);
       for (const probe of paper.processedOnPage) {
-        const hit = await cdp.eval(`(() => {
+        const hit = await cdp.ev(`(() => {
           const span = [...document.querySelectorAll('.textLayer span')]
             .find(s => s.textContent.includes(${JSON.stringify(probe)}));
           if (!span) return 'missing';
@@ -253,7 +218,7 @@ try {
           console.log(`      processed-on-page ${hit}: ${probe}`);
         }
       }
-      await cdp.eval(`window.PDFViewerApplication.page = 1`);
+      await cdp.ev(`window.PDFViewerApplication.page = 1`);
     }
 
     // Deeper checks: embedded-font rendering, page-1 header exclusion,
@@ -261,7 +226,7 @@ try {
     // references pages to render and confirm they are left untouched.
     let checks = null;
     try {
-      checks = await cdp.eval(`(async () => {
+      checks = await cdp.ev(`(async () => {
         const sleep = (ms) => new Promise(r => setTimeout(r, ms));
         const done = () => [...document.querySelectorAll('.textLayer span[data-fx-done]')];
         const out = {};
