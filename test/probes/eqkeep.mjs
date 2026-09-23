@@ -17,7 +17,8 @@
 // The criterion here is deliberately INDEPENDENT of the rule the engine uses
 // to decide the same question. It keys on something the engine does not consult
 // at all: a row carrying a trailing EQUATION NUMBER — "(5.6)", "(12)", "(A.3)"
-// — hard against the column's right edge, with no running prose on it.
+// — hard against the column's right edge, set apart from the row's content
+// (its own span, more than a word space clear), with no running prose on it.
 //
 // Module shape (every test/probes/*.mjs has it):
 //   probe(page, opts)   the page expression, a string for Runtime.evaluate
@@ -118,6 +119,18 @@ export const probe = (page) => `(() => {
       if (!/\\(\\s*(?:[A-Z]\\s*[.-]\\s*)?\\d+(?:\\.\\d+)*\\s*\\)\\s*$/.test(text)) continue;
       const last = seg[seg.length - 1];
       if (last.r.right < edges[side] - 40) continue;
+      // The number is SET APART, as a displayed equation's number is: it opens
+      // a span of its own, and more than a word space separates it from what
+      // precedes it. Measured over both corpora (R49), every real numbered
+      // equation passes both - its number sits 0.47 to 14 line heights clear
+      // of the equation. What failed them: a sentence ending in a value or an
+      // enumeration "(3)" inside one span, bibliography years, table cells,
+      // and inline math whose math-face spans sat on a baseline of their own
+      // with the "(" 1 px after the name - four false violations in one gate.
+      let k = seg.length - 1;
+      while (k > 0 && !seg[k].s.textContent.includes("(")) k--;
+      if (!seg[k].s.textContent.trim().startsWith("(")) continue;
+      if (k > 0 && seg[k].r.left - seg[k - 1].r.right < 0.3 * seg[k].r.height) continue;
       // No running prose: three or more ordinary lowercase words means a
       // sentence that merely ends in a parenthesised number, not an equation.
       const words = (text.match(/\\b[a-z]{3,}\\b/g) || [])
