@@ -177,7 +177,17 @@ try {
 
   const results = [];
   for (const paper of PAPERS.filter((p) => p.template.includes(FILTER))) {
-    const viewerUrl = `chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(paper.url)}`;
+    // FX_CORPUS_BASE points at a local mirror of the public corpus, so a gate
+    // run fetches each paper from disk instead of from the internet. Nothing
+    // here tests the network: re-downloading the same fourteen papers for every
+    // stage makes the run slower, makes it fail when a host throttles, and
+    // measures somebody else's availability alongside our typography. Unset,
+    // this is exactly the previous behaviour.
+    const base = process.env.FX_CORPUS_BASE;
+    const fetchUrl = base
+      ? `${base.replace(/\/$/, "")}/${paper.url.split("/").pop()}`
+      : paper.url;
+    const viewerUrl = `chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(fetchUrl)}`;
     const tab = await http(`/json/new?${viewerUrl}`, "PUT");
     const cdp = new CDP(tab.webSocketDebuggerUrl);
     await cdp.ready;

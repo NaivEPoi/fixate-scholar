@@ -4300,3 +4300,77 @@ which is exactly what invented strings cannot tell us — and adding another
 heuristic on invented strings is the failure mode that produced rounds 3-7. So
 this is left for `citepoint` over the two corpora to measure, and tightened, if
 at all, on that evidence.
+
+## R47 — emphasis depends on the reader's zoom (DEFERRED — fix later)
+
+**Status: logged, not fixed.** Pre-existing, not introduced by this release.
+Recorded here so it is not rediscovered from scratch.
+
+### What was measured
+
+`fontkeep` over the same public paper (ACL), same harness, only the viewer zoom
+changed:
+
+```
+zoom 1.0  ->  1819 processed spans
+zoom 1.8  ->  1831
+zoom 2.5  ->  1817
+```
+
+Standalone runs are otherwise reproducible to the span (1831 twice at 1.8), so
+this is not run-to-run noise. Comparing the two page dumps span by span, keyed
+on text and position, **12 spans flip VISIBLE emphasis** between 1.0 and 1.8 —
+counted by actual `.fx-b` runs, not by `data-fx-done`, which can be set on a
+span that produces no emphasis at all. Every flip carries the reason
+`table-rules`.
+
+Confirmed on one of them with `wordshot`, which is the tool this project
+requires before a defect is reported:
+
+```
+zoom 1.0 -> processed=false keep=true  emph=0
+zoom 1.8 -> processed=true  keep=false emph=14  ["Th","gue","i","con","wro","i","th","ke"]
+```
+
+The line is the first line inside a framed table box: kept on the canvas at
+100%, emphasized at 180%.
+
+### Why
+
+`#readCanvasPixels` finds table rules, box frames, underlines and footnote
+separators by reading the PAINTED CANVAS — they are canvas art the text layer
+knows nothing about, and masks have to clamp around them or a processed
+neighbour whites out the rule. The scan thresholds each pixel
+(`alpha > 40 && luminance < 140`), samples every second pixel, and needs a run
+of >=60 CSS px.
+
+Re-rasterise at a different zoom and a hairline frame edge spreads over more
+pixels, each one lighter. A marginal rule falls on either side of that
+threshold, the region stops (or starts) reading as ruled, and the lines nearest
+the boundary change classification. It is not monotonic in zoom, which is what
+one would expect from an anti-aliasing threshold rather than from a resolution
+effect.
+
+### Why the gate cannot see it
+
+`tables.mjs` — the check that asks "is anything emphasized inside a ruled
+zone?" — runs at `page-fit`. `fontkeep` and `whyskip` run at 1.8 but do not ask
+that question. So no stage tests the thing at the zoom where it misbehaves.
+That gap is the part most worth fixing, independently of the defect.
+
+### Scope, stated carefully
+
+An earlier reading of this said the whole table box is emphasized only at 1.8.
+That was WRONG, and the zoom-1.0 screenshot is what caught it: most of that box
+is emphasized at BOTH zooms, and only four spans on that page flip. The
+zoom-dependence is real; whole regions do not move, individual lines at the
+rule-detection boundary do — 12 of ~1820 spans on this paper.
+
+### If this is picked up later
+
+The fix is to make rule detection resolution-independent — normalise the
+luminance threshold by the rasterised stroke width, or derive rules from the
+PDF's own operators rather than from pixels. Both are real work on a path with
+a history of regressions (masks whiting out table rules), and neither belongs in
+a release whose gate is otherwise green. Anyone starting should first give
+`tables.mjs` a zoom sweep, so the fix has a check that can fail.
