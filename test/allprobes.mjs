@@ -4,17 +4,19 @@
 // extension, walks the document a page at a time and evaluates an expression
 // against the rendered DOM, and the render is almost the whole cost. But they
 // cannot all share one, because ZOOM IS NOT COSMETIC: it changes layout, layout
-// changes classification, and classification is what they measure (R47 — the
-// same paper processes 1819 spans at 1.0 and 1831 at 1.8). So the checks are
-// grouped by the render they were validated on, and a group is a PASS:
+// can change classification, and classification is what they measure (R47 —
+// the same paper processed 1819 spans at 1.0 and 1831 at 1.8 until table-rule
+// detection was fixed). So the checks are grouped by the render they were
+// validated on, and a group is a PASS:
 //
 //   A  fontkeep, whyskip           zoom 1.8, 2600x2400 window, sidebar hidden,
 //                                  __fxDebug on before the engine runs
 //   B  eqkeep, refcolor, citepoint the viewer's default zoom, 1400x2000 window
 //
-// tables (page-fit) and console (reloads, toggles reading mode) cannot share
-// one and stay standalone stages. Each check's probe and verdict come from its
-// module in test/probes/, the same code its standalone harness runs, and every
+// tables (a fresh tab per zoom, compared across zooms) and console (reloads,
+// toggles reading mode) cannot share one and stay standalone stages. Each
+// check's probe and verdict come from its module in test/probes/, the same
+// code its standalone harness runs, and every
 // check prints exactly the lines its harness prints, under a `--- <check> ---`
 // header, so a combined log and a standalone log can be compared line for line
 // (local/gate-compare.mjs does).
