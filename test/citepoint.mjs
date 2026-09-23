@@ -29,7 +29,7 @@
 //
 // The probe and the verdict live in test/probes/citepoint.mjs, shared with the
 // combined gate runner (test/allprobes.mjs); this file drives one browser.
-// Usage: node test/citepoint.mjs <url|--url=...> [--pages=A-B] [--max=N]
+// Usage: node test/citepoint.mjs <url|--url=...> [--pages=A-B] [--max=N] [--zoom=Z]
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -45,6 +45,7 @@ if (!URL0) {
   console.error("usage: node test/citepoint.mjs <url|--url=...> [--pages=A-B] [--max=N]");
   process.exit(2);
 }
+const ZOOM = ARGS.find((a) => a.startsWith("--zoom="))?.slice(7) ?? null;
 const RANGE = (ARGS.find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 // Each click fires the card's lookup, so a citation-dense paper is capped
 // rather than made to hammer the reference sources for hundreds of cards.
@@ -78,6 +79,9 @@ try {
   await send("Page.enable");
   await sleep(3000);
   for (let i = 0; i < 25; i++) { const ok = await ev(`!!(typeof chrome!=='undefined' && chrome.storage && chrome.storage.sync)`).catch(() => false); if (ok) break; await sleep(400); }
+  // --zoom: the gate runs every check at one zoom; without it, the viewer's
+  // default — what this check was validated at. Set before the engine runs.
+  if (ZOOM) await ev(`(() => { window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(ZOOM)}; return true; })()`);
   await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
   for (let i = 0; i < 40; i++) { await sleep(700); const b = await ev(`document.querySelectorAll('.textLayer .fx-b').length`).catch(() => 0); if (b > 80) break; }
   const nPages = await ev(`window.PDFViewerApplication.pdfViewer.pagesCount`);
