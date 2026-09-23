@@ -534,39 +534,80 @@ app.eventBus.on("documenterror", () => {
 });
 
 // Direct save to local files (file://) when editing. When saveLocalFile is on,
-// saving an edited local file writes directly back to the local file rather
-// than triggering a new browser download copy.
+// saving an edited local file writes back to the file the reader chose rather
+// than dropping a new copy in the downloads folder.
+//
+// THE FILE PICKER MUST BE OPENED BY THE CLICK ITSELF. `showSaveFilePicker`
+// needs transient user activation, and PDF.js's save path spends it before we
+// are ever called: `save()` awaits `dispatchWillSave()` and then
+// `saveDocument()`, which serialises the whole annotated document, and only
+// then calls `downloadManager.download()`. Activation lasts about five seconds,
+// so on a small file the picker opened and on a large one it threw — the error
+// was swallowed and the save became an ordinary download, which is the
+// "saving to the original doesn't work" report. Asking during the click, and
+// awaiting the handle afterwards, removes the race entirely.
+//
+// The handle is also REMEMBERED for the document, so the second save writes
+// straight through with no dialog. That is what "save changes directly to
+// local PDF files" promises, and asking again every time did not deliver it.
 if (app.downloadManager && typeof app.downloadManager.download === "function") {
   const origDownload = app.downloadManager.download.bind(app.downloadManager);
-  app.downloadManager.download = async function fxLocalDownload(data, url, filename) {
-    const fileUrl =
+  const PICK_TYPES = [
+    { description: "PDF Document", accept: { "application/pdf": [".pdf"] } },
+  ];
+  /** file URL -> FileSystemFileHandle, for this viewer session. */
+  const handles = new Map();
+  /** A handle being chosen right now, awaited by the download that follows. */
+  let pending = null;
+
+  const localUrl = (url) => {
+    const u =
       (typeof url === "string" && url) ||
       currentFileUrl() ||
       app._downloadUrl ||
       app.url ||
       "";
-    const isLocal = fileUrl.startsWith("file:");
-    if (isLocal && current.saveLocalFile !== false && data) {
-      if (typeof window.showSaveFilePicker === "function") {
+    return u.startsWith("file:") ? u : null;
+  };
+  const suggestedName = () =>
+    app._docFilename ||
+    decodeURIComponent((currentFileUrl() || "").split("/").pop() || "") ||
+    "document.pdf";
+
+  // Capture phase, so the picker is requested before PDF.js starts serialising.
+  const armPicker = () => {
+    const url = localUrl(null);
+    if (!url || current.saveLocalFile === false) return;
+    if (typeof window.showSaveFilePicker !== "function") return;
+    if (handles.has(url) || pending) return; // already have one, or asking
+    pending = window
+      .showSaveFilePicker({ suggestedName: suggestedName(), types: PICK_TYPES })
+      .then((handle) => {
+        handles.set(url, handle);
+        return handle;
+      })
+      .catch(() => null) // cancelled, or refused — fall back to a download
+      .finally(() => { pending = null; });
+  };
+  for (const id of ["downloadButton", "secondaryDownload"]) {
+    document.getElementById(id)?.addEventListener("click", armPicker, true);
+  }
+
+  app.downloadManager.download = async function fxLocalDownload(data, url, filename) {
+    const fileUrl = localUrl(url);
+    if (fileUrl && current.saveLocalFile !== false && data) {
+      const handle = handles.get(fileUrl) ?? (pending ? await pending : null);
+      if (handle) {
         try {
-          const handle = await window.showSaveFilePicker({
-            suggestedName: filename || "document.pdf",
-            types: [
-              {
-                description: "PDF Document",
-                accept: { "application/pdf": [".pdf"] },
-              },
-            ],
-          });
           const writable = await handle.createWritable();
           await writable.write(data);
           await writable.close();
           return;
-        } catch (err) {
-          if (err?.name === "AbortError") {
-            // User cancelled the save dialog
-            return;
-          }
+        } catch {
+          // Permission revoked, the file moved, or the disk refused it. The
+          // reader still asked to save, so fall through to the download rather
+          // than losing their edits to a silent failure.
+          handles.delete(fileUrl);
         }
       }
     }
