@@ -329,6 +329,18 @@ All write to `test/out/`. Add `--headful` (where supported) for real-DPI.
   floor is set from the public corpus — the gutter runs 3.4–3.7% of the page on
   ACM and USENIX layouts and 1.83% on the IEEE journal one, while single-column
   papers measure 0% and get no gutter at all.
+- **Saving a local PDF writes back to the chosen file**: `node test/savelocal.mjs`
+  -> every check ok. `showSaveFilePicker` needs transient user activation, and
+  PDF.js spends it before the download manager runs (`save()` awaits
+  `dispatchWillSave()` then `saveDocument()`), so the picker opened on a small
+  document and threw on a large one — and the throw fell through to an ordinary
+  download. The picker is therefore requested BY THE CLICK, in a capture-phase
+  listener on the toolbar buttons, and the handle is remembered so the second
+  save writes through silently. The picker is stubbed (a real one opens a native
+  dialog); the click is a trusted CDP event through the real listener and the
+  real override. Negative control: revert the overlay.mjs change and exactly two
+  checks fail — "picker requested by the click itself" (picks=0) and "second
+  save writes through without prompting" (picks 1 -> 2).
 - **In-paper references are coloured**: `node test/refcolor.mjs --url=<pdf>
   [--pages=A-B]` → every in-paper reference inside a PROCESSED span carries an
   `.fx-ref-c` wrap; uncoloured ones are printed with their surrounding text.
