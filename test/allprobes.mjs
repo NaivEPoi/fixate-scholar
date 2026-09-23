@@ -19,11 +19,13 @@
 // header, so a combined log and a standalone log can be compared line for line
 // (local/gate-compare.mjs does).
 //
-// Exit 0 all checks pass; 1 a check FAILED; 75 no check failed but some page
-// was never measured (probe error, or no text layer however long it waited) —
-// a harness outcome, not a verdict about the product, and the sweep retries it.
-// A check that was asked for and measured nothing is a FAIL: a combined run
-// that silently drops a check is worse than a slow one.
+// Exit 0 all checks pass; 1 a check FAILED; 75 no check failed but something
+// was never measured — a page (probe error, or no text layer however long it
+// waited) or a whole check (it got no page, or its own blind guard fired) — a
+// harness outcome, not a verdict about the product, which the sweep retries. A
+// check that measured nothing is never a pass: a combined run that silently
+// drops a check is worse than a slow one. A viewer that stops answering (a CDP
+// deadline, a closed socket) ends the run at once rather than being polled.
 //
 // Usage: node test/allprobes.mjs --url=<pdf> --pass=A|B [--label=name]
 //        [--all | --page=N] [--max=N] [--checks=a,b]
@@ -89,18 +91,32 @@ const signature = (page) => `(() => {
          d.querySelectorAll(".fx-ref-c").length + "/" + d.querySelectorAll(".fx-cite-c").length + "/" +
          pv.div.querySelectorAll(".fx-cite-hit").length;
 })()`;
+// A CDP call that timed out or lost its socket means the viewer stopped
+// answering. That is fatal for the document, not one more poll: swallowed, it
+// turned a stalled renderer into 60 polls x a 30 s deadline — half an hour on
+// one page until the watchdog fired — where rethrown it fails in seconds and
+// the sweep retries the document.
+const fatal = (e) => /timed out after|socket closed/.test(e?.message ?? "");
+/** A .catch that answers `d` for an ordinary evaluation error and rethrows a fatal one. */
+const soft = (d) => (e) => { if (fatal(e)) throw e; return d; };
+// Whether the engine has processed anything in this document yet.
+let engineSeen = false;
 const settle = async (page) => {
   const t0 = Date.now();
   let last = "", stable = 0;
   for (let i = 0; i < 60; i++) {
-    const cur = await ev(signature(page)).catch(() => "x");
+    const cur = await ev(signature(page)).catch(soft("x"));
     // Five reads 500 ms apart: at least as patient as every harness it
-    // replaces (fontkeep and eqkeep take 5 at 400, whyskip 5 at 500). A page
-    // with NOTHING processed yet is not accepted as settled for its first 8 s:
-    // a short document read before the engine reached it holds "0/0" just as
-    // still as a finished figure page does, and fontkeep then "proved nothing".
-    const early = cur.startsWith("0/") && Date.now() - t0 < 8000;
-    if (cur === last && cur !== "x" && !early) { if (++stable >= 5) return true; } else if (cur !== last) { stable = 0; last = cur; }
+    // replaces (fontkeep and eqkeep take 5 at 400, whyskip 5 at 500). Until
+    // the engine has processed ANY span in this document, an all-zero page is
+    // not accepted as settled for its first 8 s: a short document read before
+    // the engine started holds "0/0" as still as a finished figure page, and
+    // fontkeep then "proved nothing". Once the engine is known to be running,
+    // an all-zero page (bibliography, figure) is simply what it looks like.
+    const early = !engineSeen && cur.startsWith("0/") && Date.now() - t0 < 8000;
+    if (cur === last && cur !== "x" && !early) {
+      if (++stable >= 5) { if (!cur.startsWith("0/")) engineSeen = true; return true; }
+    } else if (cur !== last) { stable = 0; last = cur; }
     await sleep(500);
   }
   return false;
@@ -130,7 +146,7 @@ try {
   await cdp.send("Runtime.enable");
   await cdp.send("Page.enable");
   let loaded = false;
-  for (let i = 0; i < 40 && !loaded; i++) { loaded = await ev(`!!window.PDFViewerApplication?.pdfDocument`).catch(() => false); if (!loaded) await sleep(500); }
+  for (let i = 0; i < 40 && !loaded; i++) { loaded = await ev(`!!window.PDFViewerApplication?.pdfDocument`).catch(soft(false)); if (!loaded) await sleep(500); }
   if (!loaded) throw new Error("document never loaded");
   // Before any page is processed, as whyskip does it, so the engine records
   // its skip reasons from the first pass rather than from a re-process.
@@ -147,7 +163,7 @@ try {
     // emphasis to know the engine is running, and the reference index built.
     for (let i = 0; i < 40; i++) {
       await sleep(800);
-      const w = await ev(`({ b: document.querySelectorAll('.textLayer .fx-b').length, refs: globalThis.__fxRefCount ?? -1 })`).catch(() => null);
+      const w = await ev(`({ b: document.querySelectorAll('.textLayer .fx-b').length, refs: globalThis.__fxRefCount ?? -1 })`).catch(soft(null));
       if (w && w.b > 80 && w.refs >= 0) break;
     }
   } else {
@@ -156,16 +172,24 @@ try {
 
   const numPages = await ev(`window.PDFViewerApplication.pdfDocument.numPages`);
   const pages = ALL ? Array.from({ length: numPages }, (_, i) => i + 1) : [PAGE];
+  let blankRun = 0;
   for (const pg of pages) {
     const citing = CHECKS.includes("citepoint") && state.citepoint.examined < MAX;
     await ev(`(() => { window.PDFViewerApplication.page = ${pg}; return true; })()`);
     await sleep(citing ? 2200 : 1200);
-    await settle(pg);
+    const settled = await settle(pg);
+    // A page with no text layer after a full settle is one thing; three in a
+    // row is the viewer no longer producing them at all (seen as "p6..p16: no
+    // layer" in one gate). Grinding on costs minutes a page in re-reads and
+    // measures nothing, so stop and let the sweep run the document again.
+    const hasLayer = settled || await ev(`!!window.PDFViewerApplication.pdfViewer.getPageView(${pg - 1})?.textLayer`).catch(soft(false));
+    blankRun = hasLayer ? 0 : blankRun + 1;
+    if (blankRun >= 3) throw new Error(`viewer stopped producing text layers (p${pg - 2}..p${pg}) — no verdict`);
     if (citing) {
       // citepoint's own wait: this page's hit-targets, not a document count —
       // a page read mid-annotation reports every citation as WRONG-TARGET.
       for (let i = 0; i < 20; i++) {
-        const n = await ev(`(() => { const pv = window.PDFViewerApplication.pdfViewer.getPageView(${pg - 1}); return pv && pv.textLayer ? pv.div.querySelectorAll('.fx-cite-hit').length : 0; })()`).catch(() => 0);
+        const n = await ev(`(() => { const pv = window.PDFViewerApplication.pdfViewer.getPageView(${pg - 1}); return pv && pv.textLayer ? pv.div.querySelectorAll('.fx-cite-hit').length : 0; })()`).catch(soft(0));
         if (n > 0) break;
         await sleep(600);
       }
@@ -176,10 +200,11 @@ try {
       if (c === "citepoint" && state.citepoint.examined >= MAX) continue;
       const expr = c === "citepoint" ? citepoint.probe(pg, { max: MAX, examined: state.citepoint.examined }) : MODULES[c].probe(pg);
       let r = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < (hasLayer ? 3 : 1); attempt++) {
         try {
           r = await ev(expr, { ms: c === "citepoint" ? 120000 : 30000 });
         } catch (e) {
+          if (fatal(e)) throw e;
           r = { error: `probe threw: ${(e.message || String(e)).slice(0, 160)}` };
         }
         if (r && !r.error) break;

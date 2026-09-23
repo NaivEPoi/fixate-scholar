@@ -135,11 +135,17 @@ share a render and stay separate stages.
   verdict about the product, which the corpus sweep retries rather than scores.
   The standalone harnesses used to skip such a page in silence, which is how a
   document "passed" on 9 of its 16 pages.
-- **A combined run must report exactly what the standalone runs report.** After
+- **A combined run must report what the standalone runs report.** After
   changing a pass, a probe module or the settle, run both over both corpora and
-  compare them document by document and line by line — no tolerance: standalone
-  runs reproduce to the span, so any difference is a finding (zoom, window,
-  settle or coverage), not noise.
+  compare them document by document and line by line, with no tolerance on the
+  numbers — but against MORE THAN ONE standalone run. Two standalone runs of
+  identical code do not always agree: a standalone harness skips a page it
+  cannot read in silence (the same paper has come back with 6 pages measured in
+  one run and 0 in the next, both "PASS"), and citepoint can read a page whose
+  annotation is still arriving. A combined result that matches no standalone run
+  of the same code is a finding (zoom, window, settle, coverage). Two fields are
+  counts of hit-target elements rather than measurements and are not compared:
+  citepoint's `hitTargets` and papers.mjs's `cites`.
 
 The gate's harnesses talk to the browser through `test/lib/cdp.mjs` (tables.mjs
 moves over with its zoom-sweep rework; the diagnostic probes in §4 still carry
