@@ -3311,6 +3311,21 @@ export class TypographyEngine {
               const w = Math.min(A.r.right, B.r.right) - Math.max(A.r.left, B.r.left);
               const h = Math.min(A.r.bottom, B.r.bottom) - Math.max(A.r.top, B.r.top);
               if (w <= 0 || h <= 0) continue;
+              // END-TO-END neighbours are not duplicates (R48). A composed
+              // accent carried at the end of one span over the next span's
+              // first letter ("raison d'ˆ" + "etre"), or a word set tight
+              // against a math bracket ("〉" + "to"), overlaps its neighbour
+              // by a glyph — ~30% of the narrower box — and sat right on the
+              // 0.3 area test below: at 180% "raison d'ê" measured 0.303 and
+              // was judged, at 100% it fell just under and was not. Once
+              // judged, two printed spans tie and BOTH are vetoed, and a
+              // two-letter span's ink fit swings with canvas resolution (0.87
+              // at page-fit, 0.67 at 100%, 0.08 on the capped 180% canvas),
+              // so the verdict moved with the zoom. What this resolver is for
+              // — duplicates, containment, hidden layers straddling a line —
+              // shares all or nearly all of the narrower box's width, so half
+              // of it separates the two cases with room on both sides.
+              if (w < Math.min(A.r.width, B.r.width) * 0.5) continue;
               // 0.3: a hidden line STRADDLING two printed lines overlaps each
               // by ~35-45% of itself; genuinely adjacent lines' boxes overlap
               // ≤~15% even at tight leading.

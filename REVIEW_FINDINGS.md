@@ -4439,8 +4439,8 @@ ACL p24-25   page-fit / 1.0 / 1.8 / 2.5: 0 offenders, 0 zoom flips, processed 60
 wordshot     ACL p25 "considered" at 1.0 / 1.8 / 2.5: processed=false keep=true emph=0, all three
 ACL (all)    page-fit / 1.0 / 1.8: 0 offenders, 0 zoom flips, processed 1819 at every zoom
 corpus       tables.mjs over all 14 public papers x (page-fit, 1.0, 1.8): 0 offenders on all;
-             0 zoom flips on 13; LaTeX article (CM) keeps 2 — not table-rules; a separate
-             zoom dependence, being tracked as R48
+             0 zoom flips on 13; LaTeX article (CM) kept 2 — not table-rules; fixed as R48
+             (0 flips on all 14 since)
 ```
 
 Span-by-span against the unmodified engine (`tables.mjs --dump`, same spans,
@@ -4508,3 +4508,73 @@ frame (`gapTop` −2 in the zone introspection), and the header-row rule
 (`clearOfRules`) treats a line hugging a rule as a header. That was the 100%
 behaviour, the oracle agrees with it, and it is now the behaviour at every zoom.
 
+## R48 — a second zoom dependence, in the duplicate-overlap resolver (FIXED)
+
+**Status: fixed.** Surfaced by the `tables.mjs` zoom sweep added for R47, on its
+first corpus run. Pre-existing: identical in the build before R47's fix, and not
+`table-rules`.
+
+```
+LaTeX article (CM) p24  "raison d'ê..."  page-fit:0 (dup-overlap)  1.0:2  1.8:0 (dup-overlap)
+LaTeX article (CM) p16  "to"             page-fit:0 (dup-hidden)   1.0:1  1.8:1
+```
+
+Reproduced on the unfixed engine with
+`tables.mjs "LaTeX article (CM)" --pages=16-24 --zooms=page-fit,1.0,1.8`
+(2 zoom flips, exit 1), and on p24 with `wordshot`: at 1.0
+`processed=true emph=2 ["rai","d'"]`, at 1.8 `processed=false emph=0`.
+
+### The hypothesis was wrong, and the resolver's own numbers say so
+
+This entry first guessed that the ink-fit scores suffer R47's canvas-capping
+effect, and the first fix written for it put `inkFit` on a fixed page-unit
+sampling grid. The engine's pair introspection (`__fxOverlap`, per zoom)
+disproved that for p24 before the fix was ever run, and it was reverted:
+
+- **p24.** The pair is "raison d'ˆ" and "etre": the accent is carried at the END
+  of the first span and drawn over the first letter of the next. Both are
+  printed text and both fit the ink well (0.75 and 0.87 at 1.8), so neither
+  wins by the resolver's 0.35 margin — a tie, and a tie between two candidates
+  vetoes BOTH (`dup-overlap`). At 1.0 the pair was never judged at all: the
+  overlap is 11.8 × 23.9 px against a smaller box of 38.9 × 23.9, i.e. 0.303 of
+  it, against a 0.3 threshold. Sub-pixel rounding of the text-layer rects
+  decided whether the pair existed.
+- **p16.** The pair is "to" and a KEPT math bracket "〉" set tight against it,
+  overlapping by 4.7 px (~30% of the narrower box). Here the ink fit does move
+  with resolution — "to" scores 0.87 at page-fit, 0.67 at 1.0, 0.08 on the
+  capped 1.8 canvas (no detail canvas existed, so the resolver's "retry on sharp
+  pixels" path never ran) — and where it landed against the margins decided
+  whether "to" was dropped as hidden.
+
+Both are the same geometry: NEIGHBOURS TOUCHING END TO END, overlapping by a
+glyph. That is not what the resolver is for. Duplicates, a fine-grained span
+inside a wide one, and hidden layers straddling a printed line all share all or
+nearly all of the narrower box's WIDTH; these share ~30% of it.
+
+### Fixed
+
+The resolver now skips a pair whose horizontal overlap is under half the
+narrower box's width. The cases it exists for sit near 100% and end-to-end
+neighbours near 30%, so the cut has room on both sides and no rounding or
+resolution change can carry a pair across it — which is what made the old 0.3
+area test zoom-dependent for these pairs. A skipped mixed pair falls through to
+the plain obstacle-overlap rule, exactly as a tie already did.
+
+```
+tables.mjs "LaTeX article (CM)" --pages=16-24 --zooms=page-fit,1.0,1.8
+             0 zoom flips, 0 offenders, exit 0; processed 646 at every zoom
+wordshot     p24 "raison d" at page-fit / 1.0 / 1.8: processed=true emph=2 ["rai","d'"],
+             all three; the 1.8 capture shows "raison d'être" emphasized, accent intact
+corpus       tables.mjs over all 14 public papers x (page-fit, 1.0, 1.8):
+             0 offenders and 0 zoom flips on ALL 14
+per span     against the R47-only engine (--dump): exactly 3 cells change, all
+             LaTeX article — p16 "to" at page-fit, p24 "raison d'ˆ" at page-fit
+             and 1.8 — each to the 1.0 state. Nothing else moves, on any
+             paper, at any zoom
+dividers     diag-dividers at page-fit: masked=0 on all 13 papers
+```
+
+The ink fit's resolution sensitivity seen on p16 is real and is NOT fixed here:
+this change stops the resolver from judging pairs it should never have judged,
+it does not make the scores themselves resolution-independent. No flip in the
+public corpus comes from a genuine duplicate pair.
