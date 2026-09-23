@@ -4374,3 +4374,188 @@ PDF's own operators rather than from pixels. Both are real work on a path with
 a history of regressions (masks whiting out table rules), and neither belongs in
 a release whose gate is otherwise green. Anyone starting should first give
 `tables.mjs` a zoom sweep, so the fix has a check that can fail.
+
+## R49 — a gate that could not tell a hang from a failure, and one render per zoom
+
+The release gate's DOM stages were rebuilt: shared CDP transport, three
+outcomes per document, one copy of each check, and one render per zoom instead
+of one per check. The combined gate was then run over both corpora against
+the old one. What follows is measured, not argued.
+
+### The previous gate run was not a result
+
+It reported 20 document failures. Sixteen were the harness's:
+
+- **Seven were Node's exit 13, "unsettled top-level await".** Every harness
+  carried its own five-line CDP `send`, and each copy settled a call only when
+  a reply with its id arrived. A browser that went away left the promise
+  pending, Node found nothing left to run, and the process ended with no
+  error, no page and no stack. The sweep's flake retry never fired: it matched
+  on output, and a hang has none.
+- **Nine were console timeouts**, on a machine running another session's
+  browser sweeps at the same time — which nothing recorded.
+
+### What changed
+
+- `test/lib/cdp.mjs`: one connection for every gate harness. Every call has a
+  deadline, a closing socket rejects every call still waiting (and `ready`,
+  if it never opened), and a timed-out evaluate names the expression it was
+  waiting on. Unit-tested with a fake socket.
+- **Three outcomes per document** (local sweep runner): PASS, FAIL, or
+  UNVERIFIED. Exit 13, a CDP deadline, a dropped socket, a document the
+  harness gave up loading, a blind guard ("the check proved nothing") and the
+  per-document watchdog are *no verdict*: retried in-lane, then once more
+  **alone** after every lane has drained; still no verdict alone is
+  UNVERIFIED, which fails the gate and says it was the harness. A check that
+  printed its own failure keeps it — a real failure beside a timeout line is
+  not retried into "harness". Each retry note keeps the failed attempt's
+  cause and last lines, which the final log otherwise discards.
+- **Contention is recorded**: the gate refuses to start while other harnesses
+  run, samples once a minute, marks the verdict CONTENDED if anything else
+  ran, and holds a marker file other sessions check before launching browsers.
+- **One copy of each check.** fontkeep, whyskip, eqkeep, refcolor and
+  citepoint moved their page probe and verdict to `test/probes/<check>.mjs`;
+  the standalone harness and the combined runner both import it. Each probe
+  was shown to build a byte-identical expression to the previous harness's for
+  every page (and every citepoint cap/progress combination tried), with a
+  mutated copy shown to fail that comparison. The previous combined runner
+  read probes back out of harness sources as text, and on its first run that
+  silently made refcolor's regex a different one.
+- **One render per zoom.** Zoom changes classification (R47), so checks share
+  a render only with checks validated on the same one: pass A (fontkeep,
+  whyskip at 1.8) and pass B (eqkeep, refcolor, citepoint at the default
+  zoom). tables and console keep their own. **Both corpora now run the same
+  stages with the same arguments** — the previous gate ran tables on the
+  private corpus only and capped citepoint lower there; privacy (aliases, a
+  path outside the repo) is the only difference left.
+- **No blind pass in the combined runner.** A page it cannot read after
+  re-reading is `NOT MEASURED`; a check that got no page, or whose own blind
+  guard fired, is UNMEASURED; either way the run has no verdict (exit 75). A
+  viewer that stops answering ends the run in seconds: the first combined run
+  polled a stalled viewer 60 times against a 30 s deadline, and three
+  documents rode the 25-minute watchdog before passing on retry.
+
+### The old gate is not reproducible — which changes what "equivalent" means
+
+Two standalone runs of identical product code (the previous gate and a
+fresh baseline, same harnesses) disagree on the same documents: one public
+paper was measured on 6 pages in one run and on 0 in the other, both "PASS";
+another's references counted 29 in one run and 24 in the other, which had
+skipped four pages. A standalone harness skips a page it cannot read in silence. Two fields differ
+even when everything else agrees — citepoint's `hitTargets` total and
+papers.mjs's `cites` count hit-target elements while annotation may still be
+arriving (6 documents differ in `hitTargets` alone between the two standalone
+runs) — so they are not measurements and are not compared.
+
+So the combined gate was held to this: every document-check measurement must
+equal what **some** standalone run of the same code printed, character for
+character.
+
+### Result
+
+| | standalone (baseline) | combined |
+|---|---|---|
+| public corpus, all stages | 26.1 min | 15.8 min |
+| private pass B vs eqkeep+refcolor+citepoint | 29.2 min | 19.8 min |
+| whole gate, 8 lanes | 77.7 min | 75.3 min, of which three stalls rode the 25-min watchdog (fixed since) |
+
+- **330 document-check pairs; 329 match a standalone run.** 18 of them match
+  the older standalone run rather than the baseline — every one a document
+  the baseline measured incompletely (skipped pages, a viewer that never
+  loaded, a blind first page).
+- **The one difference is coverage the old gate never had:** a private paper
+  whose references neither standalone run measured (one never loaded the
+  viewer, the other hung after five pages); the combined run measured all 19
+  pages, every reference coloured.
+- An independent reviewer from another model family, given only the raw logs,
+  reached the same pairs and the same single difference; it first called the
+  run "NOT EQUIVALENT" on the `hitTargets` fields, then verified from the two
+  standalone runs itself that those are not reproducible, and agreed.
+
+### What the gate found: four eqkeep failures, all the check's
+
+The only failures either gate reported were eqkeep's, on one public paper and
+three private ones — and none of the flagged rows was a displayed equation:
+
+- a sentence ending in a parenthesised decimal value, or a list of
+  enumerations "(3)", all in ONE text span at a justified right edge (three
+  private papers);
+- inline math "REL(1^λ)" in a sentence (the public paper), whose math-face
+  spans sat on a baseline of their own and so formed a "row" ending in "(1)",
+  the bracket 1 px after the name. `wordshot`: `processed=true keep=false
+  emph=0` — no emphasis on it at all.
+
+A displayed equation's number is typeset apart from it, so the check now
+requires that: its own span, more than a word space (0.3 line heights) clear
+of what precedes it. Measured before changing anything, over every row eqkeep
+counted as an equation on both corpora (153): every real numbered equation
+passes both tests, its number 0.47 to 14 line heights clear; the 27 rows that
+fail are the four false violations, bibliography years and two tables of
+parenthesised values. After it, all 49 documents pass and each document's
+equation-row count drops by exactly those rows. The engine is untouched.
+
+### Negative controls — can the new gate still fail?
+
+Each product mutation was applied in a throwaway worktree, both gates were run
+over the public corpus, and the mutation reverted. A control counts only if
+BOTH gates fail it and fail it identically:
+
+| mutation | standalone | combined | compared |
+|---|---|---|---|
+| parser's `(?=§)` alternative removed (R45) | 7/14 fail | the same 7 | 14/14 identical |
+| every skip-reason write in the engine blanked | 14/14 fail | 14/14 | 13/14 identical ¹ |
+| math/mono/small-caps face keep disabled | 12/14 fail | the same 12 | 14/14 identical |
+| per-key citation hit-targets collapsed to one | 8/14 fail | the same 8 | 14/14 identical |
+| block classification bypassed (equations, tables processed) | 3/14 fail | the same 3 | 14/14 identical |
+
+¹ the one difference is a standalone run that died in its first 3 s with no
+output — the runner now treats a failure that does not say why as no verdict
+and retries it.
+
+Two first attempts did not bite and are worth recording, because a control
+that cannot fail proves nothing: disabling one of the engine's several
+skip-reason paths left every reason in place, and disabling displayed-equation
+detection alone left every equation row kept by the engine's other rules
+(math faces, block classification). Both were replaced by the mutations
+above. And at the runner level: a probe that throws on every page ends
+UNVERIFIED (never PASS), and a check that does not exist is refused (exit 2).
+
+The eqkeep control is also the check on the criterion change above: with
+the number required to be set apart, eqkeep still fails exactly the three
+papers whose displayed equations the mutated engine emphasizes.
+
+### The disk filled during the gate
+
+Mid-way through the controls the drive reached 0 bytes free. The cause was
+the harnesses' own litter: every harness creates a browser profile
+`fx-<tag>-<pid>` in the temp directory and deletes it on the way out — unless
+it never gets there (the watchdog's tree-kill, a crash, a browser still
+holding files at the harness's own delete). Months of sweeps had left 3,373
+of them, at up to ~400 MB each. The sweep runner now deletes each harness's
+profiles, by the pid in their name, as soon as that harness has exited.
+
+### Independent code review
+
+A reviewer from another model family read the diff and the runner. Of its
+eight findings six were real and are fixed (a flake pattern that could
+relabel a console failure as a harness hiccup; a comparison of two runs that
+shared nothing reading "EQUIVALENT"; a socket closing before it opened waiting
+out its deadline; an unreadable process list counted as contention; two
+reporting labels). One was a known, bounded difference: pass B's window
+matches refcolor's and citepoint's, not eqkeep's, which can only matter on a
+page too wide for the default zoom's 1.25 cap — and the equivalence run is
+the test of it (eqkeep matched on all 49 documents). One was pre-existing and
+kept deliberately: the standalone harnesses still skip an unreadable page in
+silence, because the migration had to be behaviour-identical, and they are no
+longer the gate's stages for these checks.
+
+### Left for later
+
+- R46 left the author-year grammar's prose false positives "for citepoint
+  over the two corpora to measure". citepoint cannot: it examines numeric
+  multi-key brackets only. The measurement is still owed, by a probe that
+  looks at author-year hits.
+- The console harness's toggle-off-and-on check reads the page 2.5 s after
+  re-enabling, and on one large private paper saw 0 emphasis runs where the
+  first pass had thousands. It is informational (not a pass criterion); worth
+  a look before anyone relies on it.
