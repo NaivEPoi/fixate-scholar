@@ -560,12 +560,18 @@ if (app.downloadManager && typeof app.downloadManager.download === "function") {
   /** A handle being chosen right now, awaited by the download that follows. */
   let pending = null;
 
+  // The LIVE document first, the address bar last. A viewer tab can be handed a
+  // different document without its `?file=` parameter changing — the file input
+  // and drag-and-drop both do that — and trusting the parameter would arm the
+  // picker for the document that is no longer open, then file the handle under
+  // its URL. The next save would write one document's bytes over another's
+  // file.
   const localUrl = (url) => {
     const u =
       (typeof url === "string" && url) ||
-      currentFileUrl() ||
       app._downloadUrl ||
       app.url ||
+      currentFileUrl() ||
       "";
     return u.startsWith("file:") ? u : null;
   };
@@ -574,29 +580,51 @@ if (app.downloadManager && typeof app.downloadManager.download === "function") {
     decodeURIComponent((currentFileUrl() || "").split("/").pop() || "") ||
     "document.pdf";
 
+  /** The file URL whose picker the reader just dismissed. */
+  let cancelledFor = null;
+
   // Capture phase, so the picker is requested before PDF.js starts serialising.
   const armPicker = () => {
     const url = localUrl(null);
     if (!url || current.saveLocalFile === false) return;
     if (typeof window.showSaveFilePicker !== "function") return;
     if (handles.has(url) || pending) return; // already have one, or asking
+    cancelledFor = null;
     pending = window
       .showSaveFilePicker({ suggestedName: suggestedName(), types: PICK_TYPES })
       .then((handle) => {
         handles.set(url, handle);
         return handle;
       })
-      .catch(() => null) // cancelled, or refused — fall back to a download
+      .catch((err) => {
+        // Dismissing the dialog is an instruction not to save, so it must not
+        // become a download into the downloads folder — which is the very
+        // outcome the reader was avoiding by cancelling. Any OTHER failure
+        // still falls back, because they did ask for the file.
+        if (err?.name === "AbortError") cancelledFor = url;
+        return null;
+      })
       .finally(() => { pending = null; });
   };
   for (const id of ["downloadButton", "secondaryDownload"]) {
     document.getElementById(id)?.addEventListener("click", armPicker, true);
   }
+  // Ctrl/Cmd+S is the way most readers save, and it never touches those
+  // buttons: PDF.js binds it straight to an eventBus "download" dispatch
+  // (vendored viewer.mjs, `case 83`). Hooking only the toolbar left the most
+  // common gesture racing the activation window exactly as before.
+  window.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "s" || e.key === "S")) armPicker();
+  }, true);
 
   app.downloadManager.download = async function fxLocalDownload(data, url, filename) {
     const fileUrl = localUrl(url);
     if (fileUrl && current.saveLocalFile !== false && data) {
       const handle = handles.get(fileUrl) ?? (pending ? await pending : null);
+      if (!handle && cancelledFor === fileUrl) {
+        cancelledFor = null;
+        return; // the reader dismissed the dialog: saving was declined
+      }
       if (handle) {
         try {
           const writable = await handle.createWritable();

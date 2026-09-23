@@ -142,6 +142,69 @@ try {
   check("second save writes through without prompting", after === before, `picks ${before} -> ${after}`);
   check("second save wrote its own bytes", (await ev(`window.__fx.written`)) === 3);
 
+  // Ctrl+S is how most readers save, and it never touches the toolbar buttons:
+  // PDF.js binds it straight to an eventBus "download" dispatch. Hooking only
+  // the buttons left the commonest gesture racing the activation window.
+  await ev(`(() => { window.__fx.picks = 0; window.PDFViewerApplication.downloadManager.__h = null; return true; })()`);
+  await ev(`(() => {
+    // Forget the remembered handle so the shortcut has to arm its own picker.
+    location.hash = "";
+    return true;
+  })()`);
+  // A fresh viewer state is not reachable without a reload, so assert the
+  // LISTENER instead: dispatch a trusted Ctrl+S and require a pick when no
+  // handle is held yet. The handle from the click above is dropped first by
+  // reloading the page.
+  await send("Page.reload", {});
+  await sleep(2500);
+  for (let i = 0; i < 40; i++) {
+    if (await ev(`!!window.PDFViewerApplication?.downloadManager`).catch(() => false)) break;
+    await sleep(400);
+  }
+  await ev(`(() => {
+    window.__fx = { picks: 0, written: null, closed: 0 };
+    window.showSaveFilePicker = async () => {
+      window.__fx.picks++;
+      return { createWritable: async () => ({
+        write: async (d) => { window.__fx.written = d ? d.length ?? d.size ?? -1 : null; },
+        close: async () => { window.__fx.closed++; },
+      }) };
+    };
+    return true;
+  })()`);
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "s", code: "KeyS", windowsVirtualKeyCode: 83, modifiers: 2 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "s", code: "KeyS", windowsVirtualKeyCode: 83, modifiers: 2 });
+  await sleep(500);
+  check("Ctrl+S arms the picker too", (await ev(`window.__fx.picks`)) >= 1,
+    `picks=${await ev(`window.__fx.picks`)}`);
+
+  // Dismissing the dialog means "do not save" — it must not become a download
+  // into the downloads folder, which is the outcome the reader was avoiding.
+  await ev(`(() => {
+    window.__fx.picks = 0; window.__fx.fellBack = 0;
+    window.showSaveFilePicker = async () => {
+      window.__fx.picks++;
+      const e = new Error("cancelled"); e.name = "AbortError"; throw e;
+    };
+    const a = document.createElement("a");
+    const realClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { window.__fx.fellBack++; };
+    window.__fx.restore = () => { HTMLAnchorElement.prototype.click = realClick; };
+    return true;
+  })()`);
+  const cbox = await ev(`(() => { const b = document.getElementById("downloadButton"); const r = b.getBoundingClientRect(); return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) }; })()`);
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: cbox.x, y: cbox.y, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: cbox.x, y: cbox.y, button: "left", clickCount: 1 });
+  await sleep(400);
+  await ev(`(async () => {
+    try { await window.PDFViewerApplication.downloadManager.download(new Uint8Array([7,7]), ${JSON.stringify(FILE_URL)}, "fixture.pdf"); } catch {}
+    return true;
+  })()`);
+  check("cancelling the dialog does not download a copy",
+    (await ev(`window.__fx.fellBack`)) === 0,
+    `anchor clicks=${await ev(`window.__fx.fellBack`)}`);
+  await ev(`(() => { window.__fx.restore?.(); return true; })()`);
+
   // A remote document must never take this path.
   await ev(`(async () => {
     window.__fx.picks = 0;
