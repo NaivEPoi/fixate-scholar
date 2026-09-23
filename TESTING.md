@@ -104,6 +104,50 @@ node test/refbold.mjs "<paper>"         # NO processed span inside the bibliogra
 OPENERS, so continuation lines, unnumbered bibliographies and lines the box list
 never received all pass it.
 
+### 1b. The release gate's DOM checks — one render per zoom, not per check
+
+The release gate runs fontkeep, whyskip, eqkeep, refcolor and citepoint over
+every page of every corpus document. Run one at a time, each renders every
+document itself, and the render is almost the whole cost. They cannot all share
+ONE render either: **zoom changes classification** (R47 — the same paper
+processes 1819 spans at 1.0 and 1831 at 1.8), so a check read at the wrong zoom
+quietly measures something else. `test/allprobes.mjs` therefore groups them by
+the render each was validated on:
+
+| pass | checks | render |
+|---|---|---|
+| `--pass=A` | fontkeep, whyskip | zoom 1.8, 2600×2400 window, sidebar hidden, `__fxDebug` on before the engine runs |
+| `--pass=B` | eqkeep, refcolor, citepoint | the viewer's default zoom, 1400×2000 window; citepoint runs LAST on each page (it clicks), and stops at `--max` multi-key citations like its harness |
+
+`tables.mjs` (page-fit) and `console.mjs` (reloads, toggles reading mode) cannot
+share a render and stay separate stages.
+
+- **One copy of each check.** Its page probe and verdict live in
+  `test/probes/<check>.mjs` (`probe(page, opts)`, `create()`, `add()`,
+  `summarize()`); the standalone harness and `allprobes.mjs` both import it, and
+  each check prints exactly its harness's lines under a `--- <check> ---`
+  header. Adding a check to a pass means writing that module, never copying a
+  probe — `refcolor.mjs` once kept its own copy of the parser's pattern, the copy
+  carried the product's bug, and the check could not see the thing it existed for.
+- **No blind passes.** A check that was asked for and measured nothing FAILS. A
+  page the probe cannot read (no text layer however long it waits, or the probe
+  threw) is re-read, then reported `NOT MEASURED`, and the run exits **75**: no
+  verdict about the product, which the corpus sweep retries rather than scores.
+  The standalone harnesses used to skip such a page in silence, which is how a
+  document "passed" on 9 of its 16 pages.
+- **A combined run must report exactly what the standalone runs report.** After
+  changing a pass, a probe module or the settle, run both over both corpora and
+  compare them document by document and line by line — no tolerance: standalone
+  runs reproduce to the span, so any difference is a finding (zoom, window,
+  settle or coverage), not noise.
+
+The gate's harnesses talk to the browser through `test/lib/cdp.mjs` (tables.mjs
+moves over with its zoom-sweep rework; the diagnostic probes in §4 still carry
+their own): each call has a deadline, a closed socket rejects every call waiting on it, and a timeout names
+the expression it was waiting on. Before it, a browser that went away left a
+promise pending for ever and Node exited 13 ("unsettled top-level await") with
+no error at all — which a sweep then reported as a product failure.
+
 ---
 
 ## 2. Automated test inventory

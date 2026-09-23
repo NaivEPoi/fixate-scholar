@@ -1,46 +1,64 @@
-// Four gate checks over ONE page render instead of four.
+// Several gate checks over ONE render of a document instead of one render each.
 //
-// fontkeep, eqkeep, refcolor and tables are all read-only probes over the same
-// settled page: each enables the extension, walks the document a page at a
-// time, and evaluates an expression against the rendered DOM. Run as separate
-// stages they render every page of every document four times over, and the
-// render is almost the whole cost.
+// The checks are read-only probes over the same settled page: each enables the
+// extension, walks the document a page at a time and evaluates an expression
+// against the rendered DOM, and the render is almost the whole cost. But they
+// cannot all share one, because ZOOM IS NOT COSMETIC: it changes layout, layout
+// changes classification, and classification is what they measure (R47 — the
+// same paper processes 1819 spans at 1.0 and 1831 at 1.8). So the checks are
+// grouped by the render they were validated on, and a group is a PASS:
 //
-// The probe bodies are READ OUT OF THE HARNESSES rather than copied, so each
-// harness stays the single source of truth for what its check means. Copying
-// them would reintroduce exactly the failure this project already shipped once:
-// refcolor.mjs kept its own copy of the parser's pattern, the copy carried the
-// same bug as the product, and the harness could not report the thing it
-// existed to check.
+//   A  fontkeep, whyskip           zoom 1.8, 2600x2400 window, sidebar hidden,
+//                                  __fxDebug on before the engine runs
+//   B  eqkeep, refcolor, citepoint the viewer's default zoom, 1400x2000 window
 //
-// A check whose probe cannot be extracted is REPORTED AS SKIPPED and must be
-// run standalone. A combined run that silently drops a check is worse than a
-// slow one, and this file must never be the reason a check stops failing.
+// tables (page-fit) and console (reloads, toggles reading mode) cannot share
+// one and stay standalone stages. Each check's probe and verdict come from its
+// module in test/probes/, the same code its standalone harness runs, and every
+// check prints exactly the lines its harness prints, under a `--- <check> ---`
+// header, so a combined log and a standalone log can be compared line for line
+// (local/gate-compare.mjs does).
 //
-// Usage: node test/allprobes.mjs --url=<pdf> [--label=name] [--all|--page=N]
+// Exit 0 all checks pass; 1 a check FAILED; 75 no check failed but some page
+// was never measured (probe error, or no text layer however long it waited) —
+// a harness outcome, not a verdict about the product, and the sweep retries it.
+// A check that was asked for and measured nothing is a FAIL: a combined run
+// that silently drops a check is worse than a slow one.
+//
+// Usage: node test/allprobes.mjs --url=<pdf> --pass=A|B [--label=name]
+//        [--all | --page=N] [--max=N] [--checks=a,b]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { browserPath, extensionDir, outDir, profileDir, killBrowser } from "./lib/env.mjs";
-import { loadProbes } from "./lib/extract-probe.mjs";
+import { connect } from "./lib/cdp.mjs";
+import * as fontkeep from "./probes/fontkeep.mjs";
+import * as whyskip from "./probes/whyskip.mjs";
+import * as eqkeep from "./probes/eqkeep.mjs";
+import * as refcolor from "./probes/refcolor.mjs";
+import * as citepoint from "./probes/citepoint.mjs";
 
-const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 const URL0 = arg("url");
 const LABEL = arg("label", "doc");
-const PAGE = parseInt(arg("page", "1"), 10);
+const PASS = arg("pass");
 const ALL = process.argv.includes("--all");
-const ZOOM = arg("zoom", "");
-if (!URL0) {
-  console.error("usage: node test/allprobes.mjs --url=<pdf> [--label=name] [--all|--page=N]");
-  process.exit(2);
-}
+const PAGE = parseInt(arg("page", "1"), 10);
+// citepoint clicks every multi-key citation and each click fires a lookup, so a
+// citation-dense paper is capped — the same cap and default as its harness.
+const MAX = parseInt(arg("max", "40"), 10);
 
-const { probes, errors } = loadProbes(TEST_DIR);
-for (const [name, msg] of Object.entries(errors)) {
-  console.log(`SKIPPED ${name}: probe could not be extracted (${msg}) — run it standalone`);
+const PASSES = {
+  A: { checks: ["fontkeep", "whyskip"], window: "2600,2400", zoom: "1.8", debug: true, hideSidebar: true },
+  B: { checks: ["eqkeep", "refcolor", "citepoint"], window: "1400,2000", zoom: null, debug: false, hideSidebar: false },
+};
+const MODULES = { fontkeep, whyskip, eqkeep, refcolor, citepoint };
+const cfg = PASSES[PASS];
+const CHECKS = arg("checks", cfg?.checks.join(","))?.split(",").filter(Boolean) ?? [];
+if (!URL0 || !cfg || !CHECKS.length || CHECKS.some((c) => !cfg.checks.includes(c))) {
+  console.error("usage: node test/allprobes.mjs --url=<pdf> --pass=A|B [--label=name] [--all|--page=N] [--max=N] [--checks=a,b]");
+  console.error(`  pass A: ${PASSES.A.checks.join(", ")}   pass B: ${PASSES.B.checks.join(", ")}`);
+  process.exit(2);
 }
 
 const PORT = 17200 + (process.pid % 300);
@@ -50,89 +68,49 @@ const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`
 
 const browser = spawn(browserPath("edge"), [
   `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
-  "--no-default-browser-check", "--disable-sync", "--window-size=1500,2400",
+  "--no-default-browser-check", "--disable-sync", `--window-size=${cfg.window}`,
   `--user-data-dir=${userDataDir}`, `--load-extension=${extensionDir}`,
   `--disable-extensions-except=${extensionDir}`, "about:blank",
 ], { stdio: "ignore" });
 
-let ws, nextId = 0;
-const send = (method, params = {}) => new Promise((resolve, reject) => {
-  const id = ++nextId;
-  const h = (e) => { const m = JSON.parse(e.data); if (m.id === id) { ws.removeEventListener("message", h); m.error ? reject(new Error(m.error.message)) : resolve(m.result); } };
-  ws.addEventListener("message", h);
-  ws.send(JSON.stringify({ id, method, params }));
-});
-const ev = async (expr) => {
-  const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
-  if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception?.description || r.exceptionDetails.text || "").slice(0, 300));
-  return r.result.value;
-};
+let cdp;
+const ev = (expr, opts) => cdp.ev(expr, opts);
 
-// The same settle the standalone harnesses use: the page's own processed-span
-// and emphasis counts holding still. Photographing a page mid-emphasis is what
-// manufactures "missing emphasis" findings, and it is the one thing four
-// checks sharing a render must get right, because they all inherit it.
+// One page's settle, shared by every check in the pass — so it has to be at
+// least as patient as the most patient of them, and it watches the UNION of
+// what they wait for. Annotation runs after emphasis: a settle on the
+// typography counts alone returns while references are still being coloured,
+// and refcolor sharing it once measured 0 references on a page with 8.
+const signature = (page) => `(() => {
+  const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page} - 1);
+  if (!pv || !pv.textLayer) return "x";
+  const d = pv.textLayer.div;
+  return d.querySelectorAll("span[data-fx-done]").length + "/" + d.querySelectorAll(".fx-b").length + "/" +
+         d.querySelectorAll(".fx-ref-c").length + "/" + d.querySelectorAll(".fx-cite-c").length + "/" +
+         pv.div.querySelectorAll(".fx-cite-hit").length;
+})()`;
 const settle = async (page) => {
-  let last = "";
-  let stable = 0;
+  let last = "", stable = 0;
   for (let i = 0; i < 60; i++) {
-    const cur = await ev(`(() => {
-      const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page} - 1);
-      if (!pv || !pv.textLayer) return "x";
-      // The reference and citation WRAPS are in the signature too, not just the
-      // typography counts. Annotation runs after emphasis, so a settle that
-      // watches only data-fx-done and .fx-b returns while the colouring is
-      // still being applied — and refcolor, sharing that settle, measured a
-      // page with no references on it at all and passed. Measured: 0 refs
-      // combined against 8 refs standalone on the same document. A shared
-      // settle has to be the UNION of what the sharers each wait for.
-      return pv.textLayer.div.querySelectorAll("span[data-fx-done]").length + "/" +
-             pv.textLayer.div.querySelectorAll(".fx-b").length + "/" +
-             pv.textLayer.div.querySelectorAll(".fx-ref-c").length + "/" +
-             pv.textLayer.div.querySelectorAll(".fx-cite-c").length + "/" +
-             (pv.div.querySelectorAll(".fx-cite-hit").length);
-    })()`).catch(() => "x");
-    // Eight stable reads, not five. Sharing one render means every check
-    // inherits this settle, so an early return does not cost one measurement
-    // but all of them at once — and it is invisible, because a partial page
-    // yields a smaller count rather than an error. Measured on a 25-page
-    // paper: five reads gave 1819 processed spans where the standalone
-    // harness, run twice, gives 1831 exactly.
-    if (cur === last && cur !== "x") { if (++stable >= 8) return; } else { stable = 0; last = cur; }
-    await sleep(400);
+    const cur = await ev(signature(page)).catch(() => "x");
+    // Five reads 500 ms apart: at least as patient as every harness it
+    // replaces (fontkeep and eqkeep take 5 at 400, whyskip 5 at 500).
+    if (cur === last && cur !== "x") { if (++stable >= 5) return true; } else { stable = 0; last = cur; }
+    await sleep(500);
   }
+  return false;
 };
 
-// One builder per check: `page -> expression`, compiled from the harness's own
-// template so escapes and interpolation behave exactly as they do in the
-// harness. A builder that cannot be compiled (a probe closing over harness
-// state) is dropped here and reported as skipped.
-const probeFns = {};
-for (const [name, { body, param }] of Object.entries(probes)) {
-  try {
-    probeFns[name] = new Function(param, "return `" + body + "`");
-    probeFns[name](1); // prove it builds before the run depends on it
-  } catch (e) {
-    delete probeFns[name];
-    delete probes[name];
-    errors[name] = `template will not compile: ${e.message}`;
-    console.log(`SKIPPED ${name}: ${errors[name]} — run it standalone`);
-  }
-}
-
-/** Pages whose probe threw, per check — a check with any is NOT a pass. */
-const probeErrors = {};
-const firstError = {};
-const totals = {
-  fontkeep: { processedSpans: 0, resolved: 0, unresolved: 0, violations: 0, bad: [] },
-  eqkeep: { eqRows: 0, violations: 0, bad: [] },
-  refcolor: { total: 0, colored: 0, misses: [] },
-  tables: { zones: 0, offenders: 0 },
-};
+const state = Object.fromEntries(CHECKS.map((c) => [c, MODULES[c].create()]));
+const lines = Object.fromEntries(CHECKS.map((c) => [c, []]));
+const measured = Object.fromEntries(CHECKS.map((c) => [c, 0]));
+const unmeasured = Object.fromEntries(CHECKS.map((c) => [c, []]));
+const emit = (c, { out = [], err = [] }) => { lines[c].push(...out, ...err); };
 
 try {
   let version = null;
   for (let i = 0; i < 50 && !version; i++) { try { version = await http("/json/version"); } catch { await sleep(300); } }
+  if (!version) throw new Error("debugger endpoint never came up");
   let extId = null;
   for (let i = 0; i < 60 && !extId; i++) {
     const sw = (await http("/json/list")).find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs"));
@@ -142,123 +120,108 @@ try {
   const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(URL0)}`, "PUT");
   await sleep(2500);
   const live = (await http("/json/list")).find((t) => t.id === tab.id) ?? tab;
-  ws = new WebSocket(live.webSocketDebuggerUrl);
-  await new Promise((r) => (ws.onopen = r));
-  await send("Runtime.enable");
-  for (let i = 0; i < 40; i++) { if (await ev(`!!window.PDFViewerApplication?.pdfDocument`).catch(() => false)) break; await sleep(500); }
-  // Before any page is processed, exactly as whyskip does it, so the engine
-  // records its skip reasons from the first pass rather than a re-process.
-  await ev(`(() => { globalThis.__fxDebug = true; return true; })()`);
+  cdp = connect(live.webSocketDebuggerUrl, { where: "viewer" });
+  await cdp.ready;
+  await cdp.send("Runtime.enable");
+  await cdp.send("Page.enable");
+  let loaded = false;
+  for (let i = 0; i < 40 && !loaded; i++) { loaded = await ev(`!!window.PDFViewerApplication?.pdfDocument`).catch(() => false); if (!loaded) await sleep(500); }
+  if (!loaded) throw new Error("document never loaded");
+  // Before any page is processed, as whyskip does it, so the engine records
+  // its skip reasons from the first pass rather than from a re-process.
+  if (cfg.debug) await ev(`(() => { globalThis.__fxDebug = true; return true; })()`);
+  if (cfg.hideSidebar) {
+    await ev(`(() => { const s = document.createElement("style");
+      s.textContent = "#sidebarContainer{display:none!important}#outerContainer.sidebarOpen #viewerContainer{inset-inline-start:0!important}";
+      document.head.appendChild(s); return true; })()`);
+  }
   await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
-  // The zoom the sharing checks agree on. It is NOT cosmetic: zoom changes
-  // layout, layout changes classification, and classification is what these
-  // checks measure. fontkeep and whyskip run at 1.8; eqkeep, refcolor and
-  // citepoint take the viewer default; tables uses page-fit. Only checks that
-  // agree on a zoom can share a render, and running them at the wrong one
-  // quietly changes the answer rather than failing.
-  if (ZOOM) {
-    await ev(`(() => { window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(ZOOM)}; return true; })()`).catch(() => {});
-    await sleep(800);
+  if (cfg.zoom) await ev(`(() => { window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(cfg.zoom)}; return true; })()`);
+  if (PASS === "B") {
+    // The document-wide warm-up refcolor and citepoint wait for: enough
+    // emphasis to know the engine is running, and the reference index built.
+    for (let i = 0; i < 40; i++) {
+      await sleep(800);
+      const w = await ev(`({ b: document.querySelectorAll('.textLayer .fx-b').length, refs: globalThis.__fxRefCount ?? -1 })`).catch(() => null);
+      if (w && w.b > 80 && w.refs >= 0) break;
+    }
+  } else {
+    await sleep(4000); // fontkeep's first-render wait; each page then settles on its own counts
   }
 
-  const pages = ALL ? await ev(`window.PDFViewerApplication.pdfDocument.numPages`) : null;
-  const list = ALL ? Array.from({ length: pages }, (_, i) => i + 1) : [PAGE];
-  let seen = 0;
-  for (const pg of list) {
+  const numPages = await ev(`window.PDFViewerApplication.pdfDocument.numPages`);
+  const pages = ALL ? Array.from({ length: numPages }, (_, i) => i + 1) : [PAGE];
+  for (const pg of pages) {
+    const citing = CHECKS.includes("citepoint") && state.citepoint.examined < MAX;
     await ev(`(() => { window.PDFViewerApplication.page = ${pg}; return true; })()`);
-    await sleep(700);
+    await sleep(citing ? 2200 : 1200);
     await settle(pg);
-    seen++;
-    for (const [name, { body, param }] of Object.entries(probes)) {
-      // Built as a TEMPLATE LITERAL, not by string substitution. The harness
-      // source contains the probe inside a template, so its backslashes are
-      // escaped for that context — `\\\\.` in the file means `\\.` in the
-      // regex. Substituting `${p}` textually and evaluating the raw source
-      // skips that unescaping, and a backslash-heavy probe silently becomes a
-      // different regex: refcolor matched NOTHING and reported 0 references on
-      // a page with 8. Letting JS build the template applies exactly the
-      // escaping the harness gets.
-      let expr;
-      try {
-        expr = probeFns[name](pg);
-      } catch (e) {
-        probeErrors[name] = (probeErrors[name] ?? 0) + 1;
-        if (!firstError[name]) firstError[name] = `p${pg}: template build failed: ${(e.message || e).slice(0, 80)}`;
-        continue;
+    if (citing) {
+      // citepoint's own wait: this page's hit-targets, not a document count —
+      // a page read mid-annotation reports every citation as WRONG-TARGET.
+      for (let i = 0; i < 20; i++) {
+        const n = await ev(`(() => { const pv = window.PDFViewerApplication.pdfViewer.getPageView(${pg - 1}); return pv && pv.textLayer ? pv.div.querySelectorAll('.fx-cite-hit').length : 0; })()`).catch(() => 0);
+        if (n > 0) break;
+        await sleep(600);
       }
+      await sleep(600);
+    }
+    // citepoint last: it CLICKS, and every other probe reads an untouched page.
+    for (const c of CHECKS) {
+      if (c === "citepoint" && state.citepoint.examined >= MAX) continue;
+      const expr = c === "citepoint" ? citepoint.probe(pg, { max: MAX, examined: state.citepoint.examined }) : MODULES[c].probe(pg);
       let r = null;
-      try {
-        r = await ev(expr);
-      } catch (e) {
-        // A probe that THREW has measured nothing, and a check with no
-        // measurements reads as clean. Record it as a hard error so the run
-        // cannot come back green on a check that never executed.
-        probeErrors[name] = (probeErrors[name] ?? 0) + 1;
-        if (!firstError[name]) firstError[name] = `p${pg}: ${(e.message || e).slice(0, 120)}`;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          r = await ev(expr, { ms: c === "citepoint" ? 120000 : 30000 });
+        } catch (e) {
+          r = { error: `probe threw: ${(e.message || String(e)).slice(0, 160)}` };
+        }
+        if (r && !r.error) break;
+        // No text layer yet, or the probe threw: give the page longer and read
+        // it again, then call it unmeasured. A null used to be skipped in
+        // silence, which is how a document could "pass" on 9 of its 16 pages.
+        await sleep(1500);
+        await settle(pg);
+      }
+      if (!r || r.error) {
+        unmeasured[c].push(pg);
+        emit(c, { out: [`p${pg}: NOT MEASURED — ${r?.error ?? "no text layer"}`] });
         continue;
       }
-      if (!r) { probeErrors[name] = (probeErrors[name] ?? 0) + 1; continue; }
-      if (r.error) {
-        probeErrors[name] = (probeErrors[name] ?? 0) + 1;
-        if (!firstError[name]) firstError[name] = `p${pg}: ${r.error}`;
-        continue;
-      }
-      const t = totals[name];
-      if (name === "fontkeep") {
-        t.processedSpans += r.processedSpans || 0; t.resolved += r.resolved || 0;
-        t.unresolved += r.unresolved || 0; t.violations += r.violations || 0;
-        for (const b of r.bad ?? []) if (t.bad.length < 6) t.bad.push({ ...b, page: pg });
-      } else if (name === "eqkeep") {
-        t.eqRows += r.eqRows || 0; t.violations += r.violations || 0;
-        for (const b of r.bad ?? []) if (t.bad.length < 6) t.bad.push({ ...b, page: pg });
-      } else if (name === "refcolor") {
-        t.total += r.total || 0; t.colored += r.colored || 0;
-        for (const m of r.misses ?? []) if (t.misses.length < 6) t.misses.push({ ...m, page: pg });
-      } else if (name === "tables") {
-        t.zones += r.zones || 0; t.offenders += (r.offenders ?? r.total ?? 0);
-      }
+      measured[c]++;
+      emit(c, MODULES[c].add(state[c], pg, r));
     }
   }
 
-  // Each check's OWN pass criteria, unchanged from its harness.
+  let failed = 0, blind = 0;
   const verdicts = [];
-  if (probes.fontkeep) {
-    const ok = totals.fontkeep.violations === 0 && totals.fontkeep.resolved > 0;
-    verdicts.push([`fontkeep`, ok, JSON.stringify({ pages: seen, ...totals.fontkeep, bad: undefined })]);
-    if (totals.fontkeep.resolved === 0) console.log("  FAIL fontkeep resolved no font names — the check proved nothing");
+  for (const c of CHECKS) {
+    const v = MODULES[c].summarize(state[c], { label: LABEL });
+    emit(c, v);
+    if (v.logLine) appendFileSync(`${outDir()}/${c}.log`, v.logLine + String.fromCharCode(10));
+    let ok = v.ok;
+    if (!measured[c]) { ok = false; lines[c].push(`  FAIL ${c} measured no page at all — the check proved nothing`); }
+    if (!ok) failed++;
+    if (unmeasured[c].length) {
+      blind++;
+      lines[c].push(`  NO VERDICT on ${unmeasured[c].length} page(s): p${unmeasured[c].join(",p")} — not measured, so not a pass`);
+    }
+    verdicts.push(`${c}=${!ok ? "FAIL" : unmeasured[c].length ? "UNMEASURED" : "ok"}`);
   }
-  if (probes.eqkeep) {
-    verdicts.push([`eqkeep`, totals.eqkeep.violations === 0, JSON.stringify({ eqRows: totals.eqkeep.eqRows, violations: totals.eqkeep.violations })]);
+  for (const c of CHECKS) {
+    console.log(`--- ${c} ---`);
+    for (const l of lines[c]) console.log(l);
   }
-  if (probes.refcolor) {
-    verdicts.push([`refcolor`, totals.refcolor.total <= totals.refcolor.colored, JSON.stringify({ refs: totals.refcolor.total, colored: totals.refcolor.colored })]);
-  }
-  if (probes.tables) {
-    verdicts.push([`tables`, totals.tables.offenders === 0, JSON.stringify({ zones: totals.tables.zones, offenders: totals.tables.offenders })]);
-  }
-
-  let bad = 0;
-  for (const [name, ok, detail] of verdicts) {
-    const errs = probeErrors[name] ?? 0;
-    const clean = ok && errs === 0;
-    const note = errs ? ` — ${errs} page(s) ERRORED (${firstError[name]})` : "";
-    console.log(`  ${clean ? "ok  " : "FAIL"} ${name.padEnd(9)} ${detail}${note}`);
-    if (!clean) bad++;
-  }
-  // A check that could not be lifted out of its harness is NOT covered here.
-  // Naming it in the result line is what stops a combined run being mistaken
-  // for a full one.
-  for (const name of Object.keys(errors)) console.log(`  SKIP ${name.padEnd(9)} run standalone`);
-  const skipped = Object.keys(errors);
-  const line = `${LABEL} pages=${seen} ` +
-    verdicts.map(([n, ok]) => `${n}=${ok && !(probeErrors[n] ?? 0) ? "ok" : "FAIL"}`).join(" ") +
-    (skipped.length ? ` skipped=${skipped.join(",")}` : "");
+  const line = `${LABEL} pass=${PASS} pages=${pages.length} ${verdicts.join(" ")}`;
   console.log(line);
   appendFileSync(`${outDir()}/allprobes.log`, line + String.fromCharCode(10));
-  if (bad) process.exitCode = 1;
-} catch (e) { console.error(`${LABEL} allprobes error: ${e.message || e}`); process.exitCode = 1; }
-finally {
-  try { ws?.close(); } catch {}
+  process.exitCode = failed ? 1 : blind ? 75 : 0;
+} catch (e) {
+  console.error(`${LABEL} allprobes error: ${e.message || e}`);
+  process.exitCode = 1;
+} finally {
+  cdp?.close();
   killBrowser(browser);
   await sleep(500);
   try { rmSync(userDataDir, { recursive: true, force: true }); } catch {}
