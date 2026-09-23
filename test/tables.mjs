@@ -37,6 +37,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
+import { connect } from "./lib/cdp.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const FILTER = POS[0] ?? "5GShield";
@@ -84,14 +85,14 @@ const browser = spawn(browserPath("edge"), [
   `--disable-extensions-except=${EXT}`, "about:blank",
 ], { stdio: "ignore" });
 
-let ws, nextId = 0;
-const send = (method, params = {}) => new Promise((resolve, reject) => {
-  const id = ++nextId;
-  const h = (e) => { const m = JSON.parse(e.data); if (m.id === id) { ws.removeEventListener("message", h); m.error ? reject(new Error(m.error.message)) : resolve(m.result); } };
-  ws.addEventListener("message", h);
-  ws.send(JSON.stringify({ id, method, params }));
-});
-const ev = async (expr) => { const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception?.description || r.exceptionDetails.text || "").slice(0, 300)); return r.result.value; };
+// test/lib/cdp.mjs: every call has a deadline and a closed socket rejects what
+// is waiting on it, so a viewer that goes away fails the run instead of
+// leaving it pending until Node exits 13.
+let cdp;
+const send = (method, params) => cdp.send(method, params);
+const ev = (expr) => cdp.ev(expr);
+// A deadline or a closed socket is fatal for the run, not one more poll.
+const soft = (d) => (e) => { if (/timed out after|socket closed/.test(e?.message ?? "")) throw e; return d; };
 
 // In-page: rules from the oracle's own render, zones from rule pairs, offenders
 // from processed-span centers inside zones (span rects mapped through the
@@ -301,7 +302,7 @@ async function settle(p) {
   let last = "", stable = 0;
   for (let i = 0; i < 45; i++) {
     await sleep(400);
-    const st = await ev(COUNTS(p)).catch(() => "-");
+    const st = await ev(COUNTS(p)).catch(soft("-"));
     if (st === last && st !== "-") {
       // An empty page (figure-only, blank) settles too, just not in a hurry.
       if (++stable >= (st.startsWith("0/") ? 10 : 5)) return st;
@@ -314,16 +315,18 @@ let tabId = null;
 async function openViewer(extId, url) {
   const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(url)}`, "PUT");
   tabId = tab.id;
-  ws = new WebSocket(tab.webSocketDebuggerUrl);
-  await new Promise((r) => (ws.onopen = r));
+  // 90 s per call, not 30: the oracle renders the page itself at ORACLE_SCALE
+  // inside ONE evaluation. Bounded is what matters; a hang still fails.
+  cdp = connect(tab.webSocketDebuggerUrl, { where: "viewer", timeoutMs: 90000 });
+  await cdp.ready;
   await send("Page.enable"); await sleep(2500);
   let ok = false;
-  for (let i = 0; i < 40 && !ok; i++) { ok = await ev(`!!(window.PDFViewerApplication?.pdfDocument && window.PDFViewerApplication.pdfViewer)`).catch(() => false); if (!ok) await sleep(500); }
+  for (let i = 0; i < 40 && !ok; i++) { ok = await ev(`!!(window.PDFViewerApplication?.pdfDocument && window.PDFViewerApplication.pdfViewer)`).catch(soft(false)); if (!ok) await sleep(500); }
   if (!ok) throw new Error("viewer never loaded");
 }
 async function closeViewer() {
-  try { ws?.close(); } catch {}
-  ws = null;
+  cdp?.close();
+  cdp = null;
   if (tabId) { try { await fetch(`http://127.0.0.1:${PORT}/json/close/${tabId}`); } catch {} tabId = null; }
   await sleep(500);
 }
@@ -410,4 +413,10 @@ try {
   if (runs.length > 1) console.log(`TOTAL zoom flips: ${flips}${unmatched ? `  (${unmatched} span key(s) present at only some zooms, not compared)` : ""}`);
   if (offenders > 0 || flips > 0) process.exitCode = 1;
 } catch (e) { console.error("tables test error:", e.message || e); process.exitCode = 1; }
-finally { await closeViewer(); killBrowser(browser); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }
+finally {
+  await closeViewer();
+  killBrowser(browser);
+  await sleep(500);
+  try { rmSync(userDataDir, { recursive: true, force: true }); } catch {}
+  process.exit(process.exitCode ?? 0);
+}

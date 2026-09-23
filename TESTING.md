@@ -109,9 +109,9 @@ never received all pass it.
 The release gate runs fontkeep, whyskip, eqkeep, refcolor and citepoint over
 every page of every corpus document. Run one at a time, each renders every
 document itself, and the render is almost the whole cost. They cannot all share
-ONE render either: **zoom changes classification** (R47 — the same paper
-processes 1819 spans at 1.0 and 1831 at 1.8), so a check read at the wrong zoom
-quietly measures something else. `test/allprobes.mjs` therefore groups them by
+ONE render either: **zoom can change classification** (R47: the same paper
+processed 1819 spans at 1.0 and 1831 at 1.8 until table-rule detection was made
+resolution-independent), so a check is held to the zoom it was validated at. `test/allprobes.mjs` therefore groups them by
 the render each was validated on:
 
 | pass | checks | render |
@@ -119,8 +119,9 @@ the render each was validated on:
 | `--pass=A` | fontkeep, whyskip | zoom 1.8, 2600×2400 window, sidebar hidden, `__fxDebug` on before the engine runs |
 | `--pass=B` | eqkeep, refcolor, citepoint | the viewer's default zoom, 1400×2000 window; citepoint runs LAST on each page (it clicks), and stops at `--max` multi-key citations like its harness |
 
-`tables.mjs` (page-fit) and `console.mjs` (reloads, toggles reading mode) cannot
-share a render and stay separate stages.
+`tables.mjs` (a fresh viewer tab per zoom — page-fit, 1.0, 1.8 — comparing
+emphasis span by span across them) and `console.mjs` (reloads, toggles reading
+mode) cannot share a render and stay separate stages.
 
 - **One copy of each check.** Its page probe and verdict live in
   `test/probes/<check>.mjs` (`probe(page, opts)`, `create()`, `add()`,
@@ -147,9 +148,8 @@ share a render and stay separate stages.
   counts of hit-target elements rather than measurements and are not compared:
   citepoint's `hitTargets` and papers.mjs's `cites`.
 
-The gate's harnesses talk to the browser through `test/lib/cdp.mjs` (tables.mjs
-moves over with its zoom-sweep rework; the diagnostic probes in §4 still carry
-their own): each call has a deadline, a closed socket rejects every call waiting on it, and a timeout names
+The gate's harnesses talk to the browser through `test/lib/cdp.mjs` (the
+diagnostic probes in §4 still carry their own): each call has a deadline, a closed socket rejects every call waiting on it, and a timeout names
 the expression it was waiting on. Before it, a browser that went away left a
 promise pending for ever and Node exited 13 ("unsettled top-level await") with
 no error at all — which a sweep then reported as a product failure.
