@@ -410,7 +410,7 @@ export class ReferencesFeature {
       if (firstKept >= 0) {
         const cut = firstKept === 0 ? ref.start : Math.max(ref.start, inked[firstKept].start);
         const head = findInternalRefsAcrossBreaks(joined.slice(ref.start, cut)).find((r) => r.start === 0);
-        if (globalThis.__fxDebug && firstKept > 0) {
+        if (globalThis.__fxDebug && inked.some((seg) => seg.span.dataset.fxDone)) {
           (globalThis.__fxRefPartial ??= []).push(
             joined.slice(ref.start, ref.end).replace(/\s+/g, " ").slice(0, 30) + (head ? " -> head" : " -> none"),
           ); // test introspection
