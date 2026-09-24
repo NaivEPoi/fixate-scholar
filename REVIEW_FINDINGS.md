@@ -4835,10 +4835,15 @@ After it, the three-zoom sweep (page-fit, 1.0, 1.8) passes all 49 documents:
   a "§" TeX set from the symbol font (CMSY), a number in a kept face — was
   coloured in part ("§2", only the "2" red). Processing that "§" to colour it
   was tried and would have re-drawn a math-font glyph in the text face
-  (fontkeep: 11 violations on one paper), so such a reference is left
-  uncoloured; its link still works. Measured: 47 references over both corpora,
-  about one a paper, some of them false positives ("table T") that no longer
-  show at all.
+  (fontkeep: 11 violations on one paper). Instead a reference running into
+  such a piece is cut back to its longest leading part that is itself a
+  complete reference, all in processed text — "Lemma 4, M" (the list grammar
+  reaching a math variable) colours "Lemma 4" — and one with no such part
+  ("§ 2", "Listing 2" with the number on the canvas) is left uncoloured, its
+  link intact. The first version dropped the whole reference; the final gate
+  caught it on two private papers (refcolor) and the cut-back fixed both.
+  About one reference a paper is affected, some of them false positives
+  ("table T") that no longer show at all.
 - refcolor matches across spans as the product does, needs every piece of a
   reference coloured, and fails a reference colour nested in a citation.
 - R46's owed measurement: every annotated author-year citation over both
