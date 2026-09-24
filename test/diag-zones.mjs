@@ -107,6 +107,8 @@ const READ = `(() => {
   const bl = globalThis.__fxBaseline || [];
   const baseline = { renders: bl.length, maxMs: Math.max(0, ...bl.map((b) => b.ms)), worker: bl.filter((b) => b.outcome.includes("worker")).length, mismatch: bl.filter((b) => b.outcome.includes("MISMATCH")).map((b) => b.page), failed: bl.filter((b) => !b.outcome.startsWith("ok")).map((b) => b.page + ":" + b.outcome),
     thisPage: bl.filter((b) => b.page === ${PAGE}).map((b) => b.ms + "ms/" + b.outcome) };
+  const pp = globalThis.__fxPixelParity || [];
+  baseline.pixelParity = { reads: pp.length, differing: pp.filter((n) => n !== 0).length, worstBytes: Math.max(0, ...pp) };
   return { baseline, dims, scale: z, rules, history, zoneLines: zl, spans, probe };
 })()`;
 
