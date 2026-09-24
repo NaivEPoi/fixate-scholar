@@ -353,6 +353,18 @@ try {
   // Product outcomes of the toggle, and a run that exercised nothing.
   if (!FXOFF && before > 0 && reprocessMs === null) {
     console.log(`  REPROCESS FAIL: page ${view} had ${before} emphasis runs before reading mode was switched off and on, and ${await viewBolded()} 30 s after`);
+    // Seen once in a gate and not reproduced since, so the failure has to
+    // explain itself: what the viewer and the engine were doing at that point.
+    const why = await ev(`(() => {
+      const v = window.PDFViewerApplication.pdfViewer, pv = v.getPageView(${view - 1});
+      const layers = [];
+      for (let i = 0; i < v.pagesCount; i++) { const d = v.getPageView(i)?.textLayer?.div; if (d?.childElementCount) layers.push(i + 1); }
+      return { fxOn: !!document.querySelector("#viewerContainer.fx-on"), hidden: document.hidden,
+        page: v.currentPageNumber, renderingState: pv?.renderingState, detail: pv?.detailView?.renderingState ?? null,
+        layer: !!pv?.textLayer?.div?.childElementCount, done: document.querySelectorAll("span[data-fx-done]").length,
+        masks: document.querySelectorAll(".fx-mask").length, renderedLayers: layers };
+    })()`).catch((e) => ({ error: String(e).slice(0, 120) }));
+    console.log(`  REPROCESS state: ${JSON.stringify(why)}`);
     process.exitCode = 1;
   }
   if (!FXOFF && domState && domState.processedSpans === 0 && !process.exitCode) {
