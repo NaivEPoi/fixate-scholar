@@ -27,7 +27,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { browserPath, extensionDir, outDir, profileDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, outDir, profileDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 import { connect } from "./lib/cdp.mjs";
 
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
@@ -41,13 +41,17 @@ if (!URL0 || !LABEL || !/^[A-Za-z0-9_-]+$/.test(LABEL)) {
   process.exit(2);
 }
 const OUT = outDir(join("pairs", LABEL));
-const PORT = 18300 + (process.pid % 300);
-const userDataDir = profileDir(`pairs-${PORT}`);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
+const userDataDir = profileDir("pairs");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1600,2000",
   `--user-data-dir=${userDataDir}`, `--load-extension=${extensionDir}`,
   `--disable-extensions-except=${extensionDir}`, "about:blank",

@@ -39,7 +39,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 import { connect } from "./lib/cdp.mjs";
 import * as tables from "./probes/tables.mjs";
 
@@ -74,13 +74,17 @@ const PAPERS = {
   "UC-Scheme": "https://yilud.me/UC_Scheme.pdf",
 };
 const EXT = extensionDir;
-const PORT = 9251 + (process.pid % 130);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
 const userDataDir = join(tmpdir(), `fx-tab-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1300,1900",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,
   `--disable-extensions-except=${EXT}`, "about:blank",
@@ -143,7 +147,7 @@ const HANDLED = (p) => `(() => {
     const h = s.closest("[data-fx-done], [data-fx-why], [data-fx-keep], [data-fx-table]");
     if (h) handled++;
   }
-  return { prose, handled };
+  return { prose, handled, hidden: document.hidden };
 })()`;
 const COUNTS = (p) => `(() => { const d = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;
   return d ? d.querySelectorAll("span[data-fx-done]").length + "/" + d.querySelectorAll(".fx-b").length : "-"; })()`;
@@ -223,7 +227,7 @@ try {
       let st = null, still = 0, lastHandled = -1;
       for (let i = 0; i < 30; i++) {
         st = await ev(HANDLED(p)).catch(soft(null));
-        if (st && (st.prose < 3 || st.handled === st.prose)) break;
+        if (st && (st.prose < 3 || st.handled === st.prose || st.hidden)) break;
         if (st && st.handled === lastHandled) { if (++still >= 5) break; } else { still = 0; lastHandled = st?.handled ?? -1; }
         await sleep(1000);
         await settle(p);
@@ -233,6 +237,9 @@ try {
       // (A guard that also called "processed nothing, some prose undecided" no
       // verdict turned a real whyskip-class failure into UNVERIFIED: the
       // engine leaving a page restored and unprocessed IS what a reader sees.)
+      // The engine pauses while its tab is hidden; a hidden tab is the harness's
+      // doing (another tab in front: lib/env.mjs devtoolsPort).
+      if (st?.hidden) throw new Error(`p${p}: the viewer tab reported hidden at zoom ${zoom} — the engine pauses there; no verdict`);
       if (!st || (st.prose >= 3 && st.handled === 0)) {
         throw new Error(`p${p} was never processed by the engine at zoom ${zoom} — no verdict`);
       }
