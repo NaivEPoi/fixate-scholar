@@ -45,6 +45,13 @@ const FONT = arg("font", "");
 // --click: switch reading mode on with the viewer's own toolbar button, as a
 // reader does, instead of writing the setting (the two took different paths).
 const CLICK = process.argv.includes("--click");
+// --headful: a real window on the real display (its own device pixel ratio and
+// GPU) — headless canvases live in CPU memory, so a GPU readback stall, which
+// is what a reader feels as the MOUSE slowing down, cannot show there.
+const HEADFUL = process.argv.includes("--headful");
+// --switch-font=<mode>: with reading mode on and settled, switch the reading
+// font and measure the re-process of every rendered page it causes.
+const SWITCH = arg("switch-font", "");
 const ENABLE = CLICK
   ? `(() => { document.getElementById("fxToggleButton").click(); return true; })()`
   : `new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`;
@@ -73,7 +80,7 @@ const http = async (p, m = "GET") => {
 
 const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  "--remote-debugging-port=0", "--headless=new", "--no-first-run",
+  "--remote-debugging-port=0", ...(HEADFUL ? [] : ["--headless=new"]), "--no-first-run",
   ...(DPR ? [`--force-device-scale-factor=${DPR}`] : []),
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,2000",
   `--user-data-dir=${userDataDir}`, `--load-extension=${extensionDir}`,
@@ -100,6 +107,21 @@ const DONE = `(() => {
   }
   return { pages, open, bolded: document.querySelectorAll(".textLayer .fx-b").length };
 })()`;
+
+// Frame gaps — the longest interval between animation frames, a stall the
+// reader sees and feels as the pointer lagging over the page — and the
+// engine's canvas readbacks (__fxDebug) during the measured interval.
+const STALLS_START = `(() => { globalThis.__fxGaps = []; let last = performance.now();
+  const tick = (t) => { globalThis.__fxGaps.push(t - last); last = t; if (globalThis.__fxGaps.length < 5000) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick); globalThis.__fxPerf = true; globalThis.__fxReadbacks = []; return true; })()`;
+async function printStalls() {
+  const fx = await ev(`(() => { const g = globalThis.__fxGaps || [], r = globalThis.__fxReadbacks || [];
+    return { frames: g.length, worst: Math.max(0, ...g), over50: g.filter((x) => x > 50).length, over100: g.filter((x) => x > 100).length,
+      readbacks: r.length, readMs: r.reduce((a, b) => a + b.ms, 0), readMax: Math.max(0, ...r.map((b) => b.ms)), readMpx: r.reduce((a, b) => a + b.px, 0) / 1e6,
+      dpr: devicePixelRatio, parity: (globalThis.__fxPixelParity || []) }; })()`);
+  if (fx.parity.length) console.log(`  worker pixels vs direct readback: ${fx.parity.length} reads, ${fx.parity.filter((n) => n !== 0).length} differing`);
+  console.log(`  frames ${fx.frames}, worst gap ${fx.worst.toFixed(0)} ms, gaps > 50 ms: ${fx.over50}, > 100 ms: ${fx.over100}; canvas readbacks ${fx.readbacks}: ${fx.readMs} ms total, worst ${fx.readMax} ms, ${fx.readMpx.toFixed(1)} Mpx; devicePixelRatio ${fx.dpr}`);
+}
 
 let cdp;
 let onViewerEvent = () => {}; // set once there is something to listen for (--trace)
@@ -153,6 +175,7 @@ try {
       };
       await cdp.send("Tracing.start", { categories: "devtools.timeline,disabled-by-default-devtools.timeline", transferMode: "ReportEvents" });
     }
+    await ev(STALLS_START);
     await cdp.send("Profiler.start");
     const t0 = Date.now();
     if (!OFF) await ev(`new Promise((r)=>chrome.storage.sync.set({enabled:true},r))`);
@@ -183,6 +206,7 @@ try {
         console.log(`  p${String(t.page).padStart(2)}: classify ${t.classify} ms, obstacles ${t.obstacles} ms, ${c.length} chunks (max ${Math.max(0, ...c)} ms, sum ${c.reduce((a, b) => a + b, 0)} ms), wall ${t.total} ms`);
       }
     }
+    await printStalls();
     const long = await ev(`globalThis.__fxLong`);
     console.log(`  long tasks: ${long.length}, ${long.reduce((a, b) => a + b, 0).toFixed(0)} ms total, longest ${Math.max(0, ...long).toFixed(0)} ms`);
     report(profile, m0, m1, `${LABEL}: COLD${OFF ? " (reading mode OFF)" : ""}${FONT ? `, font ${FONT}` : ""}, zoom ${ZOOM}${DPR ? `, dpr ${DPR}` : ""}, ${n} pages scrolled; first emphasis ${firstMs} ms, wall ${Date.now() - t0} ms`);
@@ -204,8 +228,15 @@ try {
   await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
   const m0 = await metrics();
   await cdp.send("Profiler.start");
+  if (SWITCH) {
+    // Reading mode on and settled first; what is measured is the font change.
+    await ev(ENABLE);
+    for (let i = 0; i < 100; i++) { await sleep(100); const d = await ev(DONE); if (d.pages && d.open === 0 && d.bolded > 0) break; }
+    await sleep(3000);
+  }
+  await ev(STALLS_START);
   const t0 = Date.now();
-  await ev(ENABLE);
+  await ev(SWITCH ? `new Promise((r)=>chrome.storage.sync.set({ fontMode: ${JSON.stringify(SWITCH)} },r))` : ENABLE);
   let st = null, firstMs = null;
   for (let i = 0; i < 600; i++) {
     await sleep(100);
@@ -214,10 +245,13 @@ try {
     if (st.pages && st.open === 0 && st.bolded > 0) break;
   }
   const doneMs = Date.now() - t0;
-  await sleep(1500); // work queued behind the last page (annotation, detail passes)
+  // A font switch restores and re-processes pages that already count as
+  // handled (skip reasons survive a restore), so give it a fixed window.
+  await sleep(SWITCH ? 6000 : 1500); // work queued behind the last page (annotation, detail passes)
   const { profile } = await cdp.send("Profiler.stop");
   const m1 = await metrics();
-  report(profile, m0, m1, `${LABEL}: zoom ${ZOOM}${DPR ? `, dpr ${DPR}` : ""}, ${st.pages} rendered pages; first emphasis ${firstMs} ms, all rendered pages processed ${doneMs} ms${CLICK ? " (toolbar button)" : ""}`);
+  await printStalls();
+  report(profile, m0, m1, `${LABEL}: zoom ${ZOOM}${DPR ? `, dpr ${DPR}` : ""}, ${st.pages} rendered pages; first emphasis ${firstMs} ms, all rendered pages processed ${doneMs} ms${CLICK ? " (toolbar button)" : ""}${SWITCH ? ` — FONT SWITCH to ${SWITCH}` : ""}`);
 } catch (e) {
   if (e !== null) {
     console.error(`${LABEL} diag-perf error: ${e?.message || e}`);

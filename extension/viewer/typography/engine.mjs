@@ -2406,6 +2406,7 @@ export class TypographyEngine {
     if (!canvas || !cr || !(cr.width > 0) || !(canvas.width > 0) || !(canvas.height > 0)) {
       return null;
     }
+    const tRead = globalThis.__fxDebug || globalThis.__fxPerf ? performance.now() : 0;
     try {
       this.#snapCtx ??= document
         .createElement("canvas")
@@ -2421,6 +2422,9 @@ export class TypographyEngine {
       }
       ctx.drawImage(canvas, 0, 0);
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      if (tRead) {
+        (globalThis.__fxReadbacks ??= []).push({ ms: Math.round(performance.now() - tRead), px: canvas.width * canvas.height }); // test introspection
+      }
       return {
         d: img.data,
         W: canvas.width,
@@ -2457,6 +2461,21 @@ export class TypographyEngine {
     const cached = memo.get(canvas);
     // Re-read if the canvas was resized under us (a re-render at a new zoom).
     if (cached && cached.w === canvas.width && cached.h === canvas.height) {
+      if (cached.pixels && cached.snap === undefined) {
+        // Read in the worker before the pass (#prefetchPixels): the geometry
+        // is measured NOW, where the pass uses it, not where the read began.
+        const cr = canvas.getBoundingClientRect();
+        cached.snap = cr.width > 0 && cr.height > 0
+          ? { d: cached.pixels, W: cached.w, H: cached.h, cr, csx: cached.w / cr.width, csy: cached.h / cr.height }
+          : null;
+        if (globalThis.__fxDebug && cached.snap) {
+          // Proof the worker's bytes are the canvas's (test introspection).
+          const direct = this.#readCanvasPixels(canvas);
+          let differ = direct ? 0 : -1;
+          if (direct) for (let i = 0; i < direct.d.length; i++) if (direct.d[i] !== cached.pixels[i]) differ++;
+          (globalThis.__fxPixelParity ??= []).push(differ);
+        }
+      }
       return cached.snap;
     }
     const snap = this.#readCanvasPixels(canvas);
@@ -2606,7 +2625,7 @@ export class TypographyEngine {
         if (worker) {
           try {
             const bitmap = offscreen ? canvas.transferToImageBitmap() : await createImageBitmap(canvas);
-            rules = await this.#scanInWorker(worker, bitmap, kx, ky);
+            rules = (await this.#workerJob(worker, { kind: "rules", bitmap, kx, ky }, [bitmap])).rules;
             outcome = "ok (worker)";
           } catch { rules = null; }
         }
@@ -2643,7 +2662,7 @@ export class TypographyEngine {
         if (!job) return;
         this.#scanJobs.delete(data.id);
         if (data.error) job.reject(new Error(data.error));
-        else job.resolve(data.rules);
+        else job.resolve(data);
       };
       w.onerror = (e) => {
         // Failed to start or crashed: this and every later scan falls back.
@@ -2660,8 +2679,8 @@ export class TypographyEngine {
     return this.#scanWorker;
   }
 
-  /** One page's scan in the worker; rejects after RULE_RENDER_MS. */
-  #scanInWorker(worker, bitmap, kx, ky) {
+  /** One job in the worker (rules-worker.mjs); rejects after RULE_RENDER_MS. */
+  #workerJob(worker, msg, transfer) {
     const id = ++this.#scanSeq;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -2672,8 +2691,32 @@ export class TypographyEngine {
         resolve: (r) => { clearTimeout(timer); resolve(r); },
         reject: (e) => { clearTimeout(timer); reject(e); },
       });
-      worker.postMessage({ id, bitmap, kx, ky }, [bitmap]);
+      worker.postMessage({ ...msg, id }, transfer);
     });
+  }
+
+  /**
+   * The page's canvases' pixels, read in the worker: a Map in the shape of the
+   * pass's snapshot memo (see #snapshotFor), or null when there is no worker.
+   * A main-thread readback of a GPU-backed canvas is a synchronous GPU->CPU
+   * copy — up to ~100 ms a page measured on a 2x display, the stall a reader
+   * felt as the pointer slowing down; createImageBitmap hands the canvas over
+   * without blocking and the copy happens in the worker.
+   */
+  async #prefetchPixels(pageView) {
+    const worker = this.#rulesWorker();
+    if (!worker) return null;
+    const memo = new Map();
+    const detail = pageView.detailView?.renderingState === 3 ? pageView.detailView.canvas : null;
+    for (const canvas of [pageView.canvas, detail]) {
+      if (!canvas?.width || !canvas.height) continue;
+      const w = canvas.width, h = canvas.height;
+      // No colour or alpha conversion: the checks must see the canvas's bytes.
+      const bitmap = await createImageBitmap(canvas, { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+      const { buffer } = await this.#workerJob(worker, { kind: "pixels", bitmap }, [bitmap]);
+      memo.set(canvas, { w, h, pixels: new Uint8ClampedArray(buffer) });
+    }
+    return memo;
   }
 
   /** True when the item is set in a math/symbol/mono/small-caps/bold face.
@@ -2786,8 +2829,10 @@ export class TypographyEngine {
     } catch {
       /* no annotations — regex-based URL handling still applies */
     }
-    // Phase timings (test introspection): what blocks the main thread, and where.
-    const timing = globalThis.__fxDebug ? { page: pageNumber, t0: performance.now(), classify: 0, obstacles: 0, chunks: [] } : null;
+    // Phase timings (test introspection, __fxDebug or __fxPerf — the latter
+    // records timings WITHOUT the debug-only extra work): what blocks the main
+    // thread, and where.
+    const timing = globalThis.__fxDebug || globalThis.__fxPerf ? { page: pageNumber, t0: performance.now(), classify: 0, obstacles: 0, chunks: [] } : null;
     if (holder.cancelled) {
       holder.resolve();
       return holder.promise;
@@ -3219,6 +3264,20 @@ export class TypographyEngine {
         }, 150);
         return;
       }
+      // The canvases' pixels, read in the worker before the block below needs
+      // them (#prefetchPixels); the pass resumes when they arrive. Without a
+      // worker, or if it fails, the block reads them here as it always did.
+      if (!obstacleRects && holder.pixels === undefined) {
+        holder.pixels = null; // in flight
+        this.#prefetchPixels(pageView)
+          .then((m) => { holder.pixels = m ?? false; }, () => { holder.pixels = false; })
+          .finally(() => {
+            if (holder.cancelled) holder.resolve();
+            else requestIdleCallback(work, { timeout: 200 });
+          });
+        return;
+      }
+      if (!obstacleRects && holder.pixels === null) return; // the read resumes the pass
       const layerRect = textLayerDiv.getBoundingClientRect();
       const tObs = timing && !obstacleRects ? performance.now() : 0;
       if (!obstacleRects) {
@@ -3227,7 +3286,7 @@ export class TypographyEngine {
         // ink checks and the baseline calibration all read the same painted
         // base canvas, and a readback is the most expensive thing here.
         // Dropped at the end of the block, so a re-render never reuses pixels.
-        const snapMemo = new Map();
+        const snapMemo = new Map(holder.pixels || []);
         // Canvas line-art (table rules, box frames, underlines, separators)
         // becomes obstacles too, so masks clamp around it exactly like skipped
         // text — the text layer alone can't see these.
