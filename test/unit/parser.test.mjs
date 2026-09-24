@@ -11,6 +11,7 @@ import {
   bibAuthors,
   findCitations,
   findInternalRefs,
+  findInternalRefsAcrossBreaks,
   resolveCitation,
 } from "../../extension/viewer/references/parser.mjs";
 
@@ -1118,4 +1119,25 @@ test("findCitations: the citation grammar cannot be made to backtrack", () => {
     const ms = Date.now() - t0;
     assert.ok(ms < 2000, `took ${ms}ms on ${text.length} chars — backtracking is back`);
   }
+});
+
+// A reference broken over two lines by a hyphen ("As shown in Fig-" / "ure 6,")
+// was never coloured: the annotator matches the page's spans joined by "\n",
+// and neither half is a reference on its own.
+test("findInternalRefsAcrossBreaks: a reference hyphenated across a line break", () => {
+  const cut = (t, r) => t.slice(r.start, r.end);
+  const t1 = "windows overlaps. As shown in Fig-\nure 6, benign and attack";
+  assert.deepEqual(findInternalRefsAcrossBreaks(t1).map((r) => cut(t1, r)), ["Fig-\nure 6"]);
+  const t2 = "listed in Ta-\nble 2 and Sec-\ntion 4.1 of the paper";
+  assert.deepEqual(findInternalRefsAcrossBreaks(t2).map((r) => cut(t2, r)), ["Ta-\nble 2", "Sec-\ntion 4.1"]);
+  // Offsets after a closed break still point at the right characters.
+  const t3 = "a multi-\nlevel design, see Figure 3";
+  assert.deepEqual(findInternalRefsAcrossBreaks(t3).map((r) => cut(t3, r)), ["Figure 3"]);
+  // Only a word's continuation is closed up: a capital or a digit after the
+  // break is a new word, as written.
+  assert.deepEqual(findInternalRefsAcrossBreaks("the Fig-\nUre 6"), []);
+  assert.deepEqual(findInternalRefsAcrossBreaks("see Figure-\n6"), findInternalRefs("see Figure-\n6"));
+  // Unbroken text: identical to findInternalRefs.
+  const t4 = "Section 3 and Tables 2-4 [5]";
+  assert.deepEqual(findInternalRefsAcrossBreaks(t4), findInternalRefs(t4));
 });

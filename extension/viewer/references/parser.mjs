@@ -745,6 +745,29 @@ export function findInternalRefs(text) {
   return out;
 }
 
+/**
+ * findInternalRefs over text assembled from text-layer lines joined by "\n",
+ * seeing through a line-end hyphen: "Fig-\nure 6" is "Figure 6" broken over
+ * two lines, and neither half is a reference on its own, so it was left
+ * uncoloured. A break is closed up only between a letter and a LOWERCASE
+ * letter — a hyphenated word's continuation — so "self-\nContained" and
+ * "Table-\n2" stay as written. Ranges are in `text`'s own offsets and cover
+ * both halves, the hyphen included.
+ */
+export function findInternalRefsAcrossBreaks(text) {
+  let flat = "";
+  const at = []; // flat offset -> text offset
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "-" && text[i + 1] === "\n" && /[A-Za-z]/.test(text[i - 1] ?? "") && /[a-z]/.test(text[i + 2] ?? "")) {
+      i++; // drop the hyphen and the break
+      continue;
+    }
+    at.push(i);
+    flat += text[i];
+  }
+  return findInternalRefs(flat).map((r) => ({ start: at[r.start], end: at[r.end - 1] + 1 }));
+}
+
 // A numeric citation bracket: a number list, optionally followed by a single
 // locator into the cited work — "[9, §5.2.2.1]", "[24, Section 5.2]",
 // "[26, Lemma 1]", "[58, §4.2, NOTE 2]". Only the leading number LIST is

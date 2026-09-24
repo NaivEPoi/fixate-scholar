@@ -16,7 +16,8 @@
 // on toggle-off. Work happens in idle-time chunks to avoid jank.
 
 import { emphasizeParts } from "./segmenter.mjs";
-import { findCitations } from "../references/parser.mjs";
+import { findCitations, findInternalRefs } from "../references/parser.mjs";
+import { scanRules } from "./rules.mjs";
 import { anchorNear } from "./pdfhints.mjs";
 
 const CHUNK = 150;
@@ -207,18 +208,8 @@ const MAX_SPACE_TRIM = 0.02;
 // R47, 12 spans on the ACL paper flipping emphasis between 100% and 180%. Each
 // value below is what the constant was at a zoom the gate had validated —
 // named beside it — and for the rule-finding lengths the most inclusive of
-// those, so no zoom loses an obstacle it used to have.
-//
-// RULE_STROKE is the stroke the scan must find in a pixel column, summed over
-// the rows the anti-aliasing spread it across. A 0.4pt hairline lands as one
-// dark pixel or two light ones depending on sub-pixel phase, and at 180% the
-// base canvas is CAPPED below one device px per CSS px (maxCanvasPixels) — the
-// per-pixel "luminance < 140" test read the same frame edge as a rule at 100%
-// and as nothing at 180%. Coverage summed across the spread is the stroke width
-// times its darkness at any resolution and any phase.
-const RULE_STROKE = 0.25; // min stroke, page px (~0.19pt of black)
-const RULE_MIN_LEN = 34; // ~60 CSS px at 180%
-const RULE_MAX_THICK = 3; // 3 CSS px at 100%
+// those, so no zoom loses an obstacle it used to have. The scan's own
+// constants and the scan itself are in rules.mjs (it also runs in a worker).
 const RULE_MIN_WIDTH = 22; // hRule width for table zones — ~40 CSS px at 180%
 const RULE_SAME_GAP = 2; // padded rule rects this close are one visual rule — 2 CSS px at 100%
 // Rules are found on ONE render of each page at this resolution — bitmap px per
@@ -246,132 +237,6 @@ const ZONE_CONT_LINES = 5;
 // merged into "sentences".
 const SMALL_TEXT = 0.7;
 
-/**
- * Long, thin dark runs in an RGBA bitmap of a page — table rules, box frames,
- * underlines, footnote separators — as {x0, y0, x1, y1} in the bitmap's own
- * pixels (x1/y1 exclusive). `ppu`/`ppuY` are bitmap px per page px (CSS px at
- * 100%), and every length is RULE_* × ppu, so the scan means the same thing at
- * any resolution it is handed. Guards against false positives from glyph rows:
- * a run must be RULE_MIN_LEN long, at most RULE_MAX_THICK thick after
- * band-merge, and ISOLATED (the rows just above and below the band are mostly
- * light within its x-extent — an in-glyph row fails because the glyphs
- * continue above/below).
- *
- * A pixel counts as rule ink when the ink summed over it and its two
- * neighbours ACROSS the rule (rows for a horizontal rule, columns for a
- * vertical one) reaches RULE_STROKE page px: that sum is the rasterised stroke
- * width whatever the resolution and sub-pixel phase. The pixel must carry some
- * ink itself, so a band never grows onto the blank rows beside it.
- *
- * One dark/light byte per pixel, resolved in a single row-major sweep: the band
- * scans and isolation checks used to re-evaluate the luminance predicate per
- * pixel through a closure, and the vertical scan walked column-major over the
- * RGBA buffer, missing cache on essentially every read.
- */
-export function scanRules(data, W, H, ppu, ppuY) {
-  const out = [];
-  const ink = new Uint8Array(W * H);
-  for (let p = 0, i = 0; p < ink.length; p++, i += 4) {
-    if (data[i + 3] > 40) {
-      ink[p] = 255 - (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-    }
-  }
-  const need = (k) => Math.min(255 * 2.7, 255 * RULE_STROKE * k); // 3-px window max is 3×255
-  const needH = need(ppuY), needV = need(ppu);
-  // A pixel must carry half the window's requirement — the share of an
-  // evenly split stroke — but never more than the old per-pixel test asked
-  // (ink > 115). The floor is relative: a fixed one outranked the whole
-  // requirement on a low-resolution canvas (ppu ≲ 1) and rejected an evenly
-  // split hairline there. 12 only keeps paper-white noise out.
-  const own = (t) => Math.max(12, Math.min(115, t / 2));
-  const ownH = own(needH), ownV = own(needV);
-  const dark = new Uint8Array(W * H); // horizontal-rule ink (window across rows)
-  const darkV = new Uint8Array(W * H); // vertical-rule ink (window across columns)
-  for (let y = 0; y < H; y++) {
-    const row = y * W;
-    const up = y > 0 ? row - W : -1;
-    const dn = y < H - 1 ? row + W : -1;
-    for (let x = 0; x < W; x++) {
-      const p = row + x;
-      const v = ink[p];
-      if (!v) continue;
-      if (v >= ownH && v + (up >= 0 ? ink[up + x] : 0) + (dn >= 0 ? ink[dn + x] : 0) >= needH) dark[p] = 1;
-      if (v >= ownV && v + (x > 0 ? ink[p - 1] : 0) + (x < W - 1 ? ink[p + 1] : 0) >= needV) darkV[p] = 1;
-    }
-  }
-  // Isolation probes sit one page px outside a band (never under 2 device px).
-  const isoY = Math.max(2, Math.round(ppuY));
-  const isoX = Math.max(2, Math.round(ppu));
-  const darkFrac = (x0, x1, y) => {
-    if (y < 0 || y >= H) return 0;
-    let n = 0, d = 0;
-    const row = y * W;
-    for (let x = x0; x < x1; x += 2) { n++; if (dark[row + x]) d++; }
-    return n ? d / n : 0;
-  };
-  const minLen = Math.max(24, Math.round(RULE_MIN_LEN * ppu));
-  // +2: the across-window can admit an anti-aliased fringe row on EACH side.
-  const maxThick = Math.max(3, Math.round(RULE_MAX_THICK * ppuY) + 2);
-  // Horizontal runs per row → merge vertically adjacent runs into bands.
-  const bands = []; // {y0,y1,x0,x1}
-  for (let y = 0; y < H; y++) {
-    let run = 0, x0 = 0;
-    const row = y * W;
-    for (let x = 0; x <= W; x++) {
-      if (x < W && dark[row + x]) { if (!run) x0 = x; run++; continue; }
-      if (run >= minLen) {
-        const x1 = x;
-        // findLast and slice().reverse().find() return the same element,
-        // but `??` fell through to the copy whenever findLast found
-        // NOTHING — the common case — so the O(n) copy of an up-to-800
-        // entry list ran on nearly every completed run.
-        const prev = bands.findLast((b) => b.y1 === y - 1 && x0 < b.x1 + 4 && x1 > b.x0 - 4);
-        if (prev) { prev.y1 = y; prev.x0 = Math.min(prev.x0, x0); prev.x1 = Math.max(prev.x1, x1); }
-        else if (bands.length < 800) bands.push({ y0: y, y1: y, x0, x1 });
-      }
-      run = 0;
-    }
-  }
-  for (const b of bands) {
-    if (b.y1 - b.y0 + 1 > maxThick) continue; // too thick — a filled area/image
-    // Isolation: rows just outside the band are mostly light in its span.
-    if (darkFrac(b.x0, b.x1, b.y0 - isoY) > 0.35 || darkFrac(b.x0, b.x1, b.y1 + isoY) > 0.35) continue;
-    out.push({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 + 1 });
-    if (out.length >= 400) break;
-  }
-  // Vertical rules (cell borders, listing frames) — the same scan
-  // transposed. Column step 1, run down y; merge horizontally adjacent.
-  const darkFracV = (y0, y1, x) => {
-    if (x < 0 || x >= W) return 0;
-    let n = 0, d = 0;
-    for (let y = y0; y < y1; y += 2) { n++; if (darkV[y * W + x]) d++; }
-    return n ? d / n : 0;
-  };
-  const minLenV = Math.max(24, Math.round(RULE_MIN_LEN * ppuY));
-  const maxThickV = Math.max(3, Math.round(RULE_MAX_THICK * ppu) + 2);
-  const vbands = []; // {x0,x1,y0,y1}
-  for (let x = 0; x < W; x++) {
-    let run = 0, y0 = 0;
-    for (let y = 0; y <= H; y++) {
-      if (y < H && darkV[y * W + x]) { if (!run) y0 = y; run++; continue; }
-      if (run >= minLenV) {
-        const y1 = y;
-        // Same element as the reverse-copy scan, without copying the list.
-        const prev = vbands.findLast((b) => b.x1 === x - 1 && y0 < b.y1 + 4 && y1 > b.y0 - 4);
-        if (prev) { prev.x1 = x; prev.y0 = Math.min(prev.y0, y0); prev.y1 = Math.max(prev.y1, y1); }
-        else if (vbands.length < 400) vbands.push({ x0: x, x1: x, y0, y1 });
-      }
-      run = 0;
-    }
-  }
-  for (const b of vbands) {
-    if (b.x1 - b.x0 + 1 > maxThickV) continue;
-    if (darkFracV(b.y0, b.y1, b.x0 - isoX) > 0.35 || darkFracV(b.y0, b.y1, b.x1 + isoX) > 0.35) continue;
-    out.push({ x0: b.x0, y0: b.y0, x1: b.x1 + 1, y1: b.y1 });
-    if (out.length >= 700) break;
-  }
-  return out;
-}
 
 // Key a font by its bare leading family name: the same face reaches spans as
 // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12, sans-serif'
@@ -408,6 +273,9 @@ export class TypographyEngine {
   #ruleBaseline = new WeakMap(); // pdfPage -> its rules in page px (#baselineRules)
   #ruleQueue = Promise.resolve(); // baseline renders, one at a time
   #ruleGen = 0; // bumped per document: a queued render of a closed one is skipped
+  #scanWorker = undefined; // rules-worker.mjs: undefined until first needed, null if unavailable
+  #scanJobs = new Map(); // job id -> { resolve, reject }
+  #scanSeq = 0;
   #pageFonts = new Map(); // pageNumber -> Set<famKey> used by processed spans
   #inkRetryPages = new Set(); // pages whose ink decisions used a capped-resolution canvas
   #batching = false; // document-wide setters record only; endBatch re-processes once
@@ -2706,11 +2574,15 @@ export class TypographyEngine {
       const t0 = performance.now();
       let outcome = "ok";
       let task = null, timer = 0;
-      const canvas = document.createElement("canvas");
+      // An OffscreenCanvas where available: its pixels go to the worker by
+      // transferToImageBitmap(), a hand-over with no copy — createImageBitmap
+      // of a page canvas copied it on the main thread, ~20 ms a page.
+      const vp = page.getViewport({ scale: ptScale * ppu, rotation });
+      const offscreen = typeof OffscreenCanvas === "function";
+      const canvas = offscreen
+        ? new OffscreenCanvas(Math.round(vp.width), Math.round(vp.height))
+        : Object.assign(document.createElement("canvas"), { width: Math.round(vp.width), height: Math.round(vp.height) });
       try {
-        const vp = page.getViewport({ scale: ptScale * ppu, rotation });
-        canvas.width = Math.round(vp.width);
-        canvas.height = Math.round(vp.height);
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         task = page.render({
           canvasContext: ctx,
@@ -2722,8 +2594,28 @@ export class TypographyEngine {
         await task.promise;
         const W = canvas.width, H = canvas.height;
         const kx = W / entry.w, ky = H / entry.h;
-        entry.rules = scanRules(ctx.getImageData(0, 0, W, H).data, W, H, kx, ky)
+        const scanHere = () => scanRules(ctx.getImageData(0, 0, W, H).data, W, H, kx, ky)
           .map((b) => [b.x0 / kx, b.y0 / ky, b.x1 / kx, b.y1 / ky]);
+        // Under __fxDebug the main-thread scan is taken BEFORE the hand-over
+        // (which empties an OffscreenCanvas), to prove the worker agrees.
+        const reference = globalThis.__fxDebug ? scanHere() : null;
+        // The readback and the scan in the worker, off the main thread; here
+        // only if it is unavailable or fails.
+        let rules = null;
+        const worker = this.#rulesWorker();
+        if (worker) {
+          try {
+            const bitmap = offscreen ? canvas.transferToImageBitmap() : await createImageBitmap(canvas);
+            rules = await this.#scanInWorker(worker, bitmap, kx, ky);
+            outcome = "ok (worker)";
+          } catch { rules = null; }
+        }
+        // Without the worker: scan here — from the reference if it was taken,
+        // since a transferred OffscreenCanvas no longer holds the pixels.
+        entry.rules = rules ?? reference ?? (offscreen && worker ? null : scanHere());
+        if (reference && rules && JSON.stringify(reference) !== JSON.stringify(rules)) {
+          outcome = "ok (worker) MISMATCH"; // test introspection
+        }
       } catch (e) {
         entry.rules = null; // the pass falls back to the live canvas
         outcome = String(e?.name || e).slice(0, 60);
@@ -2738,6 +2630,50 @@ export class TypographyEngine {
       }
     });
     return entry;
+  }
+
+  /** The rule-scan worker, started on first use; null where workers are
+   *  unavailable or it failed (every scan then runs on the main thread). */
+  #rulesWorker() {
+    if (this.#scanWorker !== undefined) return this.#scanWorker;
+    try {
+      const w = new Worker(new URL("./rules-worker.mjs", import.meta.url), { type: "module" });
+      w.onmessage = ({ data }) => {
+        const job = this.#scanJobs.get(data.id);
+        if (!job) return;
+        this.#scanJobs.delete(data.id);
+        if (data.error) job.reject(new Error(data.error));
+        else job.resolve(data.rules);
+      };
+      w.onerror = (e) => {
+        // Failed to start or crashed: this and every later scan falls back.
+        e.preventDefault?.();
+        for (const job of this.#scanJobs.values()) job.reject(new Error("rules worker failed"));
+        this.#scanJobs.clear();
+        this.#scanWorker = null;
+        w.terminate();
+      };
+      this.#scanWorker = w;
+    } catch {
+      this.#scanWorker = null;
+    }
+    return this.#scanWorker;
+  }
+
+  /** One page's scan in the worker; rejects after RULE_RENDER_MS. */
+  #scanInWorker(worker, bitmap, kx, ky) {
+    const id = ++this.#scanSeq;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#scanJobs.delete(id);
+        reject(new Error("rules worker timed out"));
+      }, RULE_RENDER_MS);
+      this.#scanJobs.set(id, {
+        resolve: (r) => { clearTimeout(timer); resolve(r); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+      worker.postMessage({ id, bitmap, kx, ky }, [bitmap]);
+    });
   }
 
   /** True when the item is set in a math/symbol/mono/small-caps/bold face.
@@ -2850,6 +2786,8 @@ export class TypographyEngine {
     } catch {
       /* no annotations — regex-based URL handling still applies */
     }
+    // Phase timings (test introspection): what blocks the main thread, and where.
+    const timing = globalThis.__fxDebug ? { page: pageNumber, t0: performance.now(), classify: 0, obstacles: 0, chunks: [] } : null;
     if (holder.cancelled) {
       holder.resolve();
       return holder.promise;
@@ -3070,11 +3008,15 @@ export class TypographyEngine {
       // weight; instead we leave them exactly as the document set them. They
       // are picked up as obstacles (see obstacleDivs), so neighbouring per-span
       // masks clamp around them and never white them out.
+      // ...except a citation or an in-paper reference, which have to be
+      // processed to be coloured: "[12]" always was; "(§3.5)," was not, and no
+      // reference printed without a word ("§4.2", "(§3.5)") was ever coloured.
       const hasCitations = trimmed.includes("[") && findCitations(trimmed).length > 0;
+      const hasRefs = trimmed.includes("§") && findInternalRefs(trimmed).length > 0;
       if (
         isSpecial({ item }) ||
         trimmed.length < 2 ||
-        (!/[A-Za-zÀ-ɏ]/.test(trimmed) && !hasCitations)
+        (!/[A-Za-zÀ-ɏ]/.test(trimmed) && !hasCitations && !hasRefs)
       ) {
         return reject(div, "special-or-short");
       }
@@ -3217,6 +3159,12 @@ export class TypographyEngine {
         : 0;
 
     const work = (deadline) => {
+      const tWork = timing ? performance.now() : 0;
+      try { return workBody(deadline); } finally {
+        if (timing) timing.chunks.push(Math.round(performance.now() - tWork));
+      }
+    };
+    const workBody = (deadline) => {
       if (holder.cancelled) {
         holder.resolve();
         return;
@@ -3272,6 +3220,7 @@ export class TypographyEngine {
         return;
       }
       const layerRect = textLayerDiv.getBoundingClientRect();
+      const tObs = timing && !obstacleRects ? performance.now() : 0;
       if (!obstacleRects) {
         obstacleRects = [];
         // One snapshot per canvas for this whole block: the rule detection, the
@@ -3826,6 +3775,7 @@ export class TypographyEngine {
         }
         return false;
       };
+      if (tObs) timing.obstacles = Math.round(performance.now() - tObs);
       while (i < pairs.length) {
         const end = Math.min(i + CHUNK, pairs.length);
         const batch = [];
@@ -4153,11 +4103,13 @@ export class TypographyEngine {
         }
       }
       this.#pending.delete(pageNumber);
+      if (timing) (globalThis.__fxTiming ??= []).push({ ...timing, total: Math.round(performance.now() - timing.t0) }); // test introspection
       holder.resolve();
     };
 
     // Measure only with the real faces: if the embedded fonts are still
     // loading (the Chrome race above), geometry reads would see the fallback.
+    if (timing) timing.classify = Math.round(performance.now() - timing.t0);
     const kick = () => requestIdleCallback(work, { timeout: 200 });
     if (typeof document !== "undefined" && document.fonts?.ready) {
       document.fonts.ready.then(kick, kick);

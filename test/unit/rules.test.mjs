@@ -10,7 +10,7 @@
 // (a thick dark band) never is.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanRules } from "../../extension/viewer/typography/engine.mjs";
+import { scanRules } from "../../extension/viewer/typography/rules.mjs";
 
 const W_PAGE = 400, H_PAGE = 300; // page px
 

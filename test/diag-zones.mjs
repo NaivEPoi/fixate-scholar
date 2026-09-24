@@ -105,7 +105,7 @@ const READ = `(() => {
   const tl = pv.textLayer.div.getBoundingClientRect();
   const dims = { textLayer: [+(tl.left - cr0.left).toFixed(1), +tl.width.toFixed(1), +tl.height.toFixed(1)], canvasH: +cr0.height.toFixed(1), canvasCss: +cr0.width.toFixed(1), divCss: +box.width.toFixed(1), viewport: +pv.viewport.width.toFixed(1), canvasPx: pv.canvas.width };
   const bl = globalThis.__fxBaseline || [];
-  const baseline = { renders: bl.length, maxMs: Math.max(0, ...bl.map((b) => b.ms)), failed: bl.filter((b) => b.outcome !== "ok").map((b) => b.page + ":" + b.outcome),
+  const baseline = { renders: bl.length, maxMs: Math.max(0, ...bl.map((b) => b.ms)), worker: bl.filter((b) => b.outcome.includes("worker")).length, mismatch: bl.filter((b) => b.outcome.includes("MISMATCH")).map((b) => b.page), failed: bl.filter((b) => !b.outcome.startsWith("ok")).map((b) => b.page + ":" + b.outcome),
     thisPage: bl.filter((b) => b.page === ${PAGE}).map((b) => b.ms + "ms/" + b.outcome) };
   return { baseline, dims, scale: z, rules, history, zoneLines: zl, spans, probe };
 })()`;
