@@ -2691,7 +2691,14 @@ export class TypographyEngine {
         resolve: (r) => { clearTimeout(timer); resolve(r); },
         reject: (e) => { clearTimeout(timer); reject(e); },
       });
-      worker.postMessage({ ...msg, id }, transfer);
+      try {
+        worker.postMessage({ ...msg, id }, transfer);
+      } catch (e) {
+        // Refused before it left (a transfer that cannot be cloned): no reply
+        // will come, so settle here rather than leave the job to time out.
+        this.#scanJobs.get(id)?.reject(e);
+        this.#scanJobs.delete(id);
+      }
     });
   }
 

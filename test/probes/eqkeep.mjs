@@ -171,6 +171,11 @@ export function summarize(state, { label = "doc" } = {}) {
     out.push(`  FAIL p${r.page} ${r.violations} emphasized span(s) in a numbered equation ${JSON.stringify(r.bad)}`);
   }
   let ok = true;
+  // No page read at all is no measurement: 0 violations of 0 pages used to pass.
+  if (!results.length) {
+    out.push("  FAIL no page was probed — the check proved nothing");
+    ok = false;
+  }
   if (totals.violations) {
     out.push(`  FAIL ${totals.violations} processed span(s) inside a numbered displayed equation`);
     ok = false;

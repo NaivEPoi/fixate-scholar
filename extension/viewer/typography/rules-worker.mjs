@@ -23,7 +23,9 @@ function pixelsOf(bitmap) {
   const ctx = new OffscreenCanvas(W, H).getContext("2d", { willReadFrequently: true });
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close();
-  return { W, H, data: ctx.getImageData(0, 0, W, H).data };
+  const data = ctx.getImageData(0, 0, W, H).data;
+  ctx.canvas.width = ctx.canvas.height = 0; // its backing store, now — not at the next GC
+  return { W, H, data };
 }
 
 self.onmessage = ({ data: msg }) => {

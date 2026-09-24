@@ -393,7 +393,7 @@ try {
     }
     console.log(`  REPROCESS state: ${JSON.stringify(why)}`);
   }
-  if (!FXOFF && domState && domState.processedSpans === 0 && !process.exitCode) {
+  if (!FXOFF && (!domState || domState.processedSpans === 0) && !process.exitCode) {
     // No verdict (75): the sweep retries it rather than scoring silence.
     console.log("  NO VERDICT — the engine processed no span of this document, so its console was not exercised");
     process.exitCode = 75;

@@ -288,6 +288,12 @@ try {
   console.log(`\n== summary`);
   for (const r of runs) console.log(`zoom ${r.zoom.padEnd(8)} processed=${r.processed} emphasized=${r.emphasized} offenders=${r.offenders}`);
   console.log(`(processed/emphasized totals are for reference only; they are not the pass/fail)`);
+  // A zoom that read no page at all proved nothing (its offender count of 0 is
+  // not a finding).
+  if (runs.some((r) => !r.check.pages)) {
+    console.log("  FAIL no page was probed — the check proved nothing");
+    process.exitCode = 1;
+  }
   const offenders = runs.reduce((n, r) => n + r.offenders, 0);
   console.log(`\nTOTAL offenders: ${offenders}`);
   if (runs.length > 1) console.log(`TOTAL zoom flips: ${flips}${unmatched ? `  (${unmatched} span key(s) present at only some zooms, not compared)` : ""}`);
