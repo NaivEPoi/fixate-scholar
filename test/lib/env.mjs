@@ -11,7 +11,7 @@
 // FX_EDGE / FX_CHROME / FX_BROWSER environment variables.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,35 @@ export function outDir(sub = "") {
  */
 export function profileDir(tag, { persistent = false } = {}) {
   return join(tmpdir(), persistent ? `fx-profile-${tag}` : `fx-${tag}-${process.pid}`);
+}
+
+/**
+ * The debug port a harness browser chose for itself. Launched with
+ * --remote-debugging-port=0 the browser binds a FREE port and writes it to
+ * <profile>/DevToolsActivePort; this waits for that file (written after
+ * `since`, so a stale one from an earlier run in a reused profile is ignored).
+ *
+ * Harnesses used to pick `base + pid % N`. With 8 lanes two of them regularly
+ * landed on the same number, the second browser could not bind it, and its
+ * harness silently drove the FIRST harness's browser: two documents in one
+ * browser, the other's tab in front (this one hidden, so the engine paused),
+ * the other harness switching reading mode off mid-measurement. The gate read
+ * that as unprocessed pages, "zoom flips", documents with nothing processed and
+ * emphasis that never came back after a toggle.
+ */
+export async function devtoolsPort(userDataDir, since = 0, { timeoutMs = 30000 } = {}) {
+  const file = join(userDataDir, "DevToolsActivePort");
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      if (statSync(file).mtimeMs >= since - 2000) {
+        const port = parseInt(readFileSync(file, "utf8").split("\n")[0], 10);
+        if (port > 0) return port;
+      }
+    } catch { /* not written yet */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("debugger endpoint never came up (no DevToolsActivePort)");
 }
 
 /**

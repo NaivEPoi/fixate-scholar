@@ -35,7 +35,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 import { connect } from "./lib/cdp.mjs";
 import * as citepoint from "./probes/citepoint.mjs";
 
@@ -51,13 +51,17 @@ const RANGE = (ARGS.find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split
 // rather than made to hammer the reference sources for hundreds of cards.
 const MAX = parseInt(ARGS.find((a) => a.startsWith("--max="))?.slice(6) ?? "40", 10);
 const EXT = extensionDir;
-const PORT = 9411 + (process.pid % 130);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
 const userDataDir = join(tmpdir(), `fx-cp-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,2000",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,
   `--disable-extensions-except=${EXT}`, "about:blank",

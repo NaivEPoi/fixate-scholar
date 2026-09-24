@@ -21,7 +21,7 @@
 // Usage: --url= --label= --page=N --find="word" [--pad=60] [--zoom=2.6] [--nth=1]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync, writeFileSync } from "node:fs";
-import { browserPath, extensionDir, outDir, profileDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, outDir, profileDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 const URL0 = arg("url"), LABEL = arg("label", "doc"), PAGE = parseInt(arg("page", "1"), 10);
@@ -29,14 +29,18 @@ const FIND = arg("find"), PAD = parseInt(arg("pad", "60"), 10), ZOOM = arg("zoom
 const NTH = parseInt(arg("nth", "1"), 10);
 if (!URL0 || !FIND) { console.error('usage: --url= --page=N --find="word"'); process.exit(2); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const PORT = 12600 + (process.pid % 300);
-const userDataDir = profileDir(`wordshot-${PORT}`);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
+const userDataDir = profileDir("wordshot");
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run", "--no-default-browser-check",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run", "--no-default-browser-check",
   "--disable-sync", "--window-size=2600,2400", `--user-data-dir=${userDataDir}`,
   `--load-extension=${extensionDir}`, `--disable-extensions-except=${extensionDir}`, "about:blank",
 ], { stdio: "ignore" });
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 let ws, nextId = 0;
 const send = (method, params = {}) => new Promise((resolve, reject) => {
   const id = ++nextId;

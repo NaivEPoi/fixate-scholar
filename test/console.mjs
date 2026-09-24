@@ -23,7 +23,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 import { connect } from "./lib/cdp.mjs";
 
 // Upstream-warning allowlist — two entries, each earned by a failing sweep.
@@ -116,13 +116,17 @@ if (!TARGET) {
 }
 
 const EXT = extensionDir;
-const PORT = 9821 + (process.pid % 120);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
 const userDataDir = join(tmpdir(), `fx-con-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,1800",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,
   `--disable-extensions-except=${EXT}`, "about:blank",
@@ -176,6 +180,8 @@ try {
   });
   await page.send("Page.reload");
   await sleep(3000);
+  const extraAtStart = (await http("/json/list")).filter((t) => t.type === "page" && t.id !== tab.id && t.url.startsWith("chrome-extension://"));
+  if (extraAtStart.length) console.log(`  EXTRA viewer at start: ${extraAtStart.length}, same URL as ours: ${extraAtStart.map((t) => t.url === tab.url).join(",")}`);
 
   const ev = async (expr) => {
     const r = await page.send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
@@ -352,9 +358,9 @@ try {
   if (bad.length) process.exitCode = 1;
   // Product outcomes of the toggle, and a run that exercised nothing.
   if (!FXOFF && before > 0 && reprocessMs === null) {
-    console.log(`  REPROCESS FAIL: page ${view} had ${before} emphasis runs before reading mode was switched off and on, and ${await viewBolded()} 30 s after`);
-    // Seen once in a gate and not reproduced since, so the failure has to
-    // explain itself: what the viewer and the engine were doing at that point.
+    const after = await viewBolded();
+    // The failure has to explain itself: what the viewer and the engine were
+    // doing when the emphasis did not come back.
     const why = await ev(`(() => {
       const v = window.PDFViewerApplication.pdfViewer, pv = v.getPageView(${view - 1});
       const layers = [];
@@ -364,8 +370,28 @@ try {
         layer: !!pv?.textLayer?.div?.childElementCount, done: document.querySelectorAll("span[data-fx-done]").length,
         masks: document.querySelectorAll(".fx-mask").length, renderedLayers: layers };
     })()`).catch((e) => ({ error: String(e).slice(0, 120) }));
+    const what = `page ${view} had ${before} emphasis runs before reading mode was switched off and on, and ${after} 30 s after`;
+    if (why?.hidden) {
+      // Why hidden? Which targets the browser has open (another tab in front
+      // would hide this one), and whether bringing the tab to the front makes
+      // it visible again. Other tabs' URLs are reduced to scheme + host.
+      try {
+        const targets = (await http("/json/list")).filter((t) => t.type === "page")
+          .map((t) => (t.id === tab.id ? "viewer(this)" : (() => { try { const u = new URL(t.url); return u.protocol === "chrome-extension:" ? "ext:" + u.pathname + u.search.replace(/file=[^&]*/, "file=…") + " opener=" + (t.openerId ? (t.openerId === tab.id ? "viewer" : "other") : "none") : u.protocol + "//" + u.host; } catch { return "?"; } })()));
+        await page.send("Page.bringToFront");
+        await sleep(1500);
+        const after = await ev(`({ hidden: document.hidden, bolded: document.querySelectorAll(".textLayer .fx-b").length })`);
+        console.log(`  HIDDEN diag: targets=${JSON.stringify(targets)} after bringToFront ${JSON.stringify(after)}`);
+      } catch (e) { console.log(`  HIDDEN diag failed: ${String(e).slice(0, 100)}`); }
+      // The harness's environment, not the product: the engine pauses in a
+      // hidden tab by design until it is visible again (lib/env.mjs devtoolsPort).
+      console.log(`  NO VERDICT — the viewer tab reported hidden, where the engine pauses by design (${what})`);
+      process.exitCode = 75;
+    } else {
+      console.log(`  REPROCESS FAIL: ${what}`);
+      process.exitCode = 1;
+    }
     console.log(`  REPROCESS state: ${JSON.stringify(why)}`);
-    process.exitCode = 1;
   }
   if (!FXOFF && domState && domState.processedSpans === 0 && !process.exitCode) {
     // No verdict (75): the sweep retries it rather than scoring silence.

@@ -8,7 +8,7 @@
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 
-import { browserPath, extensionDir, profileDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, profileDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 import { connect } from "./lib/cdp.mjs";
 
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
@@ -20,13 +20,17 @@ if (!URL0) {
   console.error("usage: node test/diag-sizes.mjs --url=<pdf> [--label=name] [--below=0.7] [--zoom=1.0]");
   process.exit(2);
 }
-const PORT = 18900 + (process.pid % 200);
-const userDataDir = profileDir(`sizes-${PORT}`);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
+const userDataDir = profileDir("sizes");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1300,1900",
   `--user-data-dir=${userDataDir}`, `--load-extension=${extensionDir}`,
   `--disable-extensions-except=${extensionDir}`, "about:blank",

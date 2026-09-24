@@ -10,7 +10,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { browserPath, extensionDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 import { connect } from "./lib/cdp.mjs";
 import * as refcolor from "./probes/refcolor.mjs";
 
@@ -20,13 +20,17 @@ const URL0 =
 const ZOOM = process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? null;
 const RANGE = (process.argv.slice(2).find((a) => a.startsWith("--pages="))?.slice(8) ?? "").split("-").map((n) => parseInt(n, 10));
 const EXT = extensionDir;
-const PORT = 9071 + (process.pid % 130);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
 const userDataDir = join(tmpdir(), `fx-rc-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,2000",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,
   `--disable-extensions-except=${EXT}`, "about:blank",

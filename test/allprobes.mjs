@@ -36,7 +36,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
 
-import { browserPath, extensionDir, outDir, profileDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, outDir, profileDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 import { connect } from "./lib/cdp.mjs";
 import * as fontkeep from "./probes/fontkeep.mjs";
 import * as whyskip from "./probes/whyskip.mjs";
@@ -69,13 +69,17 @@ if (!URL0 || !CHECKS.length || unknown.length) {
 // inside one evaluation; citepoint clicks every citation it examines.
 const PROBE_MS = { tables: 90000, citepoint: 120000 };
 
-const PORT = 17200 + (process.pid % 300);
-const userDataDir = profileDir(`allprobes-${PORT}`);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
+const userDataDir = profileDir("allprobes");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,2000",
   `--user-data-dir=${userDataDir}`, `--load-extension=${extensionDir}`,
   `--disable-extensions-except=${extensionDir}`, "about:blank",
@@ -118,7 +122,7 @@ const handled = (page) => `(() => {
     prose++;
     if (s.closest("[data-fx-done], [data-fx-why], [data-fx-keep], [data-fx-table]")) handled++;
   }
-  return { prose, handled };
+  return { prose, handled, hidden: document.hidden };
 })()`;
 // Whether the engine has processed anything in this document yet.
 let engineSeen = false;
@@ -211,10 +215,14 @@ try {
     for (let i = 0; i < 30 && sig !== null; i++) {
       st = await ev(handled(pg)).catch(soft(null));
       if (!st || st.prose < 3 || st.handled === st.prose) break;
+      if (st.hidden) break;
       if (st.handled === lastHandled) { if (++still >= 5) break; } else { still = 0; lastHandled = st.handled; }
       await sleep(1000);
       sig = await settle(pg);
     }
+    // The engine pauses while its tab is hidden, and a hidden tab is the
+    // harness's doing (another tab in front: lib/env.mjs devtoolsPort), not the product.
+    if (st?.hidden) throw new Error(`p${pg}: the viewer tab reported hidden — the engine pauses there; no verdict`);
     // A page with no text layer after a full settle is one thing; three in a
     // row is the viewer no longer producing them at all (seen as "p6..p16: no
     // layer" in one gate). Grinding on costs minutes a page in re-reads and

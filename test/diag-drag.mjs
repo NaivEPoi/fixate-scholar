@@ -34,7 +34,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { browserPath, killBrowser } from "./lib/env.mjs";
+import { browserPath, killBrowser, devtoolsPort } from "./lib/env.mjs";
 
 // Full 12-paper corpus (same map as diagnose.mjs / audit.mjs). `--url=` runs any
 // PDF the viewer can fetch, which is how private corpora are verified without
@@ -78,15 +78,19 @@ if (!TARGET) {
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out"), { recursive: true });
 const EXT = join(root, "extension");
-const PORT = 9411 + (process.pid % 150);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
 const userDataDir = join(tmpdir(), `fx-drag-${process.pid}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
 const fail = (msg) => { failures.push(msg); console.log(`  FAIL ${msg}`); };
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,1800",
   `--user-data-dir=${userDataDir}`, `--load-extension=${EXT}`,
   `--disable-extensions-except=${EXT}`, "about:blank",

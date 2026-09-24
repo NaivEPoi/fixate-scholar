@@ -24,7 +24,7 @@
 // Usage: node test/fontkeep.mjs --url=<pdf> [--label=name] [--page=N | --all]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
-import { browserPath, extensionDir, profileDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, profileDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 import { connect } from "./lib/cdp.mjs";
 import * as fontkeep from "./probes/fontkeep.mjs";
 
@@ -33,14 +33,18 @@ const URL0 = arg("url"), LABEL = arg("label", "doc"), PAGE = parseInt(arg("page"
 const HEIGHT = arg("height", "2400");
 const ALL = process.argv.includes("--all");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const PORT = 11400 + (process.pid % 300);
-const userDataDir = profileDir(`privprobe-${PORT}`);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
+const userDataDir = profileDir("privprobe");
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run", "--no-default-browser-check",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run", "--no-default-browser-check",
   "--disable-sync", `--window-size=2600,${HEIGHT}`, `--user-data-dir=${userDataDir}`,
   `--load-extension=${extensionDir}`, `--disable-extensions-except=${extensionDir}`, "about:blank",
 ], { stdio: "ignore" });
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
 let cdp;
 const send = (method, params) => cdp.send(method, params);

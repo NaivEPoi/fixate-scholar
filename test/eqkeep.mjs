@@ -28,7 +28,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
 
-import { browserPath, extensionDir, outDir, profileDir, killBrowser } from "./lib/env.mjs";
+import { browserPath, extensionDir, outDir, profileDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
 import { connect } from "./lib/cdp.mjs";
 import * as eqkeep from "./probes/eqkeep.mjs";
 
@@ -42,13 +42,17 @@ if (!URL0) {
   console.error("usage: node test/eqkeep.mjs --url=<pdf> [--label=name] [--page=N | --all]");
   process.exit(2);
 }
-const PORT = 12400 + (process.pid % 300);
-const userDataDir = profileDir(`eqkeep-${PORT}`);
+let PORT = 0; // the free port the browser chose (lib/env.mjs devtoolsPort)
+const userDataDir = profileDir("eqkeep");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+const http = async (p, m = "GET") => {
+  PORT ||= await devtoolsPort(userDataDir, launched);
+  return (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
+};
 
+const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
-  `--remote-debugging-port=${PORT}`, "--headless=new", "--no-first-run",
+  `--remote-debugging-port=0`, "--headless=new", "--no-first-run",
   "--no-default-browser-check", "--disable-sync", "--window-size=1500,2400",
   `--user-data-dir=${userDataDir}`, `--load-extension=${extensionDir}`,
   `--disable-extensions-except=${extensionDir}`, "about:blank",
