@@ -316,7 +316,11 @@ embedded font at original size, mask the canvas duplicate):
 - **In-paper references** "Figure 3", "Table 9", "Section 5", "Eq. 2" → colored
   strong **red** (`#b91c1c`); the native in-document jump link is PRESERVED.
   NOT inside a citation: a locator ("[9, §5.2]", "[24, Section 3]") points into
-  the CITED work and stays the citation's blue.
+  the CITED work and stays the citation's blue. Matched across a line-end
+  hyphen ("Fig-" / "ure 3") and in a span with no word ("(§3.5),"). Coloured
+  WHOLE OR NOT AT ALL: a reference with a piece that stays on the canvas (a
+  "§" TeX set from the symbol font, a number in a kept face) is left
+  uncoloured rather than half red.
 
 ### RENDER QUALITY (verify visually + with probes):
 - Overlay glyphs sit on the **canvas baseline**: the engine MEASURES the

@@ -4763,3 +4763,195 @@ longer the gate's stages for these checks.
   re-enabling, and on one large private paper saw 0 emphasis runs where the
   first pass had thousands. It is informational (not a pass criterion); worth
   a look before anyone relies on it.
+
+## R50 — zoom independence by construction, a gate at one zoom, and the lanes that shared a browser
+
+R47 and R48 made the engine's canvas measurements resolution-independent in
+page units. The first gate to sweep every document at three zooms (page-fit,
+1.0, 1.8) still found four private papers whose emphasis changed with the
+zoom — the same four, the same counts, every run. Each was taken apart with
+`test/diag-zones.mjs` (a decision's inputs per zoom, in page units) before
+anything was changed.
+
+### Four flips, two mechanisms
+
+- **A measurement near a threshold, read at a different resolution.** A
+  light-grey 0.4 pt listing frame around a lightly shaded box summed to just
+  under the rule-stroke requirement on the 100% and page-fit canvases and
+  just over it on the capped 180% one, whose three-row window also takes in
+  more of the grey fill. At 180% the listings became rules, the prose between
+  them a table zone, and its one-word last lines lost their emphasis.
+- **A padding in the wrong unit.** Detected rules were padded by 1 CSS px — a
+  different number of page px at every zoom. A ruled table's lower rule pair
+  sat 159 page px apart against a limit of 158; the padding tipped it in at
+  100% and out at 180%, and two of its cells were emphasized at 180% only. The
+  same padding put an underline over a 35% overlap test at 100% only, and let
+  a figure label clear a "prose between rules" test at one zoom and not another.
+
+Tuning each threshold so that these four land on one side only moves the edge
+to the next document. The input was made zoom-independent instead.
+
+### Fix: the rules come from one render, whatever the zoom
+
+The engine renders each page ONCE, privately, at RULE_PPU (2 bitmap px per
+page px — 100% on the 2x display the constants were tuned at), finds the rules
+there (`scanRules`, typography/rules.mjs) and caches them per page in page
+units for every later pass and zoom; the viewer's own rendering stays whatever
+the zoom makes it. Rules are padded by one page px; zone containment uses a
+page px too. The resolution was measured, not assumed: at the gate zoom, 2 and
+3 decide identically on all 49 documents, while 0.5 does not (1,367 vs 1,963
+processed spans on one public paper — the control that the setting bites).
+Renders are serialized, cancelled after 8 s, and skipped for a closed document.
+
+What the flips had only made visible, fixed as general rules:
+- **Figure-size text** stays on the canvas: below 0.7 of body height every
+  processed span in both corpora was figure material (diagram and plot labels
+  down to 0.3 of body, pseudocode, boxed figure panels), while the smallest
+  prose convention sits at 0.75-0.8 (`test/diag-sizes.mjs`). A size cut, not a
+  word-count heuristic — grouping small spans into "runs" merged neighbouring
+  diagram labels into sentences. Accepted trade-off: 8 pt footnotes under a
+  12 pt body (0.67) would lose emphasis, drawn as the document draws them;
+  neither corpus has one. ~30 short labels at 0.70-0.74 remain processed.
+- **One word, one decision**: a piece of a word PDF.js split at a font change
+  (TeX-composed accents) follows a piece the block pass kept.
+
+After it, the three-zoom sweep (page-fit, 1.0, 1.8) passes all 49 documents:
+0 zoom flips, 0 table offenders — the four papers above included.
+
+### References
+
+- **A locator inside a citation** ("[9, §5.2.1]") was painted in reference red
+  inside citation blue — 22 citations on three private papers, computed colour
+  and a capture. A reference that FOLLOWS its citation's key (a number or year
+  earlier in the citation, no ";" between) keeps the citation's colour; "(see
+  Section 3; Smith 2020)" still colours this paper's Section 3.
+- **A reference hyphenated across a line** ("Fig-" / "ure 3") was never
+  coloured: matched against the spans joined by "\n", neither half is one. A
+  line-end hyphen before a lowercase continuation is closed up for matching.
+  Six public papers carry one.
+- **A reference printed without a word** ("(§3.5)," in its own span) was never
+  processed, so never coloured; like a bracket citation it is now.
+- **Whole or not at all.** A reference with a piece that stays on the canvas —
+  a "§" TeX set from the symbol font (CMSY), a number in a kept face — was
+  coloured in part ("§2", only the "2" red). Processing that "§" to colour it
+  was tried and would have re-drawn a math-font glyph in the text face
+  (fontkeep: 11 violations on one paper), so such a reference is left
+  uncoloured; its link still works. Measured: 47 references over both corpora,
+  about one a paper, some of them false positives ("table T") that no longer
+  show at all.
+- refcolor matches across spans as the product does, needs every piece of a
+  reference coloured, and fails a reference colour nested in a citation.
+- R46's owed measurement: every annotated author-year citation over both
+  corpora (`test/diag-authoryear.mjs`) — only two documents use them, 185 in
+  all, every one a real citation. A thin sample, recorded as such.
+
+### The gate: one render at one zoom — and lanes that shared a browser
+
+The zoom no longer moves the decisions, so the gate renders at one zoom:
+`test/allprobes.mjs` runs fontkeep, whyskip, eqkeep, refcolor, tables and
+citepoint over ONE render of each document at 100%; console keeps its own.
+Renders per document: 2, down from 6. Zoom independence stays
+`tables.mjs --zooms=page-fit,1.0,1.8`, run when the engine's canvas reads
+change. From v1.3.0 on this combined gate is the release gate.
+
+Proving it exposed the gate's own worst defect. **Every harness chose its
+debug port as `base + pid % N`; with 8 lanes two regularly landed on the same
+port**, the second browser could not bind it, and its harness silently drove
+the FIRST harness's browser — two documents in one browser, the other's tab in
+front (this one hidden, where the engine pauses by design), the other harness
+switching reading mode off under it. That was behind the gate's most puzzling
+results: whole pages unprocessed at one zoom (233 and 210 "zoom flips" on two
+papers that pass), documents with nothing processed, and emphasis that "never
+came back" after a toggle (16 console documents in one gate, every one with
+the tab hidden and another document's viewer in the same browser). Each
+browser now picks a free port (`--remote-debugging-port=0`, read from the
+profile's DevToolsActivePort). The private console stage went from 4-12
+retries a run to none; standalone runs stopped skipping pages, which is why
+equivalence below needed only one reference.
+
+Other gate defects the negative controls found, all fixed:
+- a real whyskip failure came back UNVERIFIED (every page waited out the full
+  "handled" bound, long documents hit the watchdog): the wait now ends when
+  the page stops changing;
+- the console toggle check watched the bibliography page (no emphasis to lose)
+  and passed half the documents with re-processing disabled: it now watches
+  the page with the most emphasis, waits and times the return, and fails
+  (REPROCESS FAIL) when it never comes; it no longer judges silence on a
+  document the engine did not process;
+- whyskip read only the text layer's direct children and saw no prose on a
+  tagged PDF; the comparer dropped every per-page tables line (a regex that
+  lost its escapes) and invented phantom checks for a document that died; a
+  product failure printed before the watchdog was retried as a harness one.
+
+**Result, at 2bec30d:**
+
+| | standalone | combined |
+|---|---|---|
+| verdict | PASS, 49/49 on every stage | PASS, 49/49 on every stage |
+| retries | 0 | 0 |
+| wall time, 8 lanes | 73.5 min | 35.9 min |
+| equivalence | — | **344/344 document-check pairs identical** |
+
+A second combined run of the same commit: PASS in 36.1 min, and **344/344
+document-check pairs identical to the first** — the gate reproduces itself.
+
+Negative controls (a product mutation in a throwaway worktree; both gates
+must fail it identically) — every one bit, and every comparison was identical:
+
+| mutation | fails |
+|---|---|
+| `(?=§)` removed from the reference regex | refcolor 7/14 |
+| math/mono face keep off | fontkeep 11/14 |
+| per-key citation hit-targets collapsed | citepoint 8/14 |
+| block classification bypassed | eqkeep 3/14 |
+| every skip reason blanked | whyskip 14/14 |
+| table-zone drops disabled | tables 6/14 |
+| locator colour rule reverted | refcolor 3/3 affected private papers |
+| line-break reference matching off | refcolor 6/14 |
+| no re-process when reading mode is switched on | console 14/14 |
+
+### A slow mouse — performance
+
+A reader saw the MOUSE slow down whenever reading mode was switched on. Measured
+in a real window on the 2x display (`test/diag-perf.mjs --headful`; headless
+canvases are in CPU memory, so it never showed there): the viewer's canvases
+are GPU-backed and the engine read them back with getImageData, a synchronous
+GPU->CPU copy of up to ~100 ms a page on the main thread. The rule scan and
+every canvas readback now run in a worker (typography/rules-worker.mjs); the
+pixels it returns were compared with direct readbacks — 0 bytes differ,
+headless and on the real GPU.
+
+| ACM-full, page width, 2x display | before | after |
+|---|---|---|
+| switch on: worst frame gap / gaps > 50 ms | 83 ms / 3 | 50 ms / 1 |
+| font switch (original -> Atkinson): worst gap | 67 ms | 50 ms |
+| cold scroll, 10 pages: long tasks | 19 / 1.7 s | 11 / 1.15 s |
+
+Also: settings changes apply one at a time and a toggle no longer re-processes
+every page (the toolbar button processed the document twice). What remains in
+a scroll's > 100 ms frames is the browser laying out and painting the
+rewritten text layer (layout 33-74 ms, paint 42-52 ms a frame); the bundled
+reading fonts add ~13-16% over the document's own face. Tried and not kept,
+because they measured no better: CSS containment on the text layer, a longer
+idle timeout for off-screen pages, dropping the emphasis text-shadow. The gate
+itself runs at below-normal priority: eight browsers at normal priority slowed
+the desktop too.
+
+### Independent review
+
+A reviewer from another model family, given the raw logs and not these
+summaries, counted the same 344/344 identical pairs, every document PASS and
+no retry, UNVERIFIED or unmeasured page. Of its findings on the code, fixed:
+the rules worker's canvas released per message rather than at GC; a
+postMessage that throws settles its job; switching reading mode off no longer
+applies twice; a console run whose DOM read returned nothing, and a standalone
+eqkeep, citepoint or tables run that read no page, are no verdict rather than
+a pass. Checked and dismissed with evidence: "a locator with no digit before it
+is coloured" — the citation grammar never matches such a bracket, so there is
+no citation for it to be a locator of. Its other items concern the standalone
+harnesses, which after this release are a reference tool, not the gate.
+
+### Left over from R49, resolved
+
+- The author-year false-positive measurement (above).
+- The console toggle check (above: it now waits, times and fails).

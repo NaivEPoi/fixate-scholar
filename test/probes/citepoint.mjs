@@ -109,6 +109,7 @@ export const probe = (p, { max, examined }) => `(async () => {
     })()`;
 
 export const create = () => ({
+  pages: 0,
   examined: 0,
   wrongCard: 0,
   wrongTarget: 0,
@@ -118,6 +119,7 @@ export const create = () => ({
 
 export function add(state, p, r) {
   if (!r) return { out: [`p${p}: no textLayer`], err: [] };
+  state.pages++;
   state.examined += r.checked;
   state.annotated += r.hits;
   state.bracketed += r.brackets;
@@ -152,6 +154,11 @@ export function summarize(state) {
     out.push(`  SKIP this document cites one work at a time — ${state.annotated} hit-targets, no multi-key bracket`);
   }
   if (state.wrongTarget || state.wrongCard) {
+    ok = false;
+  }
+  // No page read at all: "no citation here" would be a guess, not a finding.
+  if (!state.pages) {
+    err.push("  FAIL no page was probed — the check proved nothing");
     ok = false;
   }
   return { ok, out, err };

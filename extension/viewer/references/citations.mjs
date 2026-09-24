@@ -395,7 +395,17 @@ export class ReferencesFeature {
     });
     for (const ref of findInternalRefsAcrossBreaks(joined)) {
       if (isLocator(ref)) continue;
-      for (const seg of intersecting(segments, ref.start, ref.end)) {
+      const segs = [...intersecting(segments, ref.start, ref.end)];
+      // Whole or not at all. A piece that stays on the canvas — a "§" TeX set
+      // from the symbol font, kept in its own face — cannot be coloured, and a
+      // reference half red read as a bug ("§2", only the "2" red).
+      const inked = segs.filter((seg) => joined.slice(Math.max(ref.start, seg.start), Math.min(ref.end, seg.end)).trim());
+      if (inked.some((seg) => !seg.span.dataset.fxDone)) {
+        // Counted only when the rule changed something: part processed, part not.
+        if (globalThis.__fxDebug && inked.some((seg) => seg.span.dataset.fxDone)) (globalThis.__fxRefPartial ??= []).push(joined.slice(ref.start, ref.end).replace(/\s+/g, " ").slice(0, 30)); // test introspection
+        continue;
+      }
+      for (const seg of segs) {
         if (!seg.span.dataset.fxDone) continue;
         const localStart = Math.max(0, ref.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, ref.end - seg.start);

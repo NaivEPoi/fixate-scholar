@@ -288,7 +288,7 @@ onSettingsChange((next) => {
     // Off first: there is nothing to re-process for settings about to go.
     if (!next.enabled) await applyEnabled(false);
     await engine.updateSettings(next);
-    await applyEnabled(next.enabled);
+    if (next.enabled) await applyEnabled(true);
   }).catch((e) => console.warn("FixateScholar: applying settings failed", e));
 });
 

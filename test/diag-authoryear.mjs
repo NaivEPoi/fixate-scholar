@@ -122,6 +122,10 @@ try {
   const sus = cites.filter((c) => suspect(c.t));
   console.log(`${LABEL}: pages=${pages} author-year citations=${cites.length} suspect=${sus.length}${unhandled ? `  (${unhandled} page(s) not fully handled)` : ""}`);
   for (const c of sus.slice(0, 30)) console.log(`   SUSPECT p${c.p} "${c.t.slice(0, 70)}"`);
+  // In-paper references the annotator left uncoloured because part of them
+  // stays on the canvas (citations.mjs, "whole or not at all").
+  const partial = await ev(`globalThis.__fxRefPartial || []`);
+  console.log(`   references left whole-uncoloured: ${partial.length}${partial.length ? ": " + JSON.stringify(partial.slice(0, 8)) : ""}`);
   if (process.argv.includes("--list")) for (const c of cites) console.log(`   p${c.p} "${c.t.slice(0, 70)}"`);
 } catch (e) {
   console.error(`${LABEL} diag-authoryear error: ${e.message || e}`);
