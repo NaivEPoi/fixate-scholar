@@ -148,6 +148,14 @@ const WORD_EDGE = /[A-Za-z\u00c0-\u024f'\u2019\u00a8\u00b4\u0060\u00af\u00b8\u02
 const HEAD_FRAG = new RegExp(WORD_EDGE.source + "+$");
 const TAIL_FRAG = new RegExp("^" + WORD_EDGE.source + "+");
 
+/** Two settings objects that differ at most in `enabled` (values compared as JSON). */
+function sameExceptEnabled(a, b) {
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (k !== "enabled" && JSON.stringify(a[k]) !== JSON.stringify(b[k])) return false;
+  }
+  return true;
+}
+
 /**
  * Pairs of text-layer spans that carry one word between them.
  *
@@ -542,8 +550,15 @@ export class TypographyEngine {
 
   /** Resolves when re-processing (if any) has finished. */
   updateSettings(settings) {
+    // Only `enabled` changed, which setEnabled owns: nothing the pages were
+    // processed with is different. Re-processing here restored and
+    // re-emphasized every rendered page on every toggle (twice from the
+    // toolbar button, which applies the change and then hears it back), and
+    // under load the off and on changes' re-processes cancelled each other
+    // until the document had no emphasis at all.
+    const unchanged = this.#settings && sameExceptEnabled(this.#settings, settings);
     this.#settings = settings;
-    if (!this.#enabled) return Promise.resolve();
+    if (!this.#enabled || unchanged) return Promise.resolve();
     this.#restoreAll();
     return this.#processAll();
   }

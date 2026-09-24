@@ -134,7 +134,7 @@ const SPANS = (p) => `(() => {
 const HANDLED = (p) => `(() => {
   const d = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;
   if (!d) return null;
-  let prose = 0, handled = 0, done = 0;
+  let prose = 0, handled = 0;
   for (const s of d.querySelectorAll("span")) {
     if (s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
     if (s.matches(".fx-cite-c, .fx-ref-c, .fx-sp")) continue; // the engine's own runs inside a span
@@ -142,9 +142,8 @@ const HANDLED = (p) => `(() => {
     prose++;
     const h = s.closest("[data-fx-done], [data-fx-why], [data-fx-keep], [data-fx-table]");
     if (h) handled++;
-    if (s.closest("[data-fx-done]")) done++;
   }
-  return { prose, handled, done };
+  return { prose, handled };
 })()`;
 const COUNTS = (p) => `(() => { const d = window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;
   return d ? d.querySelectorAll("span[data-fx-done]").length + "/" + d.querySelectorAll(".fx-b").length : "-"; })()`;
@@ -229,11 +228,12 @@ try {
         await sleep(1000);
         await settle(p);
       }
-      // Prose still undecided and NOTHING processed is a page the engine never
-      // finished (a re-process restores the page first; skip reasons outlive
-      // the restore, so it looks part-handled). Seen once under load: whole
-      // pages read with no emphasis became 233 "zoom flips". No verdict.
-      if (!st || (st.prose >= 3 && (st.handled === 0 || (st.done === 0 && st.handled < st.prose)))) {
+      // A page the engine left alone however long it waited is the engine's
+      // output and is measured as such — except one it never touched at all.
+      // (A guard that also called "processed nothing, some prose undecided" no
+      // verdict turned a real whyskip-class failure into UNVERIFIED: the
+      // engine leaving a page restored and unprocessed IS what a reader sees.)
+      if (!st || (st.prose >= 3 && st.handled === 0)) {
         throw new Error(`p${p} was never processed by the engine at zoom ${zoom} — no verdict`);
       }
       const res = await ev(tables.probe(p, { noexempt: NOEXEMPT })).catch((e) => ({ error: String(e).slice(0, 120) }));

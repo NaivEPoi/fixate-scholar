@@ -111,15 +111,14 @@ const soft = (d) => (e) => { if (fatal(e)) throw e; return d; };
 const handled = (page) => `(() => {
   const d = window.PDFViewerApplication.pdfViewer.getPageView(${page - 1})?.textLayer?.div;
   if (!d) return null;
-  let prose = 0, handled = 0, done = 0;
+  let prose = 0, handled = 0;
   for (const s of d.querySelectorAll("span")) {
     if (s.matches(".fx-cite-c, .fx-ref-c, .fx-sp") || s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
     if (((s.textContent || "").match(/[a-z]{2,}/g) || []).length < 2) continue;
     prose++;
     if (s.closest("[data-fx-done], [data-fx-why], [data-fx-keep], [data-fx-table]")) handled++;
-    if (s.closest("[data-fx-done]")) done++;
   }
-  return { prose, handled, done };
+  return { prose, handled };
 })()`;
 // Whether the engine has processed anything in this document yet.
 let engineSeen = false;
@@ -215,12 +214,6 @@ try {
       if (st.handled === lastHandled) { if (++still >= 5) break; } else { still = 0; lastHandled = st.handled; }
       await sleep(1000);
       sig = await settle(pg);
-    }
-    // Prose still undecided and nothing processed: the engine never finished
-    // this page (restored for a re-process, never re-processed). No verdict —
-    // reading it would score an unprocessed page as the product's output.
-    if (engineSeen && st && st.prose >= 3 && st.done === 0 && st.handled < st.prose) {
-      throw new Error(`p${pg} was never processed by the engine (${st.prose - st.handled} prose spans undecided) — no verdict`);
     }
     // A page with no text layer after a full settle is one thing; three in a
     // row is the viewer no longer producing them at all (seen as "p6..p16: no

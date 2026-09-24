@@ -273,14 +273,23 @@ addNativeViewerButton();
 applyStyleVars(settings);
 applyEnabled(settings.enabled);
 
-onSettingsChange(async (next) => {
-  current = next;
-  publishAuthor(next);
-  applyStyleVars(next);
-  syncButton(next.enabled);
-  syncFontButton(next.fontMode);
-  await engine.updateSettings(next);
-  await applyEnabled(next.enabled);
+// Changes apply one at a time, in the order they arrived. Each awaits the
+// engine, and two handlers interleaving — reading mode switched off and on
+// again while the first change was still re-processing — cancelled each
+// other's work and left the document with no emphasis at all.
+let settingsApplied = Promise.resolve();
+onSettingsChange((next) => {
+  settingsApplied = settingsApplied.then(async () => {
+    current = next;
+    publishAuthor(next);
+    applyStyleVars(next);
+    syncButton(next.enabled);
+    syncFontButton(next.fontMode);
+    // Off first: there is nothing to re-process for settings about to go.
+    if (!next.enabled) await applyEnabled(false);
+    await engine.updateSettings(next);
+    await applyEnabled(next.enabled);
+  }).catch((e) => console.warn("FixateScholar: applying settings failed", e));
 });
 
 app.eventBus.on("textlayerrendered", async (evt) => {
