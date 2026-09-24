@@ -219,10 +219,13 @@ try {
       // Bounded: after 30 s a page with nothing handled at all is no verdict;
       // one partly handled is read as it stands (a span the engine truly never
       // marks cannot hold the run hostage).
-      let st = null;
+      // ...or until it stops changing (five unchanged settled reads outlast
+      // the engine's longest own wait): undecided prose is then the engine's.
+      let st = null, still = 0, lastHandled = -1;
       for (let i = 0; i < 30; i++) {
         st = await ev(HANDLED(p)).catch(soft(null));
         if (st && (st.prose < 3 || st.handled === st.prose)) break;
+        if (st && st.handled === lastHandled) { if (++still >= 5) break; } else { still = 0; lastHandled = st?.handled ?? -1; }
         await sleep(1000);
         await settle(p);
       }

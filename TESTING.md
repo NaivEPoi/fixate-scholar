@@ -126,6 +126,11 @@ run when the engine's canvas reads change — not a stage of every gate.
 `console.mjs` (reloads, toggles reading mode) cannot share a render and stays
 a separate stage.
 
+**This runner is the release gate** (from v1.3.0, which proved it against the
+standalone harnesses — R50). The standalone harnesses stay: for one check on
+one document, for bisecting a gate finding, and as the reference whenever the
+runner, a probe module or the settle changes (below).
+
 - **One copy of each check.** Its page probe and verdict live in
   `test/probes/<check>.mjs` (`probe(page, opts)`, `create()`, `add()`,
   `summarize()`); the standalone harness and `allprobes.mjs` both import it, and

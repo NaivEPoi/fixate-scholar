@@ -203,10 +203,11 @@ try {
   // Read before that — the walk gives each page 1.2 s — and a document the
   // engine had not processed at all was reported "silent": its console was
   // never exercised by the thing this check exists to watch.
-  const viewBolded = () => ev(`(() => { const d = window.PDFViewerApplication.pdfViewer.getPageView(${last - 1})?.textLayer?.div;
+  let view = last; // the page the toggle check watches (moved below)
+  const viewBolded = () => ev(`(() => { const d = window.PDFViewerApplication.pdfViewer.getPageView(${view - 1})?.textLayer?.div;
     return d ? d.querySelectorAll(".fx-b").length : -1; })()`);
   const handled = () => ev(`(() => {
-    const d = window.PDFViewerApplication.pdfViewer.getPageView(${last - 1})?.textLayer?.div;
+    const d = window.PDFViewerApplication.pdfViewer.getPageView(${view - 1})?.textLayer?.div;
     if (!d) return null;
     let prose = 0, handled = 0;
     for (const s of d.querySelectorAll("span")) {
@@ -245,6 +246,29 @@ try {
   // on 11 of 49 documents, which said nothing about whether they returned.
   let reprocessState = null;
   let reprocessMs = null;
+  // Watched on the rendered page with the MOST emphasis, not whichever page
+  // the walk ended on: that is usually the bibliography, which has none to
+  // lose, and there the check was blind — with re-processing disabled
+  // outright it still passed 7 of 14 documents.
+  if (!FXOFF) {
+    const best = await ev(`(() => { let best = 0, n = -1;
+      const v = window.PDFViewerApplication.pdfViewer;
+      for (let i = 0; i < v.pagesCount; i++) {
+        const d = v.getPageView(i)?.textLayer?.div;
+        const k = d ? d.querySelectorAll(".fx-b").length : -1;
+        if (k > n) { n = k; best = i + 1; }
+      }
+      return best; })()`);
+    if (best && best !== view) {
+      view = best;
+      await ev(`window.PDFViewerApplication.page = ${view}`);
+      for (let i = 0; i < 60; i++) {
+        const st = await handled();
+        if (st && (st.prose < 3 || st.handled === st.prose)) break;
+        await sleep(500);
+      }
+    }
+  }
   const before = FXOFF ? -1 : await viewBolded();
   if (!FXOFF) {
     await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: false }, r))`);
@@ -328,7 +352,7 @@ try {
   if (bad.length) process.exitCode = 1;
   // Product outcomes of the toggle, and a run that exercised nothing.
   if (!FXOFF && before > 0 && reprocessMs === null) {
-    console.log(`  REPROCESS FAIL: the page in view had ${before} emphasis runs before reading mode was switched off and on, and ${await viewBolded()} 30 s after`);
+    console.log(`  REPROCESS FAIL: page ${view} had ${before} emphasis runs before reading mode was switched off and on, and ${await viewBolded()} 30 s after`);
     process.exitCode = 1;
   }
   if (!FXOFF && domState && domState.processedSpans === 0 && !process.exitCode) {
