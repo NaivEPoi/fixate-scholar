@@ -393,19 +393,32 @@ export class ReferencesFeature {
       const before = joined.slice(a, ref.start);
       return /\d/.test(before.slice(before.lastIndexOf(";") + 1));
     });
-    for (const ref of findInternalRefsAcrossBreaks(joined)) {
-      if (isLocator(ref)) continue;
-      const segs = [...intersecting(segments, ref.start, ref.end)];
-      // Whole or not at all. A piece that stays on the canvas — a "§" TeX set
-      // from the symbol font, kept in its own face — cannot be coloured, and a
-      // reference half red read as a bug ("§2", only the "2" red).
-      const inked = segs.filter((seg) => joined.slice(Math.max(ref.start, seg.start), Math.min(ref.end, seg.end)).trim());
-      if (inked.some((seg) => !seg.span.dataset.fxDone)) {
-        // Counted only when the rule changed something: part processed, part not.
-        if (globalThis.__fxDebug && inked.some((seg) => seg.span.dataset.fxDone)) (globalThis.__fxRefPartial ??= []).push(joined.slice(ref.start, ref.end).replace(/\s+/g, " ").slice(0, 30)); // test introspection
-        continue;
+    for (const found of findInternalRefsAcrossBreaks(joined)) {
+      if (isLocator(found)) continue;
+      let ref = found;
+      // Coloured whole or not at all, and only in processed text. A piece that
+      // stays on the canvas — a "§" TeX set from the symbol font, a number in a
+      // kept face — cannot be coloured, and half a reference in red read as a
+      // bug ("§2", only the "2" red). So a reference running into such a piece
+      // is cut back to its longest LEADING part that is itself a complete
+      // reference, all in processed text: "Lemma 4, M" (the list grammar
+      // reaching a math variable) colours "Lemma 4"; "§ 2" and "Listing 2",
+      // whose leader or number is on the canvas, colour nothing.
+      const inked = [...intersecting(segments, ref.start, ref.end)]
+        .filter((seg) => joined.slice(Math.max(ref.start, seg.start), Math.min(ref.end, seg.end)).trim());
+      const firstKept = inked.findIndex((seg) => !seg.span.dataset.fxDone);
+      if (firstKept >= 0) {
+        const cut = firstKept === 0 ? ref.start : Math.max(ref.start, inked[firstKept].start);
+        const head = findInternalRefsAcrossBreaks(joined.slice(ref.start, cut)).find((r) => r.start === 0);
+        if (globalThis.__fxDebug && firstKept > 0) {
+          (globalThis.__fxRefPartial ??= []).push(
+            joined.slice(ref.start, ref.end).replace(/\s+/g, " ").slice(0, 30) + (head ? " -> head" : " -> none"),
+          ); // test introspection
+        }
+        if (!head) continue;
+        ref = { start: ref.start, end: ref.start + head.end };
       }
-      for (const seg of segs) {
+      for (const seg of intersecting(segments, ref.start, ref.end)) {
         if (!seg.span.dataset.fxDone) continue;
         const localStart = Math.max(0, ref.start - seg.start);
         const localEnd = Math.min(seg.end - seg.start, ref.end - seg.start);

@@ -318,9 +318,11 @@ embedded font at original size, mask the canvas duplicate):
   NOT inside a citation: a locator ("[9, §5.2]", "[24, Section 3]") points into
   the CITED work and stays the citation's blue. Matched across a line-end
   hyphen ("Fig-" / "ure 3") and in a span with no word ("(§3.5),"). Coloured
-  WHOLE OR NOT AT ALL: a reference with a piece that stays on the canvas (a
-  "§" TeX set from the symbol font, a number in a kept face) is left
-  uncoloured rather than half red.
+  WHOLE OR NOT AT ALL, in processed text only: a reference running into a
+  piece that stays on the canvas is cut back to its longest leading part that
+  is itself a complete reference ("Lemma 4, M" colours "Lemma 4"); if no such
+  part exists ("§ 2" with its "§" in the symbol font, "Listing 2" with its
+  number on the canvas) it is left uncoloured rather than half red.
 
 ### RENDER QUALITY (verify visually + with probes):
 - Overlay glyphs sit on the **canvas baseline**: the engine MEASURES the
