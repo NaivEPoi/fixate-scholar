@@ -203,10 +203,16 @@ try {
     // reason it was left (tables.mjs's wait — read before it, a page's
     // unprocessed tail becomes whyskip's "unreasoned" and tables' misses).
     // Bounded: a span the engine never marks cannot hold the run hostage.
-    let st = null;
+    // Until the page stops changing, though: when the engine leaves prose
+    // undecided (the whyskip failure class) waiting out the bound on every
+    // page ran long documents into the 25-min watchdog, and a real whyskip
+    // failure came back UNVERIFIED. Five unchanged settled reads outlast the
+    // engine's own longest wait (15 s for a page's rule render).
+    let st = null, still = 0, lastHandled = -1;
     for (let i = 0; i < 30 && sig !== null; i++) {
       st = await ev(handled(pg)).catch(soft(null));
       if (!st || st.prose < 3 || st.handled === st.prose) break;
+      if (st.handled === lastHandled) { if (++still >= 5) break; } else { still = 0; lastHandled = st.handled; }
       await sleep(1000);
       sig = await settle(pg);
     }
