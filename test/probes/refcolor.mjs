@@ -36,26 +36,50 @@ export const probe = (p) => `(() => {
   // (No backticks in this comment — it lives inside a template literal.)
   const INTERNAL_REF = new RegExp("(?:\\\\b|(?<=[a-z])(?=[A-Z])|(?=§))" + REF_LEADER + "\\\\s*~?\\\\s*" + REF_ITEM + "(?:" + REF_SEP + REF_ITEM + ")*", "g");
 
-  let total = 0, colored = 0, nested = 0;
-  const misses = [];
+  // The processed spans' text in layer order, one line per span, with every
+  // text node's place in it — matched ACROSS spans, as the product does: a
+  // reference split over two spans ("Figure" / "3" in another face, or "Fig-"
+  // / "ure 6" hyphenated at a line end) was invisible to a per-span match, so
+  // a split reference left uncoloured could not fail this check.
+  let joined = "";
+  const nodes = []; // { node, span, start, end }
   for (const s of div.querySelectorAll("span[data-fx-done]")) {
     if (s.dataset.fxRefs) continue;
-    const text = s.textContent;
-    for (const m of text.matchAll(INTERNAL_REF)) {
-      total++;
-      let pos = 0, hit = false, cite = false;
-      const walker = document.createTreeWalker(s, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const len = node.data.length;
-        const a = Math.max(m.index, pos), b = Math.min(m.index + m[0].length, pos + len);
-        if (a < b && node.parentElement.closest(".fx-cite-c")) cite = true;
-        if (a < b && node.parentElement.closest(".fx-ref-c")) hit = true;
-        pos += len;
-      }
-      if (cite) { total--; if (hit) nested++; continue; }
-      if (hit) colored++;
-      else if (misses.length < 6) misses.push({ m: m[0], ctx: text.slice(Math.max(0, m.index - 20), m.index + m[0].length + 6) });
+    const walker = document.createTreeWalker(s, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      nodes.push({ node, span: s, start: joined.length, end: joined.length + node.data.length });
+      joined += node.data;
     }
+    joined += "\\n";
+  }
+  // Close a line-end hyphen break before a lowercase continuation (the rule of
+  // parser.mjs findInternalRefsAcrossBreaks), keeping each character's origin.
+  let flat = "";
+  const at = [];
+  for (let i = 0; i < joined.length; i++) {
+    if (joined[i] === "-" && joined[i + 1] === "\\n" && /[A-Za-z]/.test(joined[i - 1] || "") && /[a-z]/.test(joined[i + 2] || "")) { i++; continue; }
+    at.push(i);
+    flat += joined[i];
+  }
+  let total = 0, colored = 0, nested = 0;
+  const misses = [];
+  for (const m of flat.matchAll(INTERNAL_REF)) {
+    const a = at[m.index], b = at[m.index + m[0].length - 1] + 1;
+    total++;
+    // Coloured means coloured in EVERY span the reference runs through.
+    const spans = new Map(); // span -> { hit, cite }
+    for (const x of nodes) {
+      if (x.end <= a || x.start >= b) continue;
+      const st = spans.get(x.span) ?? { hit: false, cite: false };
+      if (x.node.parentElement.closest(".fx-cite-c")) st.cite = true;
+      if (x.node.parentElement.closest(".fx-ref-c")) st.hit = true;
+      spans.set(x.span, st);
+    }
+    const all = [...spans.values()];
+    const cite = all.some((v) => v.cite), hit = all.length > 0 && all.every((v) => v.hit);
+    if (cite) { total--; if (all.some((v) => v.hit)) nested++; continue; }
+    if (hit) colored++;
+    else if (misses.length < 6) misses.push({ m: m[0].replace(/\\n/g, " "), ctx: flat.slice(Math.max(0, m.index - 20), m.index + m[0].length + 6).replace(/\\n/g, " ") });
   }
   return { total, colored, nested, misses };
 })()`;

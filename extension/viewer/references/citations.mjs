@@ -8,7 +8,7 @@ import {
   findContentStart,
   findFurniture,
   findCitations,
-  findInternalRefs,
+  findInternalRefsAcrossBreaks,
   resolveCitation,
 } from "./parser.mjs";
 import { CitationPopup } from "./popup.mjs";
@@ -393,7 +393,7 @@ export class ReferencesFeature {
       const before = joined.slice(a, ref.start);
       return /\d/.test(before.slice(before.lastIndexOf(";") + 1));
     });
-    for (const ref of findInternalRefs(joined)) {
+    for (const ref of findInternalRefsAcrossBreaks(joined)) {
       if (isLocator(ref)) continue;
       for (const seg of intersecting(segments, ref.start, ref.end)) {
         if (!seg.span.dataset.fxDone) continue;
