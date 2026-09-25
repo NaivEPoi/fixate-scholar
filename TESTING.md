@@ -309,6 +309,11 @@ embedded font at original size, mask the canvas duplicate):
   never forms such a band. Wrapped cell lines / full cells extend a run at most
   2 rows past the last strong row; on two-column pages the gutter gap is never
   a band and skips are segment-bounded at the gutter.
+- **Rows of a ruled table** — any line centred between ≥3 chained horizontal
+  rules. A wordy full-width line there stays processed as prose between two
+  framed blocks, unless a vertical rule runs through its middle: that is a
+  row of cells. Solid rules only — a dashed vertical border is missed (the
+  horizontal rule scan has the same limit).
 - **Bibliography / references region** (appendices after it ARE processed).
 - **Running headers/footers, page numbers, left/right margins, arXiv watermarks.**
 - **Off-size text** (smaller or larger than body) with little prose (footnotes,

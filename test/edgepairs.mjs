@@ -285,6 +285,9 @@ try {
   console.log(`${LABEL}: ${rows.length} strips on ${sheets} sheet(s), pages ${from}-${to}, zoom ${ZOOM}` +
     (unsettled.length ? ` — UNSETTLED p${unsettled.join(",p")}: do not judge those strips` : ""));
   if (unsettled.length) process.exitCode = 75;
+  // Nothing captured is not a clean review: a document always has captions or
+  // headings, so zero strips means the reasons were never recorded.
+  if (!rows.length) throw new Error("no edge strip found — nothing was captured");
 } catch (e) {
   // A capture that never happened must not read as success.
   console.error(`${LABEL} edgepairs error: ${e.message || e}`);

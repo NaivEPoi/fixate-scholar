@@ -225,11 +225,15 @@ export async function removeBypassUrl(url) {
 
 // The one navigation a "native" click lets through: that tab, that URL.
 // Nothing is saved — the next open of the same PDF comes back to FixateScholar;
-// a lasting bypass is the user's own entry in Options (bypassUrls).
-let bypassOnce = null; // { tabId, url }
+// a lasting bypass is the user's own entry in Options (bypassUrls). Held in
+// storage.session, not a variable: the worker can be suspended before the
+// navigation commits, and a lost record left the tab's allow rule in place.
+const BYPASS_ONCE_KEY = "bypassOnce"; // { tabId, url }
+const pendingBypass = async () => (await chrome.storage.session.get(BYPASS_ONCE_KEY))[BYPASS_ONCE_KEY] ?? null;
 
 async function isBypassedUrl(url, tabId) {
-  if (bypassOnce && bypassOnce.tabId === tabId && urlsMatch(bypassOnce.url, url)) return true;
+  const once = await pendingBypass();
+  if (once && once.tabId === tabId && urlsMatch(once.url, url)) return true;
   const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
   return bypassUrls.some((u) => urlsMatch(u, url));
 }
@@ -252,13 +256,16 @@ chrome.webNavigation.onBeforeNavigate.addListener(
   { url: [{ schemes: ["file"], pathSuffix: ".pdf" }] },
 );
 
-// A session allow rule for exactly this URL in exactly this tab, removed once
-// the navigation commits. applyRules() keeps ids at or above BYPASS_ONCE_BASE.
-async function allowOnce(url, tabId) {
-  const addRules = !/^https?:/i.test(url) || url.length > 1024 ? [] : [{
+// A session allow rule for this tab's main frame, removed when its next
+// navigation commits. Scoped to the TAB, not the URL: the navigation may be
+// redirected (http to https, a gateway to its CDN), and an exact-URL rule let
+// the redirect's target bounce back into the viewer. applyRules() keeps ids at
+// or above BYPASS_ONCE_BASE.
+async function allowOnce(tabId) {
+  const addRules = [{
     id: BYPASS_ONCE_BASE,
     priority: 30,
-    condition: { resourceTypes: ["main_frame"], tabIds: [tabId], regexFilter: `^${escapeRegex(url)}([?#].*)?$` },
+    condition: { resourceTypes: ["main_frame"], tabIds: [tabId] },
     action: { type: "allow" },
   }];
   await chrome.declarativeNetRequest
@@ -268,9 +275,9 @@ async function allowOnce(url, tabId) {
 
 // The bypassed navigation (or anything else) committed in that tab: the
 // bypass is spent, so a reload or a later open is intercepted again.
-chrome.webNavigation.onCommitted.addListener((details) => {
-  if (details.frameId !== 0 || bypassOnce?.tabId !== details.tabId) return;
-  bypassOnce = null;
+chrome.webNavigation.onCommitted.addListener(async (details) => {
+  if (details.frameId !== 0 || (await pendingBypass())?.tabId !== details.tabId) return;
+  await chrome.storage.session.remove(BYPASS_ONCE_KEY);
   chrome.declarativeNetRequest
     .updateSessionRules({ removeRuleIds: [BYPASS_ONCE_BASE] })
     .catch(() => {});
@@ -288,8 +295,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!cleanUrl || !/^(https?|file):/i.test(cleanUrl) || tabId === undefined) return false;
 
   (async () => {
-    bypassOnce = { tabId, url: cleanUrl };
-    await allowOnce(cleanUrl, tabId);
+    await chrome.storage.session.set({ [BYPASS_ONCE_KEY]: { tabId, url: cleanUrl } });
+    if (/^https?:/i.test(cleanUrl)) await allowOnce(tabId);
     await chrome.tabs.update(tabId, { url: cleanUrl });
     sendResponse({ ok: true });
   })();
