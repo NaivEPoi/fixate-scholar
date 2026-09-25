@@ -3205,6 +3205,7 @@ export class TypographyEngine {
       )
       .map((p) => p.div);
     let obstacleRects = null;
+    const artKept = new Set(); // spans kept for the vector art on them (work())
     const descenderZones = []; // kept glyph runs' descender bands, masks cut around them
     let zoneDrops = null; // candidates inside rule-bounded table zones — left on the canvas
     let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
@@ -3296,6 +3297,7 @@ export class TypographyEngine {
         for (let i = pairs.length; art?.length && i--; ) {
           if (!artUnder(art, pairs[i].item)) continue;
           reject(pairs[i].div, "vector-art");
+          artKept.add(pairs[i].div);
           candidateDivs.delete(pairs[i].div);
           obstacleDivs.push(pairs[i].div);
           pairs.splice(i, 1);
@@ -3754,11 +3756,26 @@ export class TypographyEngine {
           // or marker legitimately FILLS its tiny rect edge-to-edge, and
           // losing its obstacle lets the neighbours' masks white it out —
           // small spans get just the plain no-ink gate.
-          if (inkFit && r.width > 40 && r.height > 8) {
+          // Kept for the vector art on them: the ink under them is real by
+          // construction, and art round the glyphs (a circle through the line's
+          // edge bands) reads to the fit below as a hidden copy's straddled ink —
+          // dropped as an obstacle, the neighbours' masks cut the circles and the
+          // line's descenders.
+          if (artKept.has(d)) {
+            /* always an obstacle */
+          } else if (inkFit && r.width > 40 && r.height > 8) {
             const f = inkFit(r);
             if (f && f.core - f.edgeMin - f.pen < 0.4) continue;
-          } else if (inkCheck && r.width > 1 && r.height > 1 && !inkCheck(r)) {
-            continue;
+          } else if (inkCheck && r.width > 1 && r.height > 1) {
+            // An underscore, comma or period inks BELOW its text-layer box
+            // (the box ends above the descenders), so its own box reads as
+            // empty: "nf_disc_req" lost both underscores to the neighbours'
+            // masks. Look under the box for those.
+            const low = /^[_,.;]+$/.test((d.textContent || "").trim());
+            // (inkCheck samples the middle of the box it is given: centre it on
+            // the band just under the box.)
+            const probe = low ? { left: r.left, right: r.right, top: r.bottom - r.height * 0.2, bottom: r.bottom + r.height * 0.35, width: r.width, height: r.height * 0.55 } : r;
+            if (!inkCheck(probe)) continue;
           }
           // A kept glyph run's descenders leave its text-layer box: below
           // it (the box comes from the substitute face's ascent), and to
