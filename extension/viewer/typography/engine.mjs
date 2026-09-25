@@ -4129,8 +4129,14 @@ export class TypographyEngine {
           };
           // The box less every kept run's descender band it reaches into.
           let pieces = [[L, T, R, B]];
-          for (const z of descenderZones) {
-            if (z.right <= L || z.left >= R || z.bottom <= T || z.top >= B) continue;
+          // A zone reaching down into THIS span's own line stops just inside the
+          // top of its box, where its glyphs carry no ink: deeper, the cut bared
+          // the tops of its own canvas capitals (a sliver beside the "T" of
+          // "To" under a kept subscript).
+          const ownTop = r2.top + h * 0.15;
+          for (const zone of descenderZones) {
+            const z = zone.top < r2.top ? { ...zone, bottom: Math.min(zone.bottom, ownTop) } : zone;
+            if (z.right <= L || z.left >= R || z.bottom <= T || z.top >= B || z.bottom <= z.top) continue;
             pieces = pieces.flatMap(([l, t, r, b]) => {
               if (z.right <= l || z.left >= r || z.bottom <= t || z.top >= b) return [[l, t, r, b]];
               const zt = Math.max(t, z.top), zb = Math.min(b, z.bottom);
