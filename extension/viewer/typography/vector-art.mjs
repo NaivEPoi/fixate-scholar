@@ -58,6 +58,15 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
         if (args?.[1] && clip) clip = intersect(clip, transformBox(ctm, args[1]));
         break;
       case OPS.paintFormXObjectEnd: if (stack.length) [ctm, fill, clip] = stack.pop(); break;
+      // A form with a /Group passes its BBox here, not to paintFormXObjectBegin;
+      // PDF.js clips to it through the form matrix.
+      case OPS.beginGroup: {
+        stack.push([ctm, fill, clip]);
+        const g = args?.[0];
+        if (g?.bbox && clip) clip = intersect(clip, transformBox(g.matrix ? mul(ctm, g.matrix) : ctm, g.bbox));
+        break;
+      }
+      case OPS.endGroup: if (stack.length) [ctm, fill, clip] = stack.pop(); break;
       case OPS.beginAnnotation: inAnnotation++; break;
       case OPS.endAnnotation: inAnnotation = Math.max(0, inAnnotation - 1); break;
       case OPS.clip: case OPS.eoClip: pendingClip = true; break;

@@ -5,7 +5,7 @@ import { artUnder, vectorArt } from "../../extension/viewer/typography/vector-ar
 // The operator ids vector-art.mjs reads; the values only need to be distinct.
 const OPS = {
   save: 10, restore: 11, transform: 12, paintFormXObjectBegin: 74, paintFormXObjectEnd: 75,
-  beginAnnotation: 80, endAnnotation: 81, setFillRGBColor: 59, constructPath: 91, clip: 30, eoClip: 31,
+  beginAnnotation: 80, endAnnotation: 81, setFillRGBColor: 59, constructPath: 91, clip: 30, eoClip: 31, beginGroup: 76, endGroup: 77,
   stroke: 20, fill: 22, eoFill: 23, endPath: 28,
 };
 const list = (...ops) => ({ fnArray: ops.map((o) => o[0]), argsArray: ops.map((o) => o[1]) });
@@ -82,4 +82,15 @@ test("many boxes: only those near the line are tested, the answer is the same", 
   const art = vectorArt(list(...noise.map(([op, box]) => path(op, box)), path(OPS.stroke, [120, 97, 131, 108])), OPS);
   assert.equal(artUnder(art, item), true);
   assert.equal(artUnder(art, { ...item, transform: [10, 0, 0, 10, 50, 150] }), false);
+});
+
+test("a group form paints nothing outside its BBox", () => {
+  const art = vectorArt(list(
+    [OPS.beginGroup, [{ matrix: [1, 0, 0, 1, 100, 90], bbox: [0, 0, 40, 30] }]],
+    [OPS.paintFormXObjectBegin, [[1, 0, 0, 1, 100, 90], null]],
+    path(OPS.stroke, [-500, 5, 20, 18]),
+    [OPS.paintFormXObjectEnd], [OPS.endGroup],
+    path(OPS.stroke, [-500, 5, 20, 18]), // outside the group: the page view only
+  ), OPS, [0, 0, 612, 792]);
+  assert.deepEqual(art, [[0, 5, 20, 18], [100, 95, 120, 108]]);
 });
