@@ -1,8 +1,8 @@
 // Native-button end-to-end: navigate to a PDF URL (http or file) -> expect
 // the redirect into the viewer -> trigger fx-bypass-once (what the "native"
-// button sends) -> expect the tab to land on the original URL and STAY there
-// across reloads and subsequent tab navigations.
-// Usage: node nativebtn.mjs <pdf-url>
+// button sends) -> expect the tab to land on the original URL ONCE: a reload
+// and a new tab are intercepted again, and nothing is saved to bypassUrls.
+// Usage: node test/native-button.mjs [pdf-url] [--full-list]
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 
 import { browserPath, extensionDir } from "./lib/env.mjs";
 
-const URL0 = process.argv[2] || "https://yilud.me/SIB-Auth.pdf";
+const URL0 = process.argv.slice(2).find((a) => !a.startsWith("--")) || "https://yilud.me/SIB-Auth.pdf";
 const EXT = extensionDir;
 const PORT = 9111 + (process.pid % 130);
 const userDataDir = join(tmpdir(), `fx-nb-${process.pid}`);
@@ -60,6 +60,13 @@ try {
   console.log("after nav:    ", inViewer ? "VIEWER (intercepted ok)" : at1.slice(0, 80));
   if (!inViewer) throw new Error("interception did not engage — cannot test the button");
 
+  // A long-used profile: bypassUrls at the sync item cap (8 KB). The old button
+  // persisted every click, and at the cap the write failed and it did nothing.
+  if (process.argv.includes("--full-list")) {
+    await client1.ev(`new Promise((ok) => chrome.storage.sync.set({ bypassUrls: Array.from({ length: 35 }, (_, i) => "https://example.com/" + "x".repeat(209) + i) }, ok))`);
+  }
+  const before = await client1.ev(`chrome.storage.sync.get("bypassUrls").then((s) => JSON.stringify(s.bypassUrls || []))`);
+
   // Trigger exactly what the native button sends.
   await client1.ev(`chrome.runtime.sendMessage({ type: "fx-bypass-once", url: ${JSON.stringify(URL0)} })`);
   await sleep(4000);
@@ -71,28 +78,30 @@ try {
   console.log("native view:  ", at3.slice(0, 90));
   if (!ok) throw new Error("did not navigate to native viewer");
 
-  // Verify that reloading the tab stays in the native viewer (persistent bypass)
+  // One time only: a reload is intercepted again.
   await client1.send("Page.reload");
-  await sleep(4000);
+  await sleep(5000);
   const atReload = await client1.ev("location.href").catch(() => "(navigating)");
-  const reloadOk = atReload === URL0 || decodeURIComponent(atReload) === decodeURIComponent(URL0);
   console.log("after reload: ", atReload.slice(0, 90));
-  if (!reloadOk) throw new Error("reloading PDF bounced back into FixateScholar");
+  if (!atReload.startsWith("chrome-extension://")) throw new Error("the bypass outlived its one navigation (reload stayed native)");
 
-  // Verify that reopening the same PDF in a new tab stays in the native viewer
+  // ...and so is the same PDF in a new tab.
   const tab2 = await http(`/json/new?about:blank`, "PUT");
   const client2 = makeClient(tab2.webSocketDebuggerUrl);
   await new Promise((r) => (client2.socket.onopen = r));
   await client2.send("Page.enable");
   await client2.send("Page.navigate", { url: URL0 });
-  await sleep(4000);
+  await sleep(5000);
   const atNewTab = await client2.ev("location.href").catch(() => "(navigating)");
-  const newTabOk = atNewTab === URL0 || decodeURIComponent(atNewTab) === decodeURIComponent(URL0);
   console.log("new tab nav:  ", atNewTab.slice(0, 90));
   try { client2.socket.close(); } catch {}
-  if (!newTabOk) throw new Error("reopening PDF in a new tab bounced back into FixateScholar");
+  if (!atNewTab.startsWith("chrome-extension://")) throw new Error("a new tab stayed native — the bypass was persisted");
 
-  console.log("PASS — stayed in native viewer across reloads and new tabs");
+  // Nothing was saved: the stored list is exactly what it was.
+  const after = await client1.ev(`chrome.storage.sync.get("bypassUrls").then((s) => JSON.stringify(s.bypassUrls || []))`);
+  if (after !== before) throw new Error("the button wrote to bypassUrls");
+
+  console.log("PASS — native once, intercepted again, nothing saved");
   process.exitCode = 0;
 } catch (e) { console.error("nativebtn error:", e.message || e); process.exitCode = 1; }
 finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }

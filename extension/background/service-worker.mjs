@@ -4,7 +4,7 @@
 // a context-menu fallback for anything else.
 
 import { clearCached } from "../viewer/references/lookup-cache.mjs";
-import { fitBypassUrls, normalizeBypassUrl, urlsMatch } from "../viewer/settings-client.mjs";
+import { normalizeBypassUrl, urlsMatch } from "../viewer/settings-client.mjs";
 
 const VIEWER = chrome.runtime.getURL("vendor/pdfjs/web/viewer.html");
 
@@ -213,16 +213,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 export { normalizeBypassUrl, urlsMatch };
 
-export async function addBypassUrl(url) {
-  const clean = normalizeBypassUrl(url);
-  if (!clean || !/^(https?|file):/i.test(clean)) return;
-  const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
-  if (!bypassUrls.some((u) => urlsMatch(u, clean))) {
-    const next = fitBypassUrls([...bypassUrls, clean].slice(-100));
-    await chrome.storage.sync.set({ bypassUrls: next });
-  }
-}
-
 export async function removeBypassUrl(url) {
   const clean = normalizeBypassUrl(url);
   if (!clean || !/^(https?|file):/i.test(clean)) return;
@@ -233,8 +223,13 @@ export async function removeBypassUrl(url) {
   }
 }
 
-async function isBypassedUrl(url) {
-  if (bypassOnce && urlsMatch(bypassOnce, url)) return true;
+// The one navigation a "native" click lets through: that tab, that URL.
+// Nothing is saved — the next open of the same PDF comes back to FixateScholar;
+// a lasting bypass is the user's own entry in Options (bypassUrls).
+let bypassOnce = null; // { tabId, url }
+
+async function isBypassedUrl(url, tabId) {
+  if (bypassOnce && bypassOnce.tabId === tabId && urlsMatch(bypassOnce.url, url)) return true;
   const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
   return bypassUrls.some((u) => urlsMatch(u, url));
 }
@@ -245,9 +240,8 @@ chrome.webNavigation.onBeforeNavigate.addListener(
     if (details.frameId !== 0) return;
     if (!/^file:.*\.pdf$/i.test(details.url)) return;
     // "Open in native viewer" re-navigates to the same file: URL — the DNR
-    // allow rule cannot suppress this listener, so it checks whether the URL
-    // has been bypassed.
-    if (await isBypassedUrl(details.url)) return;
+    // allow rule cannot suppress this listener, so it checks the bypass here.
+    if (await isBypassedUrl(details.url, details.tabId)) return;
     const { intercept = true } = await chrome.storage.sync.get("intercept");
     if (!intercept) return;
     if (!(await chrome.extension.isAllowedFileSchemeAccess())) return;
@@ -258,56 +252,46 @@ chrome.webNavigation.onBeforeNavigate.addListener(
   { url: [{ schemes: ["file"], pathSuffix: ".pdf" }] },
 );
 
-// The URL the last "native" click escaped to. Kept in memory as well as in
-// storage, so the escape works even when the stored list cannot be written.
-let bypassOnce = null;
-
-// A session allow rule for exactly this URL. applyRules() keeps ids at or
-// above BYPASS_ONCE_BASE, and the next click replaces it.
-async function allowOnce(url) {
-  if (!/^https?:/i.test(url) || url.length > 1024) return;
+// A session allow rule for exactly this URL in exactly this tab, removed once
+// the navigation commits. applyRules() keeps ids at or above BYPASS_ONCE_BASE.
+async function allowOnce(url, tabId) {
+  const addRules = !/^https?:/i.test(url) || url.length > 1024 ? [] : [{
+    id: BYPASS_ONCE_BASE,
+    priority: 30,
+    condition: { resourceTypes: ["main_frame"], tabIds: [tabId], regexFilter: `^${escapeRegex(url)}([?#].*)?$` },
+    action: { type: "allow" },
+  }];
   await chrome.declarativeNetRequest
-    .updateSessionRules({
-      removeRuleIds: [BYPASS_ONCE_BASE],
-      addRules: [{
-        id: BYPASS_ONCE_BASE,
-        priority: 30,
-        condition: { resourceTypes: ["main_frame"], regexFilter: `^${escapeRegex(url)}([?#].*)?$` },
-        action: { type: "allow" },
-      }],
-    })
-    .catch((e) => console.warn("FixateScholar: failed to register the one-shot bypass", e));
+    .updateSessionRules({ removeRuleIds: [BYPASS_ONCE_BASE], addRules })
+    .catch((e) => console.warn("FixateScholar: failed to update the one-time bypass", e));
 }
 
-// "Open in native viewer": escape to the browser's native viewer.
-// Persists the bypass for this URL so subsequent reopens/reloads also stay in
-// the browser's native viewer.
+// The bypassed navigation (or anything else) committed in that tab: the
+// bypass is spent, so a reload or a later open is intercepted again.
+chrome.webNavigation.onCommitted.addListener((details) => {
+  if (details.frameId !== 0 || bypassOnce?.tabId !== details.tabId) return;
+  bypassOnce = null;
+  chrome.declarativeNetRequest
+    .updateSessionRules({ removeRuleIds: [BYPASS_ONCE_BASE] })
+    .catch(() => {});
+});
+
+// "Open in native viewer": escape to the browser's native viewer, once.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if ((msg?.type !== "fx-bypass-once" && msg?.type !== "fx-bypass-url") || !msg.url) return false;
+  if (msg?.type !== "fx-bypass-once" || !msg.url) return false;
   // Security: only accept messages from this extension's own pages
   if (sender.id !== chrome.runtime.id) return false;
   if (!sender.url || !sender.url.startsWith(chrome.runtime.getURL(""))) return false;
 
   const cleanUrl = normalizeBypassUrl(msg.url);
-  if (!cleanUrl || !/^(https?|file):/i.test(cleanUrl)) return false;
+  const tabId = sender.tab?.id;
+  if (!cleanUrl || !/^(https?|file):/i.test(cleanUrl) || tabId === undefined) return false;
 
   (async () => {
-    // Leave the viewer whether or not the bypass could be saved: a one-shot
-    // allow rule (and, for file: URLs, the in-memory bypassOnce) lets this
-    // navigation through. The persistent entry only keeps later reopens native.
-    bypassOnce = cleanUrl;
-    let saved = true;
-    try {
-      await addBypassUrl(cleanUrl);
-    } catch (e) {
-      saved = false;
-      console.warn("FixateScholar: could not save the bypass", e);
-    }
-    await registerRules();
-    await allowOnce(cleanUrl);
-    const tabId = sender.tab?.id;
-    if (tabId !== undefined) await chrome.tabs.update(tabId, { url: cleanUrl });
-    sendResponse({ ok: true, saved });
+    bypassOnce = { tabId, url: cleanUrl };
+    await allowOnce(cleanUrl, tabId);
+    await chrome.tabs.update(tabId, { url: cleanUrl });
+    sendResponse({ ok: true });
   })();
   return true;
 });
