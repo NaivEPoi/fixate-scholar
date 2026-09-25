@@ -123,3 +123,13 @@ test("Libertine and Biolinum bold faces are bold and special; their regular and 
     assert.ok(!SPECIAL_FONT.test(name), `should not be special: ${name}`);
   }
 });
+
+test("code faces embedded by LaTeX packages are special", () => {
+  for (const name of ["XX+Inconsolatazi4-Regular", "XX+Inconsolata-Bold", "XX+SourceCodePro-Regular", "XX+FiraCode-Regular",
+    "XX+ECTT1000", "XX+ectt1000", "XX+txtt", "XX+pcrr8t", "XX+LMMono10-Regular"]) {
+    assert.ok(SPECIAL_FONT.test(name), `should be special: ${name}`);
+  }
+  for (const name of ["XX+NimbusRomNo9L-Regu", "XX+LinLibertineT", "XX+SourceSerifPro-Regular", "XX+Spectral-Regular"]) {
+    assert.ok(!SPECIAL_FONT.test(name), `should not be special: ${name}`);
+  }
+});
