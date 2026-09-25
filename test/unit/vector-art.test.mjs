@@ -44,8 +44,9 @@ test("the transform and form matrices place the path", () => {
     [OPS.paintFormXObjectEnd], [OPS.restore],
     path(OPS.stroke, [0, 0, 11, 11]), // after restore: back at the origin
   ), OPS);
-  assert.deepEqual(art.map((b) => b.map(Math.round)), [[120, 97, 131, 108], [0, 0, 11, 11]]);
-  assert.equal(artUnder([art[1]], item), false);
+  // Sorted by bottom edge.
+  assert.deepEqual(art.map((b) => b.map(Math.round)), [[0, 0, 11, 11], [120, 97, 131, 108]]);
+  assert.equal(artUnder([art[0]], item), false);
 });
 
 test("art beside the line, or on another line, is not under it", () => {
@@ -63,6 +64,22 @@ test("a path is cut to its clip and to the page", () => {
     [OPS.restore],
     path(OPS.stroke, [-20000, 97, 131, 108]), // unclipped: cut to the page view
   ), OPS, [0, 0, 612, 792]);
-  assert.deepEqual(art, [[300, 250, 480, 380], [0, 97, 131, 108]]);
-  assert.equal(artUnder([art[0]], item), false);
+  assert.deepEqual(art, [[0, 97, 131, 108], [300, 250, 480, 380]]);
+  assert.equal(artUnder([art[1]], item), false);
+});
+
+test("a form paints nothing outside its BBox", () => {
+  const art = vectorArt(list(
+    [OPS.paintFormXObjectBegin, [[1, 0, 0, 1, 100, 90], [0, 0, 40, 30]]],
+    path(OPS.stroke, [-500, 5, 20, 18]),
+    [OPS.paintFormXObjectEnd],
+  ), OPS);
+  assert.deepEqual(art, [[100, 95, 120, 108]]);
+});
+
+test("many boxes: only those near the line are tested, the answer is the same", () => {
+  const noise = Array.from({ length: 5000 }, (_, i) => [OPS.stroke, [i % 500, 200 + (i % 300), (i % 500) + 5, 206 + (i % 300)]]);
+  const art = vectorArt(list(...noise.map(([op, box]) => path(op, box)), path(OPS.stroke, [120, 97, 131, 108])), OPS);
+  assert.equal(artUnder(art, item), true);
+  assert.equal(artUnder(art, { ...item, transform: [10, 0, 0, 10, 50, 150] }), false);
 });

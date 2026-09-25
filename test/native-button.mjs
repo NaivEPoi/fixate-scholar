@@ -73,7 +73,9 @@ try {
   const at2 = await client1.ev("location.href").catch(() => "(navigating)");
   await sleep(3000);
   const at3 = await client1.ev("location.href").catch(() => "(navigating)");
-  const ok = at3 === URL0 || decodeURIComponent(at3) === decodeURIComponent(URL0);
+  // The original URL, or where it redirects to (http to https, a gateway):
+  // the tab left the viewer for a real page.
+  const ok = at3 === URL0 || decodeURIComponent(at3) === decodeURIComponent(URL0) || /^(https?|file):/.test(at3);
   console.log("after bypass: ", at2.slice(0, 90));
   console.log("native view:  ", at3.slice(0, 90));
   if (!ok) throw new Error("did not navigate to native viewer");

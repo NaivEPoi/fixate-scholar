@@ -54,6 +54,8 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
       case OPS.paintFormXObjectBegin:
         stack.push([ctm, fill, clip]);
         if (args?.[0]) ctm = mul(ctm, args[0]);
+        // The form paints nothing outside its BBox.
+        if (args?.[1] && clip) clip = intersect(clip, transformBox(ctm, args[1]));
         break;
       case OPS.paintFormXObjectEnd: if (stack.length) [ctm, fill, clip] = stack.pop(); break;
       case OPS.beginAnnotation: inAnnotation++; break;
@@ -75,11 +77,13 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
       }
     }
   }
-  return out;
+  // By bottom edge, for artUnder's binary search: a plot-heavy page has tens
+  // of thousands of boxes, and every candidate line is tested against them.
+  return out.sort((a, b) => a[1] - b[1]);
 }
 
 /**
- * Does vector art sit on this text item? Only art on the scale of a line —
+ * Does vector art sit on this text item? `art` as vectorArt returns it (sorted). Only art on the scale of a line —
  * up to 2.5 × its height tall — counts: a figure or a framed block is far
  * larger, and its own text is decided elsewhere. The art must lie mostly
  * inside the item's line band, and overlap it along the line.
@@ -89,7 +93,13 @@ export function artUnder(art, item) {
   if (!art?.length || !t || t[1] || t[2] || !(item.height > 0) || !(item.width > 0)) return false;
   const h = item.height;
   const x0 = t[4], x1 = t[4] + item.width, y0 = t[5] - 0.3 * h, y1 = t[5] + h;
-  for (const [a0, b0, a1, b1] of art) {
+  // art is sorted by bottom edge (vectorArt); a box that counts reaches at
+  // least 60% of its height into the band, and is at most 2.5 h tall, so its
+  // bottom lies above y0 - 2.5 h.
+  let lo = 0, hi = art.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (art[mid][1] < y0 - 2.5 * h) lo = mid + 1; else hi = mid; }
+  for (let i = lo; i < art.length && art[i][1] < y1; i++) {
+    const [a0, b0, a1, b1] = art[i];
     if (b1 - b0 > 2.5 * h || b1 - b0 < 0.3 * h) continue;
     const ox = Math.min(x1, a1) - Math.max(x0, a0);
     const oy = Math.min(y1, b1) - Math.max(y0, b0);
