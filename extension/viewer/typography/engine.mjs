@@ -1833,6 +1833,22 @@ export class TypographyEngine {
         for (const p of runDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-ital"); }
       }
     };
+    // A heading HYPHENATED across two lines ("D. A2: No Channel Availability
+    // Attack Using a Foreign Lo- / cation"): its tail opens the next line, in
+    // the heading's own face, and was emphasized as body. Follow it while the
+    // next line stays in that face.
+    const skipHeadingWrap = (ln, head, bx0, bx1) => {
+      const last = head.at(-1);
+      if (!last || !/[A-Za-zÀ-ɏ]-$/.test(last.item.str.trim())) return;
+      const next = lines[lines.indexOf(ln) + 1];
+      if (!next) return;
+      for (const p of next.items.filter((q) => q.item.transform[4] >= bx0 && q.item.transform[4] < bx1)) {
+        if (p.item.fontName !== last.item.fontName) break;
+        skip.add(p.div);
+        dbg(p.div, "line-head");
+        if (isItalic(p)) protect.add(p.div);
+      }
+    };
     for (const ln of lines) {
       const its = ln.items;
       const starts = [0];
@@ -1896,6 +1912,7 @@ export class TypographyEngine {
             dbg(p.div, "line-head");
             if (isItalic(lead)) protect.add(p.div);
           }
+          skipHeadingWrap(ln, head, bx0, bx1);
         } else if (HEAD_LEAD.test(leadStr)) {
           if (lowerWords(band) <= 3) {
             // A NUMBERED RUN-IN heading shares its line with the paragraph it
@@ -1918,6 +1935,7 @@ export class TypographyEngine {
               // instead of exactly at the em box (which erases the line).
               if (isItalic(lead)) protect.add(p.div);
             }
+            skipHeadingWrap(ln, head, bx0, bx1);
           }
           else if (isSpecial(lead)) skipHeadingRun(its, a);
           // A label-led sentence whose label + lead-in is styled italic
@@ -3853,6 +3871,12 @@ export class TypographyEngine {
           // read "a" ("K⁺gNB" as "K⁺aNB"). Masks are cut around this band.
           const dh = r.height;
           descenderZones.push({ left: r.left - dh * 0.2, right: r.right, top: r.bottom - dh * 0.3, bottom: r.bottom + dh * 0.25 });
+          // A lone slanted glyph ("/", "|", "\") overhangs its box sideways the
+          // whole height: the next word's mask took the top of the "/" in
+          // "conditions/actions", which then read as a comma.
+          if (/^[/\\|]$/.test((d.textContent || "").trim())) {
+            descenderZones.push({ left: r.left - dh * 0.15, right: r.right + dh * 0.15, top: r.top, bottom: r.bottom });
+          }
           if (protectSet.has(d)) {
             // A protected span (displayed formula) has structural canvas art —
             // its box frame — hugging the glyphs. Expand its obstacle rect
