@@ -2141,6 +2141,20 @@ export class TypographyEngine {
              anchorNear(this.#hints.captions, pageNumber, lead.item.transform[5], capTol, [bx0, bx1]))
           : null;
         for (const p of lines[k].items.filter(inBand)) { skip.add(p.div); dbg(p.div, "caption"); }
+        // A caption is a paragraph: its lines run to the column's right edge
+        // except the LAST. A line falling short ends it — the next line is the
+        // body. That is what lets a long caption be followed past a line cap
+        // (ACL's nine-line table captions lost emphasis-free status after four)
+        // without the sweep running on into the paragraph below.
+        const rightOf = (its) => Math.max(...its.map((p) => p.item.transform[4] + (p.item.width || 0)));
+        const leftOf = (its) => Math.min(...its.map((p) => p.item.transform[4]));
+        let capL = leftOf(lines[k].items.filter(inBand)), capR = rightOf(lines[k].items.filter(inBand));
+        let lastFull = true;
+        const endsParagraph = (its) => {
+          capL = Math.min(capL, leftOf(its));
+          capR = Math.max(capR, rightOf(its));
+          return rightOf(its) < capR - (capR - capL) * 0.05;
+        };
         if (capAnchor) {
           // Bounded by the hyperref caption anchor. The anchor is why no
           // arbitrary LINE CAP is needed here: it establishes that this really
@@ -2171,21 +2185,29 @@ export class TypographyEngine {
             // A bold run-in heading opens a new body paragraph below the
             // caption — stop before swallowing it.
             if (isBold(bandM[0])) break;
+            if (!lastFull) break; // the previous line ended the caption
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
+            lastFull = !endsParagraph(bandM);
             prevY = curY;
           }
         } else {
-          let prevY = lines[k].y;
-          // Absorb the caption's own continuation lines only — captions are
-          // short. A small line cap and a tighter gap stop the sweep from
-          // running on into the body paragraph that follows the caption.
-          for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 4; m++) {
+          // Baselines of the caption's OWN items: a line group can carry other
+          // text on nearly the same baseline (a table's small labels just above
+          // a caption), and its y then made a normal caption pitch look like a
+          // paragraph break.
+          let prevY = lead.item.transform[5];
+          // Absorb the caption's own continuation lines only. A tighter gap
+          // and the short-last-line end (above) stop the sweep before the body
+          // paragraph that follows; past four lines only a caption still
+          // running full width goes on, and never past twelve.
+          for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 12 && (absorbed < 4 || lastFull); m++) {
             const bandM = lines[m].items.filter(inBand);
             if (!bandM.length) continue;
             // A paragraph break (the body paragraph after the caption) shows a
             // slightly larger gap than caption-internal leading; 1.3× catches it
             // while sparing tight multi-line captions (F2: stop eating body).
-            if (prevY - lines[m].y > Math.max(leadH, lines[m].h) * 1.3) break; // gap
+            const curY = bandM[0].item.transform[5];
+            if (prevY - curY > Math.max(leadH, lines[m].h) * 1.3) break; // gap
             if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
             if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
             // A new in-text reference sentence ("Figure 8 shows …") is body prose,
@@ -2194,8 +2216,10 @@ export class TypographyEngine {
             // A bold run-in heading ("Evaluating collaborative learning.") opens a
             // new body paragraph below the caption — stop before swallowing it.
             if (isBold(bandM[0])) break;
+            if (!lastFull) break; // the previous line ended the caption
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
-            prevY = lines[m].y;
+            lastFull = !endsParagraph(bandM);
+            prevY = curY;
             absorbed++;
           }
         }
