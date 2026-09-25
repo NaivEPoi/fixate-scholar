@@ -3617,6 +3617,7 @@ export class TypographyEngine {
           const hRules = canvasRules
             .filter((r) => r.right - r.left >= (r.bottom - r.top) * 4 && r.right - r.left > RULE_MIN_WIDTH * zoom)
             .sort((a, b) => a.top - b.top);
+          const vRules = canvasRules.filter((r) => r.bottom - r.top >= (r.right - r.left) * 4);
           const rulePairs = [];
           for (let a = 0; a < hRules.length; a++) {
             for (let b = a + 1; b < hRules.length; b++) {
@@ -3692,8 +3693,16 @@ export class TypographyEngine {
               const lineH = gy1 - gy0;
               const clearOfRules =
                 gy0 - z.yTop >= lineH * 0.5 && z.yBot - gy1 >= lineH * 0.5;
+              // A vertical rule through the MIDDLE of the line is a cell
+              // border: a row of wordy cells spans the table like a sentence
+              // ("Constraint extraction for logical | Yes, but diffi-" in a
+              // fully ruled table) and passed as prose. A framed paragraph's
+              // frame stands at its ends, outside the text.
+              const cellBorder = vRules.some(
+                (v) => v.left > gx0 + lineH && v.right < gx1 - lineH && v.top <= gy0 && v.bottom >= gy1,
+              );
               const exemptLine =
-                clearOfRules &&
+                clearOfRules && !cellBorder &&
                 ((lw >= 4 && gx1 - gx0 >= (z.x1 - z.x0) * 0.55) ||
                   (lw >= 2 && prev != null && lineKey - prev <= ZONE_CONT_LINES));
               if (exemptLine) lastExempt.set(zi, lineKey);
@@ -3701,7 +3710,7 @@ export class TypographyEngine {
                 (globalThis.__fxZoneLines ??= []).push({
                   page: pageNumber, zi, lineKey, lw, exempt: exemptLine, prev: prev ?? null,
                   w: Math.round(gx1 - gx0), zw: Math.round(z.x1 - z.x0),
-                  clear: clearOfRules,
+                  clear: clearOfRules, cellBorder,
                   gapTop: Math.round(gy0 - z.yTop), gapBot: Math.round(z.yBot - gy1), lineH: Math.round(lineH),
                   t: text.slice(0, 40),
                 }); // test introspection

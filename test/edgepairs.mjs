@@ -57,16 +57,18 @@ const browser = spawn(browserPath("edge"), [
 let cdp;
 const ev = (expr, opts) => cdp.ev(expr, opts);
 
+const counts = (page) => ev(`(() => {
+  const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page - 1});
+  if (!pv || !pv.textLayer || !pv.canvas) return "x";
+  return pv.textLayer.div.querySelectorAll("span[data-fx-done]").length + "/" +
+         pv.textLayer.div.querySelectorAll(".fx-b").length;
+})()`).catch(() => "x");
+
 /** This page's processed-span and emphasis counts, holding still (pagepairs.mjs). */
 async function settleOn(page) {
   let last = "", stable = 0;
   for (let i = 0; i < 90; i++) {
-    const cur = await ev(`(() => {
-      const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page - 1});
-      if (!pv || !pv.textLayer || !pv.canvas) return "x";
-      return pv.textLayer.div.querySelectorAll("span[data-fx-done]").length + "/" +
-             pv.textLayer.div.querySelectorAll(".fx-b").length;
-    })()`).catch(() => "x");
+    const cur = await counts(page);
     if (cur === last && cur !== "x") { if (++stable >= 8) return cur; } else { stable = 0; last = cur; }
     await sleep(500);
   }
@@ -244,7 +246,9 @@ try {
     const strips = (await ev(STRIPS(p))) ?? [];
     for (const s of strips) {
       const clip = await stripClip(p, s);
-      await settleOn(p); // scrolling can bring a re-render into view
+      // Scrolling can bring a re-render into view: settle again only if the
+      // page's counts moved (a full settle per strip took hours per corpus).
+      if ((await counts(p)) !== settled) await settleOn(p);
       rows.push({ p, s, tag: `p${p} ${s.why}`, on: await shoot(clip) });
     }
     console.log(`p${p}: ${strips.length} strips, on ${settled}`);
