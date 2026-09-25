@@ -122,6 +122,26 @@ export const probe = (page, { noexempt = false } = {}) => `(async () => {
   // "RETURN x.name AS label, ..." look as wordy as a sentence, which is how a
   // framed listing's interior came to be treated as prose between frames on
   // both sides. (No backticks in here - this whole block is a template literal.)
+  // A dark column through the line's whole height AND on into the leading
+  // above and below it is a cell border: glyphs stop at the line box, a table's
+  // vertical rule runs through. A row of wordy cells crossed by one spans the
+  // table like a sentence, and is not prose (a framed paragraph's frame stands
+  // at its ends, which the inset leaves out). The oracle's own pixels, not the
+  // engine's rules.
+  const crossedByRule = (xs) => {
+    const x0 = (Math.min(...xs.map((q) => q.left)) - cr.left) * sx;
+    const x1 = (Math.max(...xs.map((q) => q.right)) - cr.left) * sx;
+    const top = (Math.min(...xs.map((q) => q.top)) - cr.top) * sy;
+    const bot = (Math.max(...xs.map((q) => q.bottom)) - cr.top) * sy;
+    const lh = bot - top;
+    const y0 = Math.max(0, Math.round(top - lh * 0.3)), y1 = Math.min(H, Math.round(bot + lh * 0.3));
+    for (let x = Math.round(x0 + lh); x < x1 - lh; x++) {
+      let n = 0, k = 0;
+      for (let y = y0; y < y1; y++) { n++; if (dark((y * W + x) * 4)) k++; }
+      if (n && k >= n * 0.95) return true;
+    }
+    return false;
+  };
   const words = (s) => (s.match(/(?:^|[\\s(“"'])[a-zà-ÿ]{2,}(?=[\\s.,;:)\\]”"']|$)/g) || []).length;
   const proseKeys = new Set();
   const keys = [...lineMap.keys()].sort((a, b) => a - b);
@@ -131,7 +151,7 @@ export const probe = (page, { noexempt = false } = {}) => `(async () => {
     const lw = words(text);
     const xs = line.map((el) => el.getBoundingClientRect());
     const w = (Math.max(...xs.map((q) => q.right)) - Math.min(...xs.map((q) => q.left))) * sx;
-    const wideProse = lw >= 4 && zones.some((z) => w >= (z.x1 - z.x0) * 0.55);
+    const wideProse = lw >= 4 && zones.some((z) => w >= (z.x1 - z.x0) * 0.55) && !crossedByRule(xs);
     // Continuation: a prose line 6-21 page px above (2-7 buckets). The old
     // 3-5 buckets (9-15 px) was narrower than 12pt leading (~16 px), so
     // whether the previous line counted came down to rounding — at 180% a
