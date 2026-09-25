@@ -65,7 +65,11 @@ export const SPECIAL_FONT = new RegExp(
     // `Mon[oL]` also covers URW Nimbus Mono ("NimbusMonL-Regu"), the standard
     // LaTeX Courier clone — its name has no "Mono" in it, so code and URLs set
     // in it used to be treated as body text and emphasized.
-    "cmtt|Typewriter|Mon[oL](?![a-z])|Courier|Consol|Menlo|LMTT|TT(?=[0-9-])", // monospace
+    // Code faces LaTeX packages embed under their own names: Inconsolata
+    // (zi4, "Inconsolatazi4-Regular" — an ACL prompt listing in it was
+    // emphasized), Source Code Pro, Fira Code, the EC/TX typewriters, and
+    // Courier as the PSNFSS "pcr" family.
+    "cmtt|Typewriter|Mon[oL](?![a-z])|Courier|Consol|Menlo|LMTT|TT(?=[0-9-])|Inconsolata|SourceCode|FiraCode|ectt|ECTT|txtt|TXTT|pcr[rbo]", // monospace
     "CMCSC|cmcsc|SmallCaps|[-+]SC(?![a-z])|Caps(?![a-z])", // small caps
     // Linux Libertine / Biolinum (ACM's acmart) name the bold face by a
     // suffix letter: LinLibertineTB, LinLibertineTBI, LinBiolinumTB. Missed,
@@ -1485,7 +1489,13 @@ export class TypographyEngine {
           // lists relations and carries neither the `+` nor the `∣` that
           // equation (5.6) is built from — so a row with no signal at all has
           // to be almost entirely symbols before it qualifies.
-          if (!(eqNumbered || ratio >= 0.85 || ((mathSignal || numbered) && ratio >= 0.7))) continue;
+          // Named quantities in an equation are set in the TEXT face (\text{},
+          // \mathrm{}): "U_BS ← NRCell_ID || Expiry_Timestamp" is two-thirds
+          // symbols by item count and was emphasized as prose. A relation, a
+          // math-face item and not one prose word is an equation at any ratio
+          // above a half.
+          const namedEquation = mathSignal && prose === 0 && ratio >= 0.5 && r.items.some((p) => isMath(p));
+          if (!(eqNumbered || namedEquation || ratio >= 0.85 || ((mathSignal || numbered) && ratio >= 0.7))) continue;
           for (const p of r.items) {
             if (skip.has(p.div)) continue;
             skip.add(p.div);
@@ -1798,6 +1808,7 @@ export class TypographyEngine {
     const skipItalicLead = (ln, its, a, bx0, bx1) => {
       const runDivs = [];
       let ended = false;
+      let colonNext = false; // the colon opens the next (roman) item: "Unlinkability (UL)" + ": Given …"
       let rows = 0;
       for (let m = lines.indexOf(ln); m < lines.length && rows < 3 && !ended; m++, rows++) {
         const bandM = (rows === 0 ? its.slice(a) : lines[m].items).filter(
@@ -1809,7 +1820,7 @@ export class TypographyEngine {
           const t = p.item.str.trim();
           const glyphBit = t.length < 2 || !/[A-Za-zÀ-ÿ]/.test(t);
           const shortRoman = t.length <= 5;
-          if (!isItalic(p) && !glyphBit && !shortRoman) { ended = true; break; }
+          if (!isItalic(p) && !glyphBit && !shortRoman) { ended = true; colonNext = /^:/.test(t); break; }
           runDivs.push(p);
           any = true;
           if (/:\s*$/.test(t)) { ended = true; break; }
@@ -1818,7 +1829,7 @@ export class TypographyEngine {
       }
       // Qualify only when the run terminates at a colon (a lead-in), not for a
       // full italic sentence or block (quotes, definitions, theorem bodies).
-      if (ended && runDivs.length && /:\s*$/.test(runDivs.at(-1).item.str.trim())) {
+      if (ended && runDivs.length && (colonNext || /:\s*$/.test(runDivs.at(-1).item.str.trim()))) {
         for (const p of runDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-ital"); }
       }
     };
