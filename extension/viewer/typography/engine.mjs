@@ -18,6 +18,7 @@
 import { emphasizeParts } from "./segmenter.mjs";
 import { findCitations, findInternalRefs } from "../references/parser.mjs";
 import { scanRules } from "./rules.mjs";
+import { artUnder, vectorArt } from "./vector-art.mjs";
 import { anchorNear } from "./pdfhints.mjs";
 
 const CHUNK = 150;
@@ -2584,7 +2585,7 @@ export class TypographyEngine {
     // the zoom it is px per point at 100% — one page px per unit.
     const ptScale = pageView.viewport.scale / pageView.scale;
     const unit = page.getViewport({ scale: ptScale, rotation });
-    const entry = { rotation, w: unit.width, h: unit.height, rules: undefined };
+    const entry = { rotation, w: unit.width, h: unit.height, rules: undefined, art: null };
     this.#ruleBaseline.set(page, entry);
     const ppu = globalThis.__fxRulePPU > 0 ? globalThis.__fxRulePPU : RULE_PPU; // test override
     const gen = this.#ruleGen;
@@ -2611,6 +2612,15 @@ export class TypographyEngine {
         });
         timer = setTimeout(() => task.cancel(), RULE_RENDER_MS);
         await task.promise;
+        // The page's vector art (vector-art.mjs), set before `rules` so it is
+        // there whenever a pass stops waiting for the baseline.
+        try {
+          const OPS = globalThis.pdfjsLib?.OPS;
+          if (OPS) {
+            const opList = await page.getOperatorList({ annotationMode: globalThis.pdfjsLib.AnnotationMode?.ENABLE_FORMS });
+            entry.art = vectorArt(opList, OPS, page.view);
+          }
+        } catch { entry.art = null; }
         const W = canvas.width, H = canvas.height;
         const kx = W / entry.w, ky = H / entry.h;
         const scanHere = () => scanRules(ctx.getImageData(0, 0, W, H).data, W, H, kx, ky)
@@ -3270,6 +3280,20 @@ export class TypographyEngine {
           else requestIdleCallback(work, { timeout: 200 });
         }, 150);
         return;
+      }
+      // Vector art under a line — a circled number, a boxed label, a highlight
+      // (vector-art.mjs): masking would erase it, so the span stays on the
+      // canvas, and as an obstacle its neighbours' masks clamp around it.
+      if (!obstacleRects && !holder.artChecked) {
+        holder.artChecked = true;
+        const art = baseline?.art;
+        for (let i = pairs.length; art?.length && i--; ) {
+          if (!artUnder(art, pairs[i].item)) continue;
+          reject(pairs[i].div, "vector-art");
+          candidateDivs.delete(pairs[i].div);
+          obstacleDivs.push(pairs[i].div);
+          pairs.splice(i, 1);
+        }
       }
       // The canvases' pixels, read in the worker before the block below needs
       // them (#prefetchPixels); the pass resumes when they arrive. Without a

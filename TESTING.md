@@ -197,6 +197,7 @@ no error at all — which a sweep then reported as a product failure.
 | `node test/stylemodes.mjs [url|template] [page]` | settings surface: dynamic+bundled font bolds AND preserves italic originals; emphasisMode “none” renders zero .fx-b with spans in the bundled face; none+original leaves the page pristine. Defaults to a body page of a template when given no args | `dynOk=true fontOnlyOk=true inertOk=true`, and `italicPreserved` either `true` or `n/a`. `n/a` means the page has NO italic-faced processed spans, so that check could not run — it is not a pass. No corpus paper has an italic TEXT face, so `n/a` is the normal result |
 | `node test/diag-drag.mjs <paper> [--tag=] [--trace]` | REAL mouse-drag selection (R16 guard): the drag selects something; PDF.js's `.endOfContent` stays in the `.textLayer` MID-DRAG (its pointerup reset hides the bug, so it is sampled during the drag); every fully-covered span's text is in the selection (non-bold tails not lost); the copy event carries it; emphasis uses a property `::selection` honors. `--trace` prints the selection after each mouse step | `<paper>: PASS` (exit 1 otherwise). Dispatches at INTEGER viewport coords — fractional ones do not register as a drag at all (caret placed, never extended), which mimics a product bug |
 | `node test/dump-stream.mjs <paper> <page> <left\|right\|full> [filter]` | the engine's-eye line/stream geometry (debug `#classifyBlocks`) | inspection |
+| `node test/edgepairs.mjs --url= --label= [--zoom=1.0] [--pages=A-B] [--rows=14] [--column-edges]` | the TARGETED visual review: only the lines where the overlay goes wrong — the prose line before and after each heading (a section's last and first line), caption, table and equation, a caption's first and last line, and every line kept for vector art — as fx-on / fx-off strips on contact sheets (`test/out/edges/<label>/sheet-NN.png` + `.txt` with each strip's words). pagepairs.mjs's settle and restore rules; picks the lines from the engine's own `__fxDebug` reasons | each strip's halves differ only by emphasis; exit 75 if a page never settled |
 | `node test/shot-region2.mjs <paper> <page> [--zoom=] [--find=] [--pad=N] [--url= --label=]` | fx-on vs fx-off matched captures of one region. `--find` bands one LINE; add `--pad=150` for a paragraph-sized region — the release gate's defect list (baseline drift, jammed spacing, a span in the wrong face, a whited-out word) needs neighbours to judge against. Every CDP call is bounded at 60s and a failed capture exits 1, so a corpus loop cannot silently stall or report a capture that never happened | images should differ only by emphasis |
 
 Every harness with a PAPERS map also accepts `--url=<any PDF URL>` (e.g. a
@@ -287,6 +288,11 @@ embedded font at original size, mask the canvas duplicate):
 - **The rest of a word the block pass kept.** PDF.js splits a word at every
   font change (TeX composes an accented letter from two glyphs); a piece joined
   to a piece kept as a heading, run-in lead or table cell is kept with it.
+- **A line with vector art drawn on it** — a circled step number (①) or a
+  boxed label drawn as a path, a coloured highlight behind a phrase. The text
+  layer has only the digit or letter; masking the span erased the art. Read from
+  the operator list (`vector-art.mjs`): painted, clipped paths up to 2.5 line
+  heights tall; rules, clip-only paths, white fills and annotations excluded.
 - **Pseudocode / algorithm listings** (line-number/`Require:`/keyword leads).
 - **Math / symbol / monospace / small-caps / bold-display fonts**; any span with
   no Latin letter (subscripts, operators, bracketed numbers, version strings);
