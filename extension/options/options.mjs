@@ -1,4 +1,4 @@
-import { getSettings, setSettings, normalizeBypassUrl } from "../viewer/settings-client.mjs";
+import { getSettings, setSettings, normalizeBypassUrl, fitBypassUrls } from "../viewer/settings-client.mjs";
 import { clearCached } from "../viewer/references/lookup-cache.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -62,7 +62,7 @@ $("bypassUrls").addEventListener("change", (e) => {
     .split("\n")
     .map((s) => normalizeBypassUrl(s))
     .filter(Boolean);
-  setSettings({ bypassUrls: [...new Set(urls)] });
+  setSettings({ bypassUrls: fitBypassUrls([...new Set(urls)]) });
 });
 
 $("clearLookups").addEventListener("click", async () => {

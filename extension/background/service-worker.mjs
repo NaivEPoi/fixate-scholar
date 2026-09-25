@@ -4,7 +4,7 @@
 // a context-menu fallback for anything else.
 
 import { clearCached } from "../viewer/references/lookup-cache.mjs";
-import { normalizeBypassUrl, urlsMatch } from "../viewer/settings-client.mjs";
+import { fitBypassUrls, normalizeBypassUrl, urlsMatch } from "../viewer/settings-client.mjs";
 
 const VIEWER = chrome.runtime.getURL("vendor/pdfjs/web/viewer.html");
 
@@ -218,7 +218,7 @@ export async function addBypassUrl(url) {
   if (!clean || !/^(https?|file):/i.test(clean)) return;
   const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
   if (!bypassUrls.some((u) => urlsMatch(u, clean))) {
-    const next = [...bypassUrls, clean].slice(-100);
+    const next = fitBypassUrls([...bypassUrls, clean].slice(-100));
     await chrome.storage.sync.set({ bypassUrls: next });
   }
 }
@@ -234,6 +234,7 @@ export async function removeBypassUrl(url) {
 }
 
 async function isBypassedUrl(url) {
+  if (bypassOnce && urlsMatch(bypassOnce, url)) return true;
   const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
   return bypassUrls.some((u) => urlsMatch(u, url));
 }
@@ -257,6 +258,27 @@ chrome.webNavigation.onBeforeNavigate.addListener(
   { url: [{ schemes: ["file"], pathSuffix: ".pdf" }] },
 );
 
+// The URL the last "native" click escaped to. Kept in memory as well as in
+// storage, so the escape works even when the stored list cannot be written.
+let bypassOnce = null;
+
+// A session allow rule for exactly this URL. applyRules() keeps ids at or
+// above BYPASS_ONCE_BASE, and the next click replaces it.
+async function allowOnce(url) {
+  if (!/^https?:/i.test(url) || url.length > 1024) return;
+  await chrome.declarativeNetRequest
+    .updateSessionRules({
+      removeRuleIds: [BYPASS_ONCE_BASE],
+      addRules: [{
+        id: BYPASS_ONCE_BASE,
+        priority: 30,
+        condition: { resourceTypes: ["main_frame"], regexFilter: `^${escapeRegex(url)}([?#].*)?$` },
+        action: { type: "allow" },
+      }],
+    })
+    .catch((e) => console.warn("FixateScholar: failed to register the one-shot bypass", e));
+}
+
 // "Open in native viewer": escape to the browser's native viewer.
 // Persists the bypass for this URL so subsequent reopens/reloads also stay in
 // the browser's native viewer.
@@ -270,11 +292,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!cleanUrl || !/^(https?|file):/i.test(cleanUrl)) return false;
 
   (async () => {
-    await addBypassUrl(cleanUrl);
+    // Leave the viewer whether or not the bypass could be saved: a one-shot
+    // allow rule (and, for file: URLs, the in-memory bypassOnce) lets this
+    // navigation through. The persistent entry only keeps later reopens native.
+    bypassOnce = cleanUrl;
+    let saved = true;
+    try {
+      await addBypassUrl(cleanUrl);
+    } catch (e) {
+      saved = false;
+      console.warn("FixateScholar: could not save the bypass", e);
+    }
     await registerRules();
+    await allowOnce(cleanUrl);
     const tabId = sender.tab?.id;
     if (tabId !== undefined) await chrome.tabs.update(tabId, { url: cleanUrl });
-    sendResponse({ ok: true });
+    sendResponse({ ok: true, saved });
   })();
   return true;
 });

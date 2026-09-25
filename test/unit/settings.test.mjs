@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULTS, getSettings, normalizeBypassUrl, urlsMatch } from "../../extension/viewer/settings-client.mjs";
+import { DEFAULTS, getSettings, normalizeBypassUrl, urlsMatch, fitBypassUrls } from "../../extension/viewer/settings-client.mjs";
 
 test("DEFAULTS defines all required settings with correct types", () => {
   assert.equal(DEFAULTS.saveLocalFile, true, "saveLocalFile must default to true");
@@ -38,4 +38,14 @@ test("urlsMatch matches identical, fragmented, and case-insensitive file URLs", 
   assert.equal(urlsMatch("https://example.com/a.pdf", "https://example.com/b.pdf"), false);
   assert.equal(urlsMatch("file:///C:/test.pdf#page=1", "file:///c:/test.pdf"), true);
   assert.equal(urlsMatch("file:///C:/My%20Files/test.pdf", "file:///c:/My Files/test.pdf"), true);
+});
+
+test("fitBypassUrls keeps the newest URLs that fit one sync item", () => {
+  const urls = Array.from({ length: 40 }, (_, i) => `https://example.com/${"x".repeat(200)}${i}`);
+  const kept = fitBypassUrls(urls);
+  assert.ok(kept.length < urls.length && kept.length > 0);
+  assert.equal(kept.at(-1), urls.at(-1), "the URL just added survives");
+  assert.deepEqual(kept, urls.slice(urls.length - kept.length), "the oldest go first");
+  assert.ok(new TextEncoder().encode("bypassUrls" + JSON.stringify(kept)).length <= 8192);
+  assert.deepEqual(fitBypassUrls(["https://a.org/x.pdf"]), ["https://a.org/x.pdf"]);
 });
