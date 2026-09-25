@@ -3239,6 +3239,7 @@ export class TypographyEngine {
       .map((p) => p.div);
     let obstacleRects = null;
     const artKept = new Set(); // spans kept for the vector art on them (work())
+    const artBoxes = []; // their art, viewport rects [x0, y0, x1, y1] relative to the page
     const descenderZones = []; // kept glyph runs' descender bands, masks cut around them
     let zoneDrops = null; // candidates inside rule-bounded table zones — left on the canvas
     let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
@@ -3328,12 +3329,24 @@ export class TypographyEngine {
         holder.artChecked = true;
         const art = baseline?.art;
         for (let i = pairs.length; art?.length && i--; ) {
-          if (!artUnder(art, pairs[i].item)) continue;
+          const box = artUnder(art, pairs[i].item);
+          if (!box) continue;
           reject(pairs[i].div, "vector-art");
           artKept.add(pairs[i].div);
+          // The art itself is an obstacle too: a boxed label's frame reaches past
+          // the text box, and the next word's mask cut its right side off.
+          artBoxes.push(pageView.viewport.convertToViewportRectangle(box));
           candidateDivs.delete(pairs[i].div);
           obstacleDivs.push(pairs[i].div);
           pairs.splice(i, 1);
+        }
+        // Art on text that stays on the canvas anyway (a boxed "C2": the "C"
+        // and "2" are kept for being short) is an obstacle too — only its
+        // processed neighbour would otherwise decide how far its mask reaches.
+        const kept = art?.length ? allPairs.filter((p) => p.div && !candidateDivs.has(p.div)) : [];
+        for (const p of kept) {
+          const box = artUnder(art, p.item);
+          if (box) artBoxes.push(pageView.viewport.convertToViewportRectangle(box));
         }
       }
       // The canvases' pixels, read in the worker before the block below needs
@@ -3364,6 +3377,18 @@ export class TypographyEngine {
         // text — the text layer alone can't see these.
         const canvasRules = this.#detectCanvasRules(pageView, snapMemo);
         for (const r of canvasRules) obstacleRects.push(r);
+        {
+          // Viewport rects are relative to the page box the canvas and the text
+          // layer share — not the page div, which has a border.
+          const pb = pageView.textLayer.div.getBoundingClientRect();
+          for (const [x0, y0, x1, y1] of artBoxes) {
+            const art = { left: pb.left + Math.min(x0, x1), right: pb.left + Math.max(x0, x1), top: pb.top + Math.min(y0, y1), bottom: pb.top + Math.max(y0, y1) };
+            obstacleRects.push(art);
+            // ...and cut out of every mask outright: a clamp gives way where a
+            // mask's own glyphs reach the frame (the comma after a boxed "C2").
+            descenderZones.push({ left: art.left - 1, right: art.right + 1, top: art.top - 1, bottom: art.bottom + 1 });
+          }
+        }
         // HIDDEN-TEXT guard. A PDF's text layer can carry items the canvas
         // never painted (invisible render mode / OCR overlays / hidden
         // duplicate layers); processing such a span re-renders it VISIBLY on
