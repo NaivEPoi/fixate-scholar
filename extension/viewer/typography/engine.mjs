@@ -4134,7 +4134,11 @@ export class TypographyEngine {
             pieces = pieces.flatMap(([l, t, r, b]) => {
               if (z.right <= l || z.left >= r || z.bottom <= t || z.top >= b) return [[l, t, r, b]];
               const zt = Math.max(t, z.top), zb = Math.min(b, z.bottom);
-              return [[l, t, r, zt], [l, zb, r, b], [l, zt, Math.min(r, z.left), zb], [Math.max(l, z.right), zt, r, zb]];
+              // Empty pieces are dropped HERE: a zero- or negative-width one still
+              // "intersects" the next zone and splits again, 4x per zone — a line
+              // of many kept runs hung the page for over a minute.
+              return [[l, t, r, zt], [l, zb, r, b], [l, zt, Math.min(r, z.left), zb], [Math.max(l, z.right), zt, r, zb]]
+                .filter(([pl, pt, pr, pb]) => pr > pl && pb > pt);
             });
           }
           for (const [l, t, r, b] of pieces) box(l, t, r, b);
