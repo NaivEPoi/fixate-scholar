@@ -2120,7 +2120,12 @@ export class TypographyEngine {
           const above = lines[k - 1];
           const aboveBand = above.items.filter(inBand);
           const pitch = above.y - lines[k].y;
-          if (aboveBand.length && pitch > 0 &&
+          // ...and the wrapped "Figure 4." is set in the paragraph's own
+          // face. A caption's label is not: "Table 2:" in bold, one normal
+          // pitch under a paragraph (a table float between paragraphs), was
+          // read as a continuation and the caption was emphasized.
+          const sameFace = aboveBand.some((p) => p.item.fontName === lead.item.fontName);
+          if (aboveBand.length && pitch > 0 && sameFace &&
               pitch <= Math.max(leadH, above.h) * 1.45 &&
               Math.abs(above.h - leadH) <= leadH * 0.2 &&
               lowerWords(aboveBand) >= 3) continue;
