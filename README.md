@@ -27,7 +27,7 @@ code, fonts, or assets.
 - **Automatic PDF interception**: any PDF you navigate to (including links from Google
   Scholar, and links served as `attachment` downloads) opens in the FixateScholar viewer —
   nothing is ever saved to disk just by clicking a link; the toolbar download button
-  saves a copy explicitly. Per-site bypass list, per-document "open in native viewer"
+  saves a copy explicitly. Per-site bypass list, per-document one-time "open in native viewer"
   escape hatch, and a context-menu fallback.
 - **Plays well with other PDF tools**: a master **Open PDFs in FixateScholar** switch
   (popup and options) governs interception. Turn it off and PDFs open in the browser's
