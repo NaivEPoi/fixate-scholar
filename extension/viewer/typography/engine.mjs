@@ -67,7 +67,10 @@ export const SPECIAL_FONT = new RegExp(
     // in it used to be treated as body text and emphasized.
     "cmtt|Typewriter|Mon[oL](?![a-z])|Courier|Consol|Menlo|LMTT|TT(?=[0-9-])", // monospace
     "CMCSC|cmcsc|SmallCaps|[-+]SC(?![a-z])|Caps(?![a-z])", // small caps
-    "Bold|bold|CMBX|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])", // bold display variants
+    // Linux Libertine / Biolinum (ACM's acmart) name the bold face by a
+    // suffix letter: LinLibertineTB, LinLibertineTBI, LinBiolinumTB. Missed,
+    // every run-in heading of an ACM paper was emphasized as body.
+    "Bold|bold|CMBX|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])|Lin(?:Libertine|Biolinum)[A-Z]*B", // bold display variants
   ].join("|"),
 );
 // Bold/medium display faces only — the subset of SPECIAL_FONT used to spot
@@ -75,7 +78,7 @@ export const SPECIAL_FONT = new RegExp(
 // duplicate states."). Kept (masked + redrawn) bold text renders lighter than
 // the canvas, so such headings are skipped to the canvas instead. Keep the
 // bold alternatives here identical to SPECIAL_FONT's bold line above.
-export const BOLD_FONT = /Bold|bold|CMBX|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])/;
+export const BOLD_FONT = /Bold|bold|CMBX|cmbx|Heavy|Black(?![a-z])|Medi(?![a-z])|Lin(?:Libertine|Biolinum)[A-Z]*B/;
 // Italic faces. Two consumers: styled run-in paragraph leads ("Establishing
 // privacy-preserving mutual authentication …:" set in underlined italics) are
 // kept on the canvas, because processing such a lead erases its UNDERLINE
@@ -1180,14 +1183,20 @@ export class TypographyEngine {
     // We also …" / "A1: … reuse. To address …"): skip the leading bold/glyph
     // run so the heading stays pristine on the canvas (a kept redraw renders
     // lighter), while the rest of the block is emphasized as body.
+    // A heading that WRAPS ("Effectiveness of considering both security
+    // property and guid- / ing PSM. We compare …") fills its first row with
+    // bold: the run goes on into the next row, up to four, until the first
+    // body word.
     const skipLeadRun = (b) => {
-      const its = b.rows[0].items;
-      for (let j = 0; j < its.length; j++) {
-        const t = its[j].item.str.trim();
-        const glyphBit = t.length < 2 || !/[A-Za-zÀ-ÿ]/.test(t);
-        if (!isSpecial(its[j]) && !glyphBit) break; // first body word
-        skip.add(its[j].div);
-        dbg(its[j].div, "leadrun");
+      for (const row of b.rows.slice(0, 4)) {
+        const its = row.items;
+        for (let j = 0; j < its.length; j++) {
+          const t = its[j].item.str.trim();
+          const glyphBit = t.length < 2 || !/[A-Za-zÀ-ÿ]/.test(t);
+          if (!isSpecial(its[j]) && !glyphBit) return; // first body word
+          skip.add(its[j].div);
+          dbg(its[j].div, "leadrun");
+        }
       }
     };
 

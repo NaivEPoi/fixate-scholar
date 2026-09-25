@@ -109,3 +109,17 @@ test("BOLD_FONT recognizes bold display faces in both cases", () => {
     assert.ok(!BOLD_FONT.test(name), `should not be bold: ${name}`);
   }
 });
+
+// ACM's acmart sets its bold in Linux Libertine / Biolinum, which name the bold
+// face by a suffix letter — no "Bold" in the name. Missed, every run-in heading
+// of an ACM paper was emphasized as body text.
+test("Libertine and Biolinum bold faces are bold and special; their regular and italic are not", () => {
+  for (const name of ["XX+LinLibertineTB", "XX+LinLibertineTBI", "XX+LinBiolinumTB"]) {
+    assert.ok(BOLD_FONT.test(name), `should be bold: ${name}`);
+    assert.ok(SPECIAL_FONT.test(name), `should be special: ${name}`);
+  }
+  for (const name of ["XX+LinLibertineT", "XX+LinLibertineTI", "XX+LinBiolinumT", "XX+LinBiolinumTI"]) {
+    assert.ok(!BOLD_FONT.test(name), `should not be bold: ${name}`);
+    assert.ok(!SPECIAL_FONT.test(name), `should not be special: ${name}`);
+  }
+});
