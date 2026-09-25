@@ -3200,6 +3200,7 @@ export class TypographyEngine {
       )
       .map((p) => p.div);
     let obstacleRects = null;
+    const descenderZones = []; // kept glyph runs' descender bands, masks cut around them
     let zoneDrops = null; // candidates inside rule-bounded table zones — left on the canvas
     let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
     let inkFit = null; // (rect) => how line-like the ink under it is — overlap resolver
@@ -3754,6 +3755,13 @@ export class TypographyEngine {
           } else if (inkCheck && r.width > 1 && r.height > 1 && !inkCheck(r)) {
             continue;
           }
+          // A kept glyph run's descenders leave its text-layer box: below
+          // it (the box comes from the substitute face's ascent), and to
+          // the LEFT, where an italic tail sweeps back. Masks clamped to
+          // the box covered them — a kept subscript "g" lost its tail and
+          // read "a" ("K⁺gNB" as "K⁺aNB"). Masks are cut around this band.
+          const dh = r.height;
+          descenderZones.push({ left: r.left - dh * 0.2, right: r.right, top: r.bottom - dh * 0.3, bottom: r.bottom + dh * 0.25 });
           if (protectSet.has(d)) {
             // A protected span (displayed formula) has structural canvas art —
             // its box frame — hugging the glyphs. Expand its obstacle rect
@@ -4110,12 +4118,26 @@ export class TypographyEngine {
             }
           }
           if (R - L <= 0 || B - T <= 0) continue;
-          const m = document.createElement("div");
-          m.style.left = `${L - layerRect.left}px`;
-          m.style.top = `${T - layerRect.top}px`;
-          m.style.width = `${R - L}px`;
-          m.style.height = `${B - T}px`;
-          mask.append(m);
+          const box = (l, t, r, b) => {
+            if (r - l <= 0 || b - t <= 0) return;
+            const m = document.createElement("div");
+            m.style.left = `${l - layerRect.left}px`;
+            m.style.top = `${t - layerRect.top}px`;
+            m.style.width = `${r - l}px`;
+            m.style.height = `${b - t}px`;
+            mask.append(m);
+          };
+          // The box less every kept run's descender band it reaches into.
+          let pieces = [[L, T, R, B]];
+          for (const z of descenderZones) {
+            if (z.right <= L || z.left >= R || z.bottom <= T || z.top >= B) continue;
+            pieces = pieces.flatMap(([l, t, r, b]) => {
+              if (z.right <= l || z.left >= r || z.bottom <= t || z.top >= b) return [[l, t, r, b]];
+              const zt = Math.max(t, z.top), zb = Math.min(b, z.bottom);
+              return [[l, t, r, zt], [l, zb, r, b], [l, zt, Math.min(r, z.left), zb], [Math.max(l, z.right), zt, r, zb]];
+            });
+          }
+          for (const [l, t, r, b] of pieces) box(l, t, r, b);
         }
         // Width pass: restore the span's pristine rendered width (the font swap
         // and bolding change the natural width). Preferred correction is
