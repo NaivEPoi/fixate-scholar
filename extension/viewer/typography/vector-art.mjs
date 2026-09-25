@@ -95,11 +95,12 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
  * Does vector art sit on this text item? `art` as vectorArt returns it (sorted). Only art on the scale of a line —
  * up to 2.5 × its height tall — counts: a figure or a framed block is far
  * larger, and its own text is decided elsewhere. The art must lie mostly
- * inside the item's line band, and overlap it along the line.
+ * inside the item's line band, and overlap it along the line. Returns the
+ * first such box (PDF user space), or null.
  */
 export function artUnder(art, item) {
   const t = item?.transform;
-  if (!art?.length || !t || t[1] || t[2] || !(item.height > 0) || !(item.width > 0)) return false;
+  if (!art?.length || !t || t[1] || t[2] || !(item.height > 0) || !(item.width > 0)) return null;
   const h = item.height;
   const x0 = t[4], x1 = t[4] + item.width, y0 = t[5] - 0.3 * h, y1 = t[5] + h;
   // art is sorted by bottom edge (vectorArt); a box that counts reaches at
@@ -113,7 +114,7 @@ export function artUnder(art, item) {
     const ox = Math.min(x1, a1) - Math.max(x0, a0);
     const oy = Math.min(y1, b1) - Math.max(y0, b0);
     if (ox <= 0 || oy < 0.6 * (b1 - b0)) continue;
-    if (ox >= Math.min(0.5 * (a1 - a0), 0.5 * h)) return true;
+    if (ox >= Math.min(0.5 * (a1 - a0), 0.5 * h)) return art[i];
   }
-  return false;
+  return null;
 }
