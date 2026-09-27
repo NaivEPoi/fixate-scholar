@@ -640,6 +640,7 @@ export class TypographyEngine {
         span.style.wordSpacing = orig.wordSpacing || "";
         span.style.marginTop = orig.marginTop || "";
       }
+      span.style.removeProperty("--fx-ink");
       delete span.dataset.fxDone;
     }
     for (const d of layerDiv.querySelectorAll("[data-fx-keep]")) {
@@ -3338,6 +3339,7 @@ export class TypographyEngine {
     const descenderZones = []; // kept glyph runs' descender bands, masks cut around them
     let zoneDrops = null; // candidates inside rule-bounded table zones — left on the canvas
     let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
+    let inkColor = null; // (rect) => the glyphs' own colour when it is not black/grey, else null
     let inkFit = null; // (rect) => how line-like the ink under it is — overlap resolver
     const lowResSrc = (s) => s.csy < 1.5; // too coarse for reliable band metrics
     let overlapVeto = null; // candidates whose rects pile on another candidate
@@ -3528,6 +3530,34 @@ export class TypographyEngine {
               // lines would otherwise read its neighbours' ascenders/
               // descenders as its own ink. Real glyphs put well over 2% dark
               // coverage in their core band.
+              // The text's own COLOUR. The overlay redraws processed text in the
+              // reading colour, which turned a paper's coloured prose black —
+              // blue revision text, a highlighted claim. Read the glyph ink in
+              // the core band: the darkest third of the inked pixels (the
+              // antialiased rims are paper-tinted), and only a clearly
+              // chromatic mean counts; black and grey text keep the reading
+              // colour.
+              inkColor = (rect) => {
+                const s = srcFor(rect);
+                const x0 = Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx));
+                const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
+                const y0 = Math.max(0, Math.floor((rect.top + rect.height * 0.3 - s.cr.top) * s.csy));
+                const y1 = Math.min(s.H, Math.ceil((rect.bottom - rect.height * 0.3 - s.cr.top) * s.csy));
+                const px = [];
+                for (let y = y0; y < y1; y++) {
+                  for (let x = x0; x < x1; x += 2) {
+                    const i = (y * s.W + x) * 4;
+                    if (inkedIn(s, i)) px.push([s.d[i], s.d[i + 1], s.d[i + 2]]);
+                  }
+                }
+                if (px.length < 12) return null;
+                const lum = (p) => 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
+                px.sort((a, b) => lum(a) - lum(b));
+                const core = px.slice(0, Math.max(6, Math.ceil(px.length / 3)));
+                const mean = [0, 1, 2].map((c) => Math.round(core.reduce((n, p) => n + p[c], 0) / core.length));
+                const chroma = Math.max(...mean) - Math.min(...mean);
+                return chroma >= 60 ? `rgb(${mean.join(", ")})` : null;
+              };
               inkCheck = (rect) => {
                 const s = srcFor(rect);
                 const bandT = rect.top + rect.height * 0.3;
@@ -4222,6 +4252,8 @@ export class TypographyEngine {
                 : 0;
           if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
           span.dataset.fxDone = "1";
+          const ink = inkColor?.(entry.rect);
+          if (ink) span.style.setProperty("--fx-ink", ink);
         }
         // Re-measure pass: one layout flush. The post-change rect is the bolded
         // text in the new face at the corrected baseline. The computed font

@@ -76,14 +76,14 @@
 /* With the mode on, only the spans the engine processed become visible —
    table/figure/caption text stays on the canvas untouched. */
 #viewerContainer.fx-on .textLayer span[data-fx-done] {
-  color: var(--fx-text-color) !important;
+  color: var(--fx-ink, var(--fx-text-color)) !important;
 }
 
 /* Inline math / special-font runs inside body prose are kept in their
    original face (not bolded) but rendered from the text layer on top of the
    masks, so a neighbouring processed span's mask can't white them out. */
 #viewerContainer.fx-on .textLayer span[data-fx-keep] {
-  color: var(--fx-text-color) !important;
+  color: var(--fx-ink, var(--fx-text-color)) !important;
 }
 
 /* SEARCH MATCHES. PDF.js's find controller rewrites each matched text div and
@@ -100,7 +100,7 @@
    render twice. */
 #viewerContainer.fx-on .textLayer span[data-fx-done] span.highlight,
 #viewerContainer.fx-on .textLayer span[data-fx-keep] span.highlight {
-  color: var(--fx-text-color) !important;
+  color: var(--fx-ink, var(--fx-text-color)) !important;
 }
 
 /* Whitespace inside a span whose embedded face maps U+0020 to its .notdef
