@@ -69,7 +69,7 @@ export const SPECIAL_FONT = new RegExp(
     // (zi4, "Inconsolatazi4-Regular" — an ACL prompt listing in it was
     // emphasized), Source Code Pro, Fira Code, the EC/TX typewriters, and
     // Courier as the PSNFSS "pcr" family.
-    "cmtt|Typewriter|Mon[oL](?![a-z])|Courier|Consol|Menlo|LMTT|TT(?=[0-9-])|Inconsolata|SourceCode|FiraCode|ectt|ECTT|txtt|TXTT|pcr[rbo]", // monospace
+    "cmtt|Typewriter|Mon[oL](?![a-z])|Courier|Consol|Menlo|LMTT|TT(?=[0-9-])|Inconsolata|SourceCode|FiraCode|(?:^|\\+)(?:ectt|ECTT|txtt|TXTT)(?![A-Z]*\\+)|(?:^|\\+)pcr[rbo]", // monospace
     "CMCSC|cmcsc|SmallCaps|[-+]SC(?![a-z])|Caps(?![a-z])", // small caps
     // Linux Libertine / Biolinum (ACM's acmart) name the bold face by a
     // suffix letter: LinLibertineTB, LinLibertineTBI, LinBiolinumTB. Missed,
@@ -1468,7 +1468,7 @@ export class TypographyEngine {
           // ends in an equation reference ("… the absolute magnitude of the
           // integral (5.10)") always does.
           const numberedDisplay = numbered && /[=<>≤≥·×∑∏−+]/.test(rowText) &&
-            !/\b(?:the|of|and|or|to|in|is|are|be|for|with|by|as|that|we|an?|between|from|on|at)\b/.test(rowTrim) &&
+            !/\b(?:the|of|and|or|to|in|is|are|be|for|with|by|as|that|we|an?|between|from|on|at|gives?|yields?|becomes?|holds?|implies|obtain|get|have|has|where|then|thus|hence|so|which|if|when|let|since|setting|using)\b/i.test(rowTrim) &&
             r.items.filter((p) => isMath(p)).length >= 3;
           if (prose > 0 && !eqBase && !numberedDisplay) continue;
           let symbolish = 0;
@@ -1922,6 +1922,10 @@ export class TypographyEngine {
             const x0 = Math.min(...bandM.map((p) => p.item.transform[4]));
             if (x0 <= leadX + h * 0.5) break; // back at the margin: the next line of its own
             if (isAlgoLead(bandM[0].item.str.trim())) break; // the next numbered line
+            // A wrapped continuation carries on mid-sentence (lowercase or a
+            // symbol); an indented paragraph after the listing opens with a
+            // capital (agy review).
+            if (/^[A-ZÀ-Ý][a-zà-ÿ]/.test(bandM[0].item.str.trim())) break;
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "line-algo"); }
             prevY = lines[m].y;
           }
@@ -2242,11 +2246,19 @@ export class TypographyEngine {
         const rightOf = (its) => Math.max(...its.map((p) => p.item.transform[4] + (p.item.width || 0)));
         const leftOf = (its) => Math.min(...its.map((p) => p.item.transform[4]));
         let capL = leftOf(lines[k].items.filter(inBand)), capR = rightOf(lines[k].items.filter(inBand));
-        let lastFull = true;
+        // The FIRST line decides whether there is a second: a one-line
+        // caption stops short of the column's measure, and without this test
+        // the justified body paragraph under it, at the caption's leading, read
+        // as a caption running on (agy review). 8%, not a hair: a ragged
+        // caption's lines vary.
+        const measure = bandMeasure(bx0, bx1);
+        const fullTo = (its) => Math.max(capR, measure || 0);
+        const short = (its) => rightOf(its) < fullTo(its) - (fullTo(its) - capL) * 0.08;
+        let lastFull = !short(lines[k].items.filter(inBand));
         const endsParagraph = (its) => {
           capL = Math.min(capL, leftOf(its));
           capR = Math.max(capR, rightOf(its));
-          return rightOf(its) < capR - (capR - capL) * 0.05;
+          return short(its);
         };
         if (capAnchor) {
           // Bounded by the hyperref caption anchor. The anchor is why no
@@ -2291,9 +2303,8 @@ export class TypographyEngine {
           let prevY = lead.item.transform[5];
           // Absorb the caption's own continuation lines only. A tighter gap
           // and the short-last-line end (above) stop the sweep before the body
-          // paragraph that follows; past four lines only a caption still
-          // running full width goes on, and never past twelve.
-          for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 12 && (absorbed < 4 || lastFull); m++) {
+          // paragraph that follows; never past twelve lines.
+          for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 12; m++) {
             const bandM = lines[m].items.filter(inBand);
             if (!bandM.length) continue;
             // A paragraph break (the body paragraph after the caption) shows a
@@ -3419,7 +3430,8 @@ export class TypographyEngine {
           artKept.add(pairs[i].div);
           // The art itself is an obstacle too: a boxed label's frame reaches past
           // the text box, and the next word's mask cut its right side off.
-          artBoxes.push(pageView.viewport.convertToViewportRectangle(box));
+          if (!artBoxes.seen?.has(box)) artBoxes.push(pageView.viewport.convertToViewportRectangle(box));
+          (artBoxes.seen ??= new Set()).add(box);
           candidateDivs.delete(pairs[i].div);
           obstacleDivs.push(pairs[i].div);
           pairs.splice(i, 1);
@@ -3430,7 +3442,8 @@ export class TypographyEngine {
         const kept = art?.length ? allPairs.filter((p) => p.div && !candidateDivs.has(p.div)) : [];
         for (const p of kept) {
           const box = artUnder(art, p.item);
-          if (box) artBoxes.push(pageView.viewport.convertToViewportRectangle(box));
+          if (box && !artBoxes.seen?.has(box)) artBoxes.push(pageView.viewport.convertToViewportRectangle(box));
+          if (box) (artBoxes.seen ??= new Set()).add(box);
         }
       }
       // The canvases' pixels, read in the worker before the block below needs
