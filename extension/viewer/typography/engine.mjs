@@ -3883,7 +3883,7 @@ export class TypographyEngine {
             // vertically so neighbouring lines' mask padding clamps a margin
             // BEFORE the frame instead of exactly at the glyphs.
             const pad = r.height * 0.35;
-            obstacleRects.push({ left: r.left - 3, right: r.right + 3, top: r.top - pad, bottom: r.bottom + pad });
+            obstacleRects.push({ left: r.left - 3, right: r.right + 3, top: r.top - pad, bottom: r.bottom + pad, core: r });
           } else {
             obstacleRects.push(r);
           }
@@ -4195,6 +4195,19 @@ export class TypographyEngine {
           let B = Math.max(rect.bottom, r2.bottom) + padY;
           for (const o of obstacleRects) {
             if (o.right <= L || o.left >= R || o.bottom <= T || o.top >= B) continue;
+            // A protect zone whose own glyphs lie wholly on the line ABOVE or
+            // BELOW: its padding reaches into this span's box, and the overlap
+            // rule below then cut the mask SIDEWAYS — the canvas copy of the
+            // first letters beside the redrawn ones ("ciphertext" under a kept
+            // formula). Such a zone only ever bounds the mask vertically.
+            if (o.core && o.core.bottom <= r2.top + 1) {
+              T = Math.max(T, Math.min(o.bottom, r2.top - h * 0.05));
+              continue;
+            }
+            if (o.core && o.core.top >= r2.bottom - 1) {
+              B = Math.min(B, Math.max(o.top, r2.bottom + h * 0.15));
+              continue;
+            }
             // Obstacle reaches into the padding — pull the nearest padded edge
             // back to it, but never past the span's own glyph rect.
             if (o.left >= rect.right) R = Math.min(R, o.left);
@@ -4248,7 +4261,7 @@ export class TypographyEngine {
           // top of its box, where its glyphs carry no ink: deeper, the cut bared
           // the tops of its own canvas capitals (a sliver beside the "T" of
           // "To" under a kept subscript).
-          const ownTop = r2.top + h * 0.15;
+          const ownTop = r2.top + h * 0.05;
           for (const zone of descenderZones) {
             const z = zone.top < r2.top ? { ...zone, bottom: Math.min(zone.bottom, ownTop) } : zone;
             if (z.right <= L || z.left >= R || z.bottom <= T || z.top >= B || z.bottom <= z.top) continue;
