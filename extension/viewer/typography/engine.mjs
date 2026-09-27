@@ -1908,6 +1908,23 @@ export class TypographyEngine {
           // line is a listing, even though its regular-font operands read as
           // prose between bold keywords.
           for (const p of band) { skip.add(p.div); dbg(p.div, "line-algo"); }
+          // A listing line that WRAPS continues on a hanging indent, with no
+          // number or keyword of its own ("Input: Payloads decoded …, / canonical
+          // SIB1 m, …"): those lines are the listing too. Follow them while they
+          // start right of the lead, at the line pitch.
+          const leadX = ax;
+          const h = lead.item.height || 8;
+          let prevY = ln.y;
+          for (let m = lines.indexOf(ln) + 1; m < lines.length; m++) {
+            const bandM = lines[m].items.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+            if (!bandM.length) continue;
+            if (prevY - lines[m].y > h * 1.6) break; // a gap
+            const x0 = Math.min(...bandM.map((p) => p.item.transform[4]));
+            if (x0 <= leadX + h * 0.5) break; // back at the margin: the next line of its own
+            if (isAlgoLead(bandM[0].item.str.trim())) break; // the next numbered line
+            for (const p of bandM) { skip.add(p.div); dbg(p.div, "line-algo"); }
+            prevY = lines[m].y;
+          }
         } else if (atHeadingAnchor) {
           let head = runinHeadRun(band, bx0, bx1);
           if (!head) {
