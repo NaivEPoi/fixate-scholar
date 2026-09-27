@@ -1460,7 +1460,17 @@ export class TypographyEngine {
           // settled.
           const prose = proseWords(r);
           const eqBase = numbered && words.length <= 2;
-          if (prose > 0 && !eqBase) continue;
+          // An equation NUMBER, operators and several math-face items: a
+          // displayed equation whatever words it carries — its named
+          // quantities (\text{penalty\_factor}) are set in the text face,
+          // their underscores drawn as rules, and read as prose.
+          // Named quantities carry no FUNCTION words; a sentence that merely
+          // ends in an equation reference ("… the absolute magnitude of the
+          // integral (5.10)") always does.
+          const numberedDisplay = numbered && /[=<>≤≥·×∑∏−+]/.test(rowText) &&
+            !/\b(?:the|of|and|or|to|in|is|are|be|for|with|by|as|that|we|an?|between|from|on|at)\b/.test(rowTrim) &&
+            r.items.filter((p) => isMath(p)).length >= 3;
+          if (prose > 0 && !eqBase && !numberedDisplay) continue;
           let symbolish = 0;
           for (const p of r.items) {
             const t = p.item.str.trim();
@@ -1484,7 +1494,7 @@ export class TypographyEngine {
           // keeps a prose line with one inline relation from qualifying.
           const eqNumbered = eqBase &&
             (!words.some((w) => w.length >= 5) || (mathSignal && ratio >= 0.7));
-          if (prose > 0 && !eqNumbered) continue;
+          if (prose > 0 && !eqNumbered && !numberedDisplay) continue;
           // For an UNNUMBERED row MATH_SIGNAL is the clearest tell, but it
           // lists relations and carries neither the `+` nor the `∣` that
           // equation (5.6) is built from — so a row with no signal at all has
@@ -1495,7 +1505,7 @@ export class TypographyEngine {
           // math-face item and not one prose word is an equation at any ratio
           // above a half.
           const namedEquation = mathSignal && prose === 0 && ratio >= 0.5 && r.items.some((p) => isMath(p));
-          if (!(eqNumbered || namedEquation || ratio >= 0.85 || ((mathSignal || numbered) && ratio >= 0.7))) continue;
+          if (!(eqNumbered || numberedDisplay || namedEquation || ratio >= 0.85 || ((mathSignal || numbered) && ratio >= 0.7))) continue;
           for (const p of r.items) {
             if (skip.has(p.div)) continue;
             skip.add(p.div);
@@ -1934,7 +1944,15 @@ export class TypographyEngine {
           }
           skipHeadingWrap(ln, head, bx0, bx1);
         } else if (HEAD_LEAD.test(leadStr)) {
-          if (lowerWords(band) <= 3) {
+          // An IEEE subsection heading is a lettered italic line ("C. A
+          // customized testcase (on a smart …)"), as wordy as prose: the
+          // lowercase-word cap below missed every long one. Italic throughout,
+          // after its label, is the heading's own tell.
+          const lettered = /^[A-Z]\.$/.test(leadStr) || /^[A-Z]\.\s/.test(leadStr);
+          const italicHead = lettered && lowerWords(band) >= 1 &&
+            band.every((p, i) => isItalic(p) || (i === 0 && /^[A-Z]\.$/.test(p.item.str.trim())) ||
+              !/[A-Za-zÀ-ɏ]{2}/.test(p.item.str));
+          if (lowerWords(band) <= 3 || italicHead) {
             // A NUMBERED RUN-IN heading shares its line with the paragraph it
             // opens ("2.3.1. Latency overhead.  Table 5 shows the measured …").
             // HEAD_LEAD fires on the line's lead, and skipping the
