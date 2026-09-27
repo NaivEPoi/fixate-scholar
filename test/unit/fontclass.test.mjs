@@ -133,3 +133,9 @@ test("code faces embedded by LaTeX packages are special", () => {
     assert.ok(!SPECIAL_FONT.test(name), `should not be special: ${name}`);
   }
 });
+
+test("typewriter names are matched after the subset tag, never inside it", () => {
+  for (const name of ["XXECTT+Times-Roman", "ABPCRR+Times", "TXTTAB+LinLibertineT"]) {
+    assert.ok(!SPECIAL_FONT.test(name), `a subset tag is not a face: ${name}`);
+  }
+});

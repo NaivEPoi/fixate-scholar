@@ -395,7 +395,6 @@ export class ReferencesFeature {
     });
     for (const found of findInternalRefsAcrossBreaks(joined)) {
       if (isLocator(found)) continue;
-      if (isStatementLabel(joined, found)) continue;
       let ref = found;
       // Coloured whole or not at all, and only in processed text. A piece that
       // stays on the canvas — a "§" TeX set from the symbol font, a number in a
@@ -572,16 +571,6 @@ export function buildCards(keys, bracketed, entries) {
  * comparisons per annotation pass, repeated for every re-annotation.
  * The membership test itself is unchanged (`!(end <= start || start >= end)`).
  */
-// A theorem-style LABEL is the statement itself, not a reference to it:
-// "Definition 2." opening its text run, followed by a period, names the
-// definition it starts - coloured, it read as a link to itself. Only these
-// statement kinds; "Section 4." at a run start is still a reference.
-const STATEMENT_KIND = /^(?:Definition|Theorem|Lemma|Corollary|Proposition|Remark|Example|Claim|Assumption|Conjecture|Observation|Property|Fact)\b/;
-export function isStatementLabel(text, ref) {
-  const atRunStart = ref.start === 0 || text[ref.start - 1] === "\n";
-  return atRunStart && STATEMENT_KIND.test(text.slice(ref.start, ref.end)) && /^\s*[.:]/.test(text.slice(ref.end));
-}
-
 export function* intersecting(segments, start, end) {
   let lo = 0;
   let hi = segments.length;
