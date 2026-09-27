@@ -1837,15 +1837,35 @@ export class TypographyEngine {
     // Attack Using a Foreign Lo- / cation"): its tail opens the next line, in
     // the heading's own face, and was emphasized as body. Follow it while the
     // next line stays in that face.
+    // A heading that simply WRAPS (IEEE "A. Southern Company Fixed Service
+    // Link Columbus, GA to / Fortson, GA") is followed the same way when its
+    // first line runs to the column's measure and the next line, wholly in the
+    // heading's face, stops short of it — a paragraph's first line would fill
+    // the measure.
     const skipHeadingWrap = (ln, head, bx0, bx1) => {
       const last = head.at(-1);
-      if (!last || !/[A-Za-zÀ-ɏ]-$/.test(last.item.str.trim())) return;
+      if (!last) return;
       const next = lines[lines.indexOf(ln) + 1];
       if (!next) return;
-      for (const p of next.items.filter((q) => q.item.transform[4] >= bx0 && q.item.transform[4] < bx1)) {
+      const nextBand = next.items.filter((q) => q.item.transform[4] >= bx0 && q.item.transform[4] < bx1);
+      if (!nextBand.length) return;
+      // Both shapes: the heading must be the WHOLE line (a run-in heading
+      // shares its line with body text, whose hyphen says nothing about the
+      // heading), and the next line must be short, in the heading's face and
+      // at the line pitch — a body line after a run-in lead fills the measure.
+      if (head.length !== ln.items.filter((q) => q.item.transform[4] >= bx0 && q.item.transform[4] < bx1).length) return;
+      const measure = bandMeasure(bx0, bx1);
+      const right = (its) => Math.max(...its.map((p) => p.item.transform[4] + (p.item.width || 0)));
+      const h = last.item.height || 8;
+      if (!measure) return;
+      if (!/[A-Za-zÀ-ɏ]-$/.test(last.item.str.trim()) && right(head) < measure - h * 1.5) return; // the heading did not wrap
+      if (nextBand.some((p) => p.item.fontName !== last.item.fontName)) return;
+      if (right(nextBand) > measure - h * 3) return; // a full line: the paragraph
+      if (Math.abs(next.y - ln.y) > h * 1.6) return; // a gap: not the same heading
+      for (const p of nextBand) {
         if (p.item.fontName !== last.item.fontName) break;
         skip.add(p.div);
-        dbg(p.div, "line-head");
+        dbg(p.div, "head-wrap");
         if (isItalic(p)) protect.add(p.div);
       }
     };
