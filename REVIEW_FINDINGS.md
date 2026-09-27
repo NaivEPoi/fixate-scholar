@@ -4960,3 +4960,59 @@ harnesses, which after this release are a reference tool, not the gate.
 
 - The author-year false-positive measurement (above).
 - The console toggle check (above: it now waits, times and fails).
+
+## R51 — a targeted visual review, and what it found at the edges
+
+### Method
+
+A whole-page visual review cost a vision pass over every band of every page,
+and nearly all of it was plain body text that has never held a defect.
+`test/edgepairs.mjs` captures only the lines where the engine drew a
+boundary — the prose line before and after each heading, caption, table and
+equation, a caption's first and last line, every line kept for vector art —
+as fx-on / fx-off strips on contact sheets, picked from the engine's own
+`__fxDebug` reasons. Both corpora, four rounds, each sheet read independently
+by Claude and by agy; every claimed defect was checked on the engine's
+classification (and a fresh capture) before and after its fix, and every new
+rule was counted over the public corpus for spill-over into body text.
+
+### Fixed
+
+- Vector art on a text line (a circled step number, a boxed label, a
+  highlight) was erased by the masks: the text layer holds only the digit. The
+  page's operator list gives its painted, clipped paths (`vector-art.mjs`);
+  such a span is kept, and its art is an obstacle cut out of every mask.
+- Masks around kept glyphs: a kept subscript's descender, an italic tail that
+  sweeps left, a lone "/", underscores and commas that ink below their text box,
+  and a protect zone's padding cutting the next line's mask sideways (the
+  canvas copy of a word's first letters showed beside the redrawn ones).
+- Captions: a label in its own face under a paragraph; long captions past four
+  lines; a caption's pitch measured from a table label's baseline; a one-line
+  caption swallowing the justified paragraph under it (pre-existing).
+- Headings: Libertine/Biolinum bold (acmart) was not recognised as bold, so
+  every ACM run-in heading was emphasized; wrapped and hyphenated headings;
+  IEEE lettered italic subsection headings; an italic lead whose colon opens
+  the next item.
+- Equations whose named quantities are set in the text face; code faces
+  embedded under package names (Inconsolata, EC/TX typewriters, PSNFSS
+  Courier); rows of a fully ruled table read as prose (the tables oracle had
+  the same blind spot and now tests its own pixels); a wrapped pseudocode
+  line's hanging continuation.
+- Processed text redrawn in the reading colour turned a paper's coloured prose
+  black; the glyph ink colour is kept when clearly chromatic.
+- The "native" button saved every click to sync storage, and once the list
+  reached Chrome's 8 KB item cap the button did nothing. It now opens the
+  PDF natively once and saves nothing (a tab-scoped DNR allow, cleared on
+  commit); only Options entries persist.
+
+### Withdrawn
+
+A rule to stop colouring theorem-style labels ("Definition 2.") was built
+on a claim that was in fact a reference running onto a new span; the gate's
+refcolor caught it leaving such references uncoloured, and it was removed.
+Lesson: check a claim against the surrounding sentence, not just the span.
+
+### Known limitations
+
+Small caps set as glyph variants of the regular face extract as lowercase and
+are processed; a dashed vertical table border is not seen as a rule.
