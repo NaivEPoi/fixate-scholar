@@ -273,23 +273,52 @@ addNativeViewerButton();
 applyStyleVars(settings);
 applyEnabled(settings.enabled);
 
-// Changes apply one at a time, in the order they arrived. Each awaits the
-// engine, and two handlers interleaving — reading mode switched off and on
-// again while the first change was still re-processing — cancelled each
-// other's work and left the document with no emphasis at all.
-let settingsApplied = Promise.resolve();
-onSettingsChange((next) => {
-  settingsApplied = settingsApplied.then(async () => {
-    current = next;
-    publishAuthor(next);
-    applyStyleVars(next);
-    syncButton(next.enabled);
-    syncFontButton(next.fontMode);
-    // Off first: there is nothing to re-process for settings about to go.
-    if (!next.enabled) await applyEnabled(false);
-    await engine.updateSettings(next);
-    if (next.enabled) await applyEnabled(true);
-  }).catch((e) => console.warn("FixateScholar: applying settings failed", e));
+// Changes apply one at a time — two handlers interleaving (reading mode
+// switched off and on again while the first change was still re-processing)
+// cancelled each other's work and left the document with no emphasis at all
+// — but only the LATEST settings are ever applied. Queuing every change made
+// a background tab, whose engine work the browser throttles, replay each
+// intermediate state in turn once it was brought forward. A hidden tab also
+// waits until it is shown: nobody sees its pages until then, and every open
+// PDF re-processing at once on each settings change is wasted work.
+let settingsPending = false;
+let settingsApplying = false;
+const whenVisible = () => document.visibilityState === "visible"
+  ? Promise.resolve()
+  : new Promise((resolve) => {
+    const onShow = () => {
+      if (document.visibilityState !== "visible") return;
+      document.removeEventListener("visibilitychange", onShow);
+      resolve();
+    };
+    document.addEventListener("visibilitychange", onShow);
+  });
+async function applyLatestSettings() {
+  settingsApplying = true;
+  try {
+    while (settingsPending) {
+      await whenVisible();
+      settingsPending = false;
+      const next = await getSettings(); // the newest, however many changes came in
+      current = next;
+      publishAuthor(next);
+      applyStyleVars(next);
+      syncButton(next.enabled);
+      syncFontButton(next.fontMode);
+      // Off first: there is nothing to re-process for settings about to go.
+      if (!next.enabled) await applyEnabled(false);
+      await engine.updateSettings(next);
+      if (next.enabled) await applyEnabled(true);
+    }
+  } catch (e) {
+    console.warn("FixateScholar: applying settings failed", e);
+  } finally {
+    settingsApplying = false;
+  }
+}
+onSettingsChange(() => {
+  settingsPending = true;
+  if (!settingsApplying) applyLatestSettings();
 });
 
 app.eventBus.on("textlayerrendered", async (evt) => {
