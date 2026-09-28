@@ -314,6 +314,9 @@ async function applyLatestSettings() {
     console.warn("FixateScholar: applying settings failed", e);
   } finally {
     settingsApplying = false;
+    // A change that arrived while a failing application ran is still owed;
+    // each run clears the flag before applying, so this cannot spin.
+    if (settingsPending) applyLatestSettings();
   }
 }
 onSettingsChange(() => {

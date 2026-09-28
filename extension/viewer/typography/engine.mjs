@@ -1803,7 +1803,11 @@ export class TypographyEngine {
         if (!isTerminator || ABBREVIATION.test(t)) continue;
         const tail = band.slice(j + 1);
         const tailText = tail.map((p) => p.item.str).join(" ").trim();
-        if (lowerWords(tail) >= 2 || REF_PROSE.test(tailText)) return band.slice(0, j + 1);
+        // ...or the face changes after it: an italic run-in title and its
+        // roman body ("c) Active Attacker without Physical Access: Our anal-")
+        // need no count of the body's words, which a hyphenated line cuts short.
+        const faceChange = tail[0] && tail[0].item.fontName !== band[j].item.fontName && /[A-Za-zÀ-ɏ]{2}/.test(tailText);
+        if (lowerWords(tail) >= 2 || REF_PROSE.test(tailText) || faceChange) return band.slice(0, j + 1);
       }
       return null;
     };
@@ -1903,7 +1907,11 @@ export class TypographyEngine {
         const hAnchor = pageNumber && this.#hints?.headings
           ? anchorNear(this.#hints.headings, pageNumber, lead.item.transform[5], tol, [bx0, bx1])
           : null;
-        const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol;
+        // A line that opens mid-sentence (lowercase) is never a heading: the
+        // anchor of an INDENTED heading ("c) Active Attacker ...", IEEE
+        // \paragraph) lies at the column margin, where the line above it
+        // starts, and that line — a paragraph's last — took the heading's place.
+        const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol && !/^[a-zà-ÿ]/.test(leadStr);
         if (isAlgoLead(leadStr)) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
@@ -1951,8 +1959,9 @@ export class TypographyEngine {
               // guard was bypassed by any title with two lowercase words after
               // the abbreviation ("Evaluation of Model vs. dynamic user
               // interaction:"), which is most of them.
+              const tailFace = band[j + 1] && band[j + 1].item.fontName !== band[j].item.fontName && /[A-Za-zÀ-ɏ]{2}/.test(band[j + 1].item.str);
               if (isTerminator && !ABBREVIATION.test(t) &&
-                  (hAnchor.depth >= 3 || lowerWords(band.slice(j + 1)) >= 2)) {
+                  (hAnchor.depth >= 3 || lowerWords(band.slice(j + 1)) >= 2 || tailFace)) {
                 head = band.slice(0, j + 1);
                 break;
               }
