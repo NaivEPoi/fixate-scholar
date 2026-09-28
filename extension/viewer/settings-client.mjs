@@ -75,9 +75,10 @@ export function onSettingsChange(cb) {
 }
 
 // chrome.storage.sync refuses a write whose item exceeds 8 KB (key + JSON
-// value, UTF-8). bypassUrls grows by one URL per "native" click, so a long-used
-// profile reached the cap and every later click failed silently — the button
-// "did nothing". Keep the newest URLs that fit; the oldest bypasses go first.
+// value, UTF-8). bypassUrls is the user's own list (Options); the "native"
+// button once added a URL per click, and a long-used profile reached the cap,
+// after which every write failed silently. Keep the newest URLs that fit; the
+// oldest bypasses go first.
 const SYNC_ITEM_BYTES = 8192;
 export function fitBypassUrls(urls, key = "bypassUrls", limit = SYNC_ITEM_BYTES) {
   const size = (list) => new TextEncoder().encode(key + JSON.stringify(list)).length;
