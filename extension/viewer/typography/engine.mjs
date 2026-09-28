@@ -1783,6 +1783,14 @@ export class TypographyEngine {
      * period. The tail must read as prose (2+ lowercase words) — otherwise this
      * is a heading that merely happens to end in a period.
      */
+    // The page's BODY face: the font carrying the most characters. A run-in
+    // heading ends where the body resumes, and the body is set in this face —
+    // unlike a title that merely changes face mid-way ("Attack 2: Fast Path.").
+    const faceChars = new Map();
+    for (const ln of lines) for (const p of ln.items) faceChars.set(p.item.fontName, (faceChars.get(p.item.fontName) || 0) + p.item.str.length);
+    const bodyFace = [...faceChars].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const resumesBody = (p, prev) => p && p.item.fontName !== prev.item.fontName && p.item.fontName === bodyFace &&
+      /[A-Za-zÀ-ɏ]{2}/.test(p.item.str);
     const runinHeadRun = (band, bx0, bx1) => {
       if (band.length < 2) return null;
       const lineEnd = Math.max(
@@ -1806,7 +1814,7 @@ export class TypographyEngine {
         // ...or the face changes after it: an italic run-in title and its
         // roman body ("c) Active Attacker without Physical Access: Our anal-")
         // need no count of the body's words, which a hyphenated line cuts short.
-        const faceChange = tail[0] && tail[0].item.fontName !== band[j].item.fontName && /[A-Za-zÀ-ɏ]{2}/.test(tailText);
+        const faceChange = resumesBody(tail[0], band[j]);
         if (lowerWords(tail) >= 2 || REF_PROSE.test(tailText) || faceChange) return band.slice(0, j + 1);
       }
       return null;
@@ -1911,7 +1919,8 @@ export class TypographyEngine {
         // anchor of an INDENTED heading ("c) Active Attacker ...", IEEE
         // \paragraph) lies at the column margin, where the line above it
         // starts, and that line — a paragraph's last — took the heading's place.
-        const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol && !/^[a-zà-ÿ]/.test(leadStr);
+        // Only an ALL-lowercase first word: "iOS", "eBPF", "mmWave" do open headings.
+        const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol && !/^[a-zà-ÿ]+(?:[\s.,;:]|$)/.test(leadStr);
         if (isAlgoLead(leadStr)) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
@@ -1959,7 +1968,7 @@ export class TypographyEngine {
               // guard was bypassed by any title with two lowercase words after
               // the abbreviation ("Evaluation of Model vs. dynamic user
               // interaction:"), which is most of them.
-              const tailFace = band[j + 1] && band[j + 1].item.fontName !== band[j].item.fontName && /[A-Za-zÀ-ɏ]{2}/.test(band[j + 1].item.str);
+              const tailFace = resumesBody(band[j + 1], band[j]);
               if (isTerminator && !ABBREVIATION.test(t) &&
                   (hAnchor.depth >= 3 || lowerWords(band.slice(j + 1)) >= 2 || tailFace)) {
                 head = band.slice(0, j + 1);
