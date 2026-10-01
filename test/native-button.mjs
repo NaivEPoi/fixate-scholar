@@ -2,7 +2,13 @@
 // the redirect into the viewer -> trigger fx-bypass-once (what the "native"
 // button sends) -> expect the tab to land on the original URL ONCE: a reload
 // and a new tab are intercepted again, and nothing is saved to bypassUrls.
-// Usage: node test/native-button.mjs [pdf-url] [--full-list]
+//
+// --no-file-access <file-url>: "Allow access to file URLs" off, the default for
+// a store install. The browser then refuses every extension navigation to a
+// file: URL, so the button must go BACK to the native view the popup's "Open
+// in FixateScholar" left behind the viewer — and, in a tab with nothing behind
+// it (the context menu's), explain the setting instead of doing nothing.
+// Usage: node test/native-button.mjs [pdf-url] [--full-list] [--no-file-access]
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -41,11 +47,88 @@ const makeClient = (webSocketDebuggerUrl) => {
   return { socket, send, ev };
 };
 
+// What the "native" button does, through the button itself.
+const clickNative = (client) =>
+  client.ev(`(() => { const b = document.getElementById("fxNativeButton"); if (!b) throw new Error("no native button"); b.click(); return true; })()`);
+
+async function noFileAccess(extId) {
+  if (!URL0.startsWith("file:")) throw new Error("--no-file-access needs a file:// PDF URL");
+  const sw = (await http("/json/list")).find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs"));
+  const page = await http(`/json/new?about:blank`, "PUT");
+  const settings = makeClient(page.webSocketDebuggerUrl);
+  ws = settings.socket;
+  await new Promise((r) => (settings.socket.onopen = r));
+  await settings.send("Page.navigate", { url: "chrome://extensions" });
+  await sleep(2000);
+  await settings.ev(`new Promise((ok, no) => chrome.developerPrivate.updateExtensionConfiguration({ extensionId: ${JSON.stringify(extId)}, fileAccess: false }, () => chrome.runtime.lastError ? no(new Error(chrome.runtime.lastError.message)) : ok()))`);
+  await sleep(2000);
+  // The worker restarts when the setting changes; find it again.
+  let worker = null;
+  for (let i = 0; i < 30 && !worker; i++) { worker = (await http("/json/list")).find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs")); if (!worker) await sleep(300); }
+  const swc = makeClient((worker || sw).webSocketDebuggerUrl);
+  await new Promise((r) => (swc.socket.onopen = r));
+  if (await swc.ev("chrome.extension.isAllowedFileSchemeAccess()")) throw new Error("file access is still on");
+  const viewerFor = (u) => `chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(u)}`;
+
+  // 1. The popup path: the tab shows the file natively, "Open in FixateScholar"
+  //    turns it into the viewer (tabs.update, as popup.mjs does).
+  const tab = await http(`/json/new?about:blank`, "PUT");
+  const c = makeClient(tab.webSocketDebuggerUrl);
+  await new Promise((r) => (c.socket.onopen = r));
+  await c.send("Page.enable");
+  await c.send("Page.navigate", { url: URL0 });
+  await sleep(3000);
+  const native0 = await c.ev("location.href");
+  console.log("no access nav:", native0.startsWith("file:") ? "native (not intercepted, as expected)" : native0.slice(0, 80));
+  if (!native0.startsWith("file:")) throw new Error("a file:// PDF was intercepted without file access");
+  await swc.ev(`chrome.tabs.query({}).then((ts) => chrome.tabs.update(ts.find((t) => t.url === ${JSON.stringify(native0)}).id, { url: ${JSON.stringify(viewerFor(native0))} })).then(() => true)`);
+  await sleep(5000);
+  const inViewer = await c.ev("location.href");
+  if (!inViewer.startsWith("chrome-extension://")) throw new Error("the popup path did not open the viewer");
+  await clickNative(c);
+  await sleep(3000);
+  const back = await c.ev("location.href").catch(() => "(navigating)");
+  console.log("popup path:   ", back.slice(0, 90));
+  if (!back.startsWith("file:")) throw new Error("the button did not return to the native view behind the viewer");
+
+  // 2. The context-menu path: a new tab with nothing behind the viewer. The
+  //    browser allows no way to the file, so the viewer must say why.
+  const tab2 = await http(`/json/new?about:blank`, "PUT");
+  const c2 = makeClient(tab2.webSocketDebuggerUrl);
+  await new Promise((r) => (c2.socket.onopen = r));
+  await c2.send("Page.enable");
+  await c2.send("Page.navigate", { url: viewerFor(native0) });
+  await sleep(5000);
+  const banner = await c2.ev(`document.getElementById("fxLoadError")?.textContent || ""`);
+  console.log("load banner:  ", banner.slice(0, 120));
+  if (!/Allow access to file URLs/.test(banner)) throw new Error("the load-error banner does not name the file-access setting");
+  await clickNative(c2);
+  await sleep(2000);
+  const stay = await c2.ev("location.href");
+  const notes = await c2.ev(`document.querySelectorAll(".fx-file-access").length`);
+  console.log("menu path:    ", stay.startsWith("chrome-extension://") ? `stays in viewer, ${notes} explanation(s)` : stay.slice(0, 80));
+  if (!stay.startsWith("chrome-extension://") || notes !== 1) throw new Error("expected the viewer to stay and explain the setting once");
+  // ...and its link opens the page where the setting lives.
+  await c2.ev(`document.querySelector(".fx-file-access a").click()`);
+  await sleep(2000);
+  const settingsTab = (await http("/json/list")).find((x) => x.type === "page" && /^(chrome|edge):\/\/extensions\/\?id=/.test(x.url));
+  console.log("settings link:", settingsTab ? settingsTab.url : "(no extensions page opened)");
+  if (!settingsTab || !settingsTab.url.endsWith(extId)) throw new Error("the settings link did not open this extension's page");
+  for (const x of [c, c2, swc, settings]) try { x.socket.close(); } catch {}
+  console.log("PASS — no file access: back to the native view, or the setting explained");
+}
+
 try {
   let version = null;
   for (let i = 0; i < 50 && !version; i++) { try { version = await http("/json/version"); } catch { await sleep(300); } }
   let extId = null;
   for (let i = 0; i < 60 && !extId; i++) { const t = await http("/json/list"); const sw = t.find((x) => x.type === "service_worker" && x.url.includes("service-worker.mjs")); if (sw) extId = new URL(sw.url).hostname; else await sleep(300); }
+  main: {
+  if (process.argv.includes("--no-file-access")) {
+    await noFileAccess(extId);
+    process.exitCode = 0;
+    break main;
+  }
   // Navigate a fresh tab to the PDF URL itself — interception should engage.
   const tab = await http(`/json/new?about:blank`, "PUT");
   const client1 = makeClient(tab.webSocketDebuggerUrl);
@@ -67,8 +150,7 @@ try {
   }
   const before = await client1.ev(`chrome.storage.sync.get("bypassUrls").then((s) => JSON.stringify(s.bypassUrls || []))`);
 
-  // Trigger exactly what the native button sends.
-  await client1.ev(`chrome.runtime.sendMessage({ type: "fx-bypass-once", url: ${JSON.stringify(URL0)} })`);
+  await clickNative(client1);
   await sleep(4000);
   const at2 = await client1.ev("location.href").catch(() => "(navigating)");
   await sleep(3000);
@@ -105,5 +187,6 @@ try {
 
   console.log("PASS — native once, intercepted again, nothing saved");
   process.exitCode = 0;
+  }
 } catch (e) { console.error("nativebtn error:", e.message || e); process.exitCode = 1; }
 finally { try { ws?.close(); } catch {} browser.kill(); await sleep(500); try { rmSync(userDataDir, { recursive: true, force: true }); } catch {} }

@@ -85,6 +85,28 @@ test("the fragment stays on location, where PDF.js reads the open parameters", a
   assert.equal(asPdfJsReadsIt(w.location.search), "https://host.example/p.pdf?a=1&b=2");
 });
 
+// encodeURIComponent leaves `'` alone and the browser then escapes it in the
+// viewer's query, so the file:// path's own output arrives with `%27` in it.
+// Read as unencoded, it was escaped again and PDF.js got `file%3A…`.
+test("an encoded parameter whose apostrophe the browser escaped is left alone", async () => {
+  const url = "file:///C:/papers/it's%20100%25.pdf"; // as webNavigation reports it
+  const w = fakeWindow("?file=" + encodeURIComponent(url).replace(/'/g, "%27"));
+  const { normalizeFileParam, currentFileUrl } = await load(w);
+  normalizeFileParam();
+  assert.equal(w.history.replaced, null, "an encoded parameter is left alone");
+  assert.equal(asPdfJsReadsIt(w.location.search), url);
+  assert.equal(currentFileUrl(), url);
+});
+
+test("an apostrophe the browser did not escape still counts as encoded", async () => {
+  const url = "file:///C:/papers/it's.pdf";
+  const w = fakeWindow("?file=" + encodeURIComponent(url));
+  const { normalizeFileParam } = await load(w);
+  normalizeFileParam();
+  assert.equal(w.history.replaced, null);
+  assert.equal(asPdfJsReadsIt(w.location.search), url);
+});
+
 test("a blob: URL minted by this page is left exactly as-is", async () => {
   const w = fakeWindow("?file=blob:chrome-extension://abc/1234-5678");
   const { normalizeFileParam } = await load(w);

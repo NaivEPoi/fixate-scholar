@@ -273,15 +273,86 @@ async function allowOnce(tabId) {
     .catch((e) => console.warn("FixateScholar: failed to update the one-time bypass", e));
 }
 
+// Without "Allow access to file URLs" (off by default for a store install) the
+// browser lets an extension navigate to NO file: URL — tabs.update and
+// tabs.create reject with "Cannot navigate to a file URL without local file
+// access", and the viewer can't set location or click a link to one either —
+// so the "native" button did nothing on a local PDF. History is the one way back: the popup's
+// "Open in FixateScholar" turns the tab's native view of the file into the
+// viewer, leaving that view as the entry directly behind it.
+//
+// Per tab, from the commits: { url, behind }. A file: commit records the file;
+// a FRESH viewer commit for that same file marks it behind the viewer (a fresh
+// navigation always lands on the entry right after the one it left); a reload
+// of that viewer keeps the mark. Anything else clears it — including a
+// back/forward commit, which can't say which side of the viewer the file is on.
+const FILE_BEHIND_KEY = "fileBehind"; // { [tabId]: { url, behind } }
+
+function nextFileBehind(entry, details) {
+  if (/^file:/i.test(details.url)) return { url: details.url, behind: false };
+  if (!entry || !details.url.startsWith(VIEWER)) return null;
+  if ((details.transitionQualifiers || []).includes("forward_back")) return null;
+  let file = null;
+  try {
+    file = new URL(details.url).searchParams.get("file");
+  } catch {}
+  if (!file || !urlsMatch(file, entry.url)) return null;
+  if (details.transitionType === "reload") return entry.behind ? entry : null;
+  return { url: entry.url, behind: true };
+}
+
+// Commits can arrive together; serialize the read-modify-write so one update
+// can't overwrite another's (the same reasoning as registerRules).
+let fileBehindChain = Promise.resolve();
+function updateFileBehind(change) {
+  fileBehindChain = fileBehindChain
+    .catch(() => {})
+    .then(async () => {
+      const { [FILE_BEHIND_KEY]: all = {} } = await chrome.storage.session.get(FILE_BEHIND_KEY);
+      if (change(all)) await chrome.storage.session.set({ [FILE_BEHIND_KEY]: all });
+    })
+    .catch(() => {});
+  return fileBehindChain;
+}
+
+const trackFileBehind = (details) =>
+  updateFileBehind((all) => {
+    const next = nextFileBehind(all[details.tabId], details);
+    if (!next && !all[details.tabId]) return false;
+    if (next) all[details.tabId] = next;
+    else delete all[details.tabId];
+    return true;
+  });
+
+chrome.tabs.onRemoved.addListener((tabId) =>
+  updateFileBehind((all) => tabId in all && delete all[tabId]),
+);
+
 // The bypassed navigation (or anything else) committed in that tab: the
 // bypass is spent, so a reload or a later open is intercepted again.
 chrome.webNavigation.onCommitted.addListener(async (details) => {
-  if (details.frameId !== 0 || (await pendingBypass())?.tabId !== details.tabId) return;
+  if (details.frameId !== 0) return;
+  await trackFileBehind(details);
+  if ((await pendingBypass())?.tabId !== details.tabId) return;
   await chrome.storage.session.remove(BYPASS_ONCE_KEY);
   chrome.declarativeNetRequest
     .updateSessionRules({ removeRuleIds: [BYPASS_ONCE_BASE] })
     .catch(() => {});
 });
+
+// A local file with no file access: back to the native view behind the
+// viewer if that is what is there, otherwise report why nothing can happen.
+// The VIEWER steps back (history.back()), not chrome.tabs.goBack: the native
+// view was left without a gesture on it, so the browser's history intervention
+// marks it skippable and goBack jumps straight past it to whatever came before.
+// A step the page itself takes moves exactly one entry.
+async function leaveForLocalFile(tabId, url) {
+  await fileBehindChain;
+  const { [FILE_BEHIND_KEY]: all = {} } = await chrome.storage.session.get(FILE_BEHIND_KEY);
+  const entry = all[tabId];
+  if (!entry?.behind || !urlsMatch(entry.url, url)) return { ok: false, reason: "file-access" };
+  return { ok: true, back: true };
+}
 
 // "Open in native viewer": escape to the browser's native viewer, once.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -295,10 +366,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!cleanUrl || !/^(https?|file):/i.test(cleanUrl) || tabId === undefined) return false;
 
   (async () => {
+    if (/^file:/i.test(cleanUrl) && !(await chrome.extension.isAllowedFileSchemeAccess())) {
+      sendResponse(await leaveForLocalFile(tabId, cleanUrl));
+      return;
+    }
     await chrome.storage.session.set({ [BYPASS_ONCE_KEY]: { tabId, url: cleanUrl } });
     if (/^https?:/i.test(cleanUrl)) await allowOnce(tabId);
     await chrome.tabs.update(tabId, { url: cleanUrl });
     sendResponse({ ok: true });
-  })();
+  })().catch((e) => {
+    console.warn("FixateScholar: could not open the native viewer", e);
+    sendResponse({ ok: false, reason: String(e?.message || e) });
+  });
   return true;
 });
