@@ -4,7 +4,7 @@
 // samples into runs; the cases are what per-glyph sampling actually returns.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { colourRuns } from "../../extension/viewer/typography/ink-runs.mjs";
+import { colourRuns, inkColour } from "../../extension/viewer/typography/ink-runs.mjs";
 
 const RED = "rgb(255, 0, 0)", BLUE = "rgb(0, 0, 255)";
 /** One sample per character: K = black, R = red, B = blue, . = no ink, space = space. */
@@ -61,4 +61,34 @@ test("one faint letter in a colour of its own keeps it", () => {
   // not a shade of the blue, so not a blend.
   const samples = [...chars("BB K"), { space: true }, { color: RED, n: 10 }];
   assert.deepEqual(colourRuns(samples), [{ from: 0, to: 2, color: BLUE }, { from: 5, to: 6, color: RED }]);
+});
+
+// inkColour reads summed channel darkness (255 - value, over the pixels read).
+// `ink(rgb, k)`: the sums for k pixels of solid ink of that colour.
+const ink = ([r, g, b], k = 100) => [(255 - r) * k, (255 - g) * k, (255 - b) * k];
+
+test("solid ink colours come back exactly", () => {
+  assert.deepEqual(inkColour(ink([255, 0, 0]), 60), [255, 0, 0]);
+  assert.deepEqual(inkColour(ink([0, 0, 255]), 60), [0, 0, 255]);
+  assert.deepEqual(inkColour(ink([178, 0, 0]), 60), [178, 0, 0]);
+  assert.deepEqual(inkColour(ink([0, 204, 0]), 60), [0, 204, 0]);
+});
+
+test("black under subpixel tints is black: the channel sums come out level", () => {
+  // A black glyph's two tinted edges, blue-ish and orange-ish, plus its core.
+  const d = [0, 1, 2].map((c) => ink([0, 0, 0])[c] + ink([0, 60, 200], 3)[c] + ink([200, 60, 0], 3)[c]);
+  assert.equal(inkColour(d, 60), null);
+  assert.equal(inkColour(ink([128, 128, 128]), 60), null); // grey text: neutral
+});
+
+test("an edge's tint left over is not ink: green strictly between red and blue", () => {
+  // Measured on plain black text, a thin "i" read alone.
+  assert.equal(inkColour(ink([185, 54, 0]), 60), null);
+  assert.equal(inkColour(ink([0, 33, 65]), 60), null);
+  assert.equal(inkColour(ink([148, 91, 0]), 60), null);
+});
+
+test("the chroma a colour must reach", () => {
+  assert.deepEqual(inkColour(ink([0, 0, 90]), 60), [0, 0, 90]); // navy, whole span
+  assert.equal(inkColour(ink([0, 0, 90]), 120), null); // too dark for a letter alone
 });

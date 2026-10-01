@@ -19,7 +19,7 @@ import { emphasizeParts } from "./segmenter.mjs";
 import { findCitations, findInternalRefs } from "../references/parser.mjs";
 import { scanRules } from "./rules.mjs";
 import { artUnder, strikesThrough, vectorArt } from "./vector-art.mjs";
-import { colourRuns, wrapInk } from "./ink-runs.mjs";
+import { colourRuns, inkColour, wrapInk } from "./ink-runs.mjs";
 import { anchorNear } from "./pdfhints.mjs";
 
 const CHUNK = 150;
@@ -3583,58 +3583,59 @@ export class TypographyEngine {
               // coverage in their core band.
               // The text's own COLOUR. The overlay redraws processed text in the
               // reading colour, which turned a paper's coloured prose black —
-              // blue revision text, a highlighted claim. Read the glyph ink in
-              // the core band: the darkest third of the inked pixels (the
-              // antialiased rims are paper-tinted), and only a clearly
-              // chromatic mean counts; black and grey text keep the reading
-              // colour.
+              // blue revision text, a highlighted claim — so the canvas ink's
+              // colour is read and kept when it is clearly chromatic; black and
+              // grey text keep the reading colour.
               //
-              // One span can carry SEVERAL colours — a latexdiff line runs
-              // black, red and blue within one text item — and one colour for
-              // all of it turned the struck red words black, or black words
-              // red. `mixed` says so: clearly coloured ink beside dark neutral
-              // ink, or two hues. Such a span is coloured per character
-              // (inkRuns, after the width pass), everything else as before.
-              const inkOf = (rect, step, minPx) => {
+              // Read as each channel's DARKNESS summed over the core band, not
+              // pixel by pixel: the browser's subpixel antialiasing tints a
+              // black glyph's edges, and the sums cancel the tints (inkColour).
+              const darkness = (s, x0, x1, y0, y1, step) => {
+                const d = [0, 0, 0];
+                let n = 0;
+                for (let y = y0; y < y1; y++) {
+                  for (let x = x0; x < x1; x += step) {
+                    const i = (y * s.W + x) * 4;
+                    if (s.d[i + 3] <= 40) continue;
+                    d[0] += 255 - s.d[i]; d[1] += 255 - s.d[i + 1]; d[2] += 255 - s.d[i + 2];
+                    if (inkedIn(s, i)) n++;
+                  }
+                }
+                return { d, n };
+              };
+              // Chroma (on 255) a colour must reach. Over a whole span the tints
+              // cancel to a few points, and 60 lets a dark navy or forest green
+              // (70 and more) through. A window or a single letter cuts through
+              // glyphs and keeps one edge's tint without the other's — plain
+              // black reads up to ~90 there — so it must show STRONG colour,
+              // as revision and link colours are (128-255). A line mixing black
+              // with a dark colour is therefore not split: it takes one colour.
+              const SPAN_CHROMA = 60, LOCAL_CHROMA = 120;
+              const hueOf = (rgb) => (rgb ? rgb.indexOf(Math.max(...rgb)) : -1);
+              // One span can carry SEVERAL colours — a latexdiff line runs black,
+              // red and blue within one text item — and one colour for all of it
+              // turned the struck red words black, or black words red. `mixed`
+              // says so: windows about an em wide along the span that disagree
+              // (one coloured, one neutral, or two hues). Such a span is coloured
+              // per character (inkRuns, after the width pass).
+              const inkOf = (rect, step, minPx, need) => {
                 const s = srcFor(rect);
                 const x0 = Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx));
                 const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
                 const y0 = Math.max(0, Math.floor((rect.top + rect.height * 0.3 - s.cr.top) * s.csy));
                 const y1 = Math.min(s.H, Math.ceil((rect.bottom - rect.height * 0.3 - s.cr.top) * s.csy));
-                const px = [];
-                let neutral = 0;
-                const hues = [0, 0, 0];
-                for (let y = y0; y < y1; y++) {
-                  for (let x = x0; x < x1; x += step) {
-                    const i = (y * s.W + x) * 4;
-                    if (!inkedIn(s, i)) continue;
-                    const r = s.d[i], g = s.d[i + 1], b = s.d[i + 2];
-                    px.push([r, g, b]);
-                    const hi = Math.max(r, g, b), c = hi - Math.min(r, g, b);
-                    // Coloured from a chroma of 50 (a dark navy or forest green
-                    // is 60-70); neutral below 30 — antialiased black is grey.
-                    if (c >= 50) hues[hi === r ? 0 : hi === g ? 1 : 2]++;
-                    else if (c < 30 && 0.299 * r + 0.587 * g + 0.114 * b < 110) neutral++;
-                  }
+                const all = darkness(s, x0, x1, y0, y1, step);
+                if (all.n < minPx) return { color: null, n: all.n, mixed: false };
+                const rgb = inkColour(all.d, need);
+                const em = Math.max(4, Math.round(rect.height * s.csx));
+                const seen = new Set();
+                for (let wx = x0; wx < x1 && seen.size < 2; wx += em) {
+                  const w = darkness(s, wx, Math.min(x1, wx + em), y0, y1, step);
+                  if (w.n >= minPx) seen.add(hueOf(inkColour(w.d, LOCAL_CHROMA)));
                 }
-                const n = px.length;
-                if (n < minPx) return { color: null, n, mixed: false };
-                const lum = (p) => 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
-                px.sort((a, b) => lum(a) - lum(b));
-                const core = px.slice(0, Math.max(Math.min(6, n), Math.ceil(n / 3)));
-                const mean = [0, 1, 2].map((c) => Math.round(core.reduce((t, p) => t + p[c], 0) / core.length));
-                const chroma = Math.max(...mean) - Math.min(...mean);
-                // Counted, not proportioned: two black words leading a line of
-                // red are a few percent of its ink, and a share threshold took
-                // the line for red; and a struck single letter is a handful of
-                // pixels. Wrongly "mixed" costs only the per-character pass,
-                // which comes back uniform.
-                const some = (k) => k >= 4;
-                const coloured = hues.filter(some).length;
-                const mixed = coloured > 1 || (coloured === 1 && some(neutral));
-                return { color: chroma >= 60 ? `rgb(${mean.join(", ")})` : null, n, mixed };
+                return { color: rgb ? `rgb(${rgb.join(", ")})` : null, n: all.n, mixed: seen.size > 1 };
               };
-              inkColor = (rect) => inkOf(rect, 2, 12);
+              inkColor = (rect) => inkOf(rect, 2, 12, SPAN_CHROMA);
               // A mixed span's colour per character, measured where the width
               // pass left each glyph: over its own canvas ink in the original
               // face, and close to it in a reading face. The rects are taken
@@ -3657,7 +3658,7 @@ export class TypographyEngine {
                     // Inset a fifth each side: a small glyph beside a colour
                     // change (the "." of "al.has") read its neighbour's rim.
                     const inset = r.width * 0.2;
-                    const ink = inkOf({ left: r.left + inset + dx, right: r.right - inset + dx, top: r.top + dy, bottom: r.bottom + dy, height: r.height }, 1, 4);
+                    const ink = inkOf({ left: r.left + inset + dx, right: r.right - inset + dx, top: r.top + dy, bottom: r.bottom + dy, height: r.height }, 1, 4, LOCAL_CHROMA);
                     chars.push(ink.n >= 4 ? { color: ink.color, n: ink.n } : {});
                   }
                 }

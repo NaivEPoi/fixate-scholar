@@ -19,6 +19,35 @@ function shadeOf(a, b) {
   return a.reduce((t, v, k) => t + v * b[k], 0) / (na * nb) > 0.95;
 }
 
+// What survives of a subpixel tint where a glyph edge is cut off (a thin "i",
+// a two-letter span) keeps the subpixels' ORDER: red, green, blue falling or
+// rising in turn, green strictly between — orange or steel blue. Ink colours
+// don't: red and blue have green at the bottom, green has it at the top.
+const tint = ([r, g, b]) => {
+  const lo = Math.min(r, b), hi = Math.max(r, b), k = (hi - lo) * 0.15;
+  return g > lo + k && g < hi - k;
+};
+
+/**
+ * The ink colour behind summed channel DARKNESS `d` ([R, G, B], each the sum
+ * of 255 - value over the pixels read), or null when it is black or grey.
+ *
+ * The canvas is opaque, so the browser draws its text with subpixel (LCD)
+ * antialiasing and a black glyph's edges are tinted, blue on one side and red
+ * on the other: read pixel by pixel, plain black text came out "dark navy"
+ * letter by letter. Subpixel rendering only shifts each channel's coverage
+ * sideways, so summed over a glyph the three come out level for black ink and
+ * in the ink's own proportions for coloured ink. Taking the ink's darkest
+ * channel as full gives the colour back: darkness (0, k, k) is rgb(255, 0, 0).
+ * `need` is the chroma (on 255) it must reach to count as coloured.
+ */
+export function inkColour(d, need) {
+  const hi = Math.max(...d);
+  if (!(hi > 0)) return null;
+  const rgb = d.map((v) => Math.round(255 * (1 - v / hi)));
+  return Math.max(...rgb) - Math.min(...rgb) >= need && !tint(rgb) ? rgb : null;
+}
+
 /**
  * `chars`: one entry per character of the span's text, in order —
  * `{ space: true }` for whitespace, `{ color, n }` for a glyph sampled from `n`
