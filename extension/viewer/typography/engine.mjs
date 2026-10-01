@@ -3635,7 +3635,9 @@ export class TypographyEngine {
                 }
                 return { color: rgb ? `rgb(${rgb.join(", ")})` : null, n: all.n, mixed: seen.size > 1 };
               };
-              inkColor = (rect) => inkOf(rect, 2, 12, SPAN_CHROMA);
+              // A span of a few letters ("if", "CN") does not cancel its tints
+              // either: under three ems wide it must show strong colour too.
+              inkColor = (rect) => inkOf(rect, 2, 12, rect.width >= rect.height * 3 ? SPAN_CHROMA : LOCAL_CHROMA);
               // A mixed span's colour per character, measured where the width
               // pass left each glyph: over its own canvas ink in the original
               // face, and close to it in a reading face. The rects are taken
