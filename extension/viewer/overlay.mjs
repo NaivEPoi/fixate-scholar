@@ -113,15 +113,34 @@ function addNativeViewerButton() {
 
 // When the browser won't let the extension open a local file at all ("Allow
 // access to file URLs" is off), the service worker answers `back` if the
-// file's native view is the entry right behind this one — the page steps back
-// to it — and `file-access` if nothing is, so the viewer says why rather than
-// leave a button that does nothing.
+// file's native view is the entry right behind this document — the page steps
+// back to it — and `file-access` if nothing is, so the viewer says why rather
+// than leave a button that does nothing. The step skips every viewer entry in
+// between — this document's own (PDF.js pushes one per jump once a document is
+// open, e.g. one dropped onto the viewer) and an earlier viewer document for
+// the same file: `navigation.currentEntry.index` counts them, since the
+// Navigation API lists only the contiguous same-origin entries, and the
+// service worker vouches that the one before them is the file.
+//
+// One request at a time, and no second step once the page is leaving: a
+// double-click otherwise stepped back twice — past the file to whatever came
+// before it. A page restored from the back/forward cache is usable again.
+let openingNatively = false;
+addEventListener("pageshow", () => {
+  openingNatively = false;
+});
 async function openNatively(url) {
+  if (openingNatively) return;
+  openingNatively = true;
   const reply = await chrome.runtime
     .sendMessage({ type: "fx-bypass-once", url })
     .catch(() => null);
-  if (reply?.back) history.back();
-  else if (reply?.reason === "file-access") showFileAccessNote();
+  if (reply?.back) {
+    history.go(-((globalThis.navigation?.currentEntry?.index ?? 0) + 1));
+    return; // leaving; stays latched until pageshow
+  }
+  openingNatively = false;
+  if (reply?.reason === "file-access") showFileAccessNote();
 }
 
 /** Why a local file can't be opened, and the one place to change it. */
