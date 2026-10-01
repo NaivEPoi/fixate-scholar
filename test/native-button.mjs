@@ -48,8 +48,8 @@ const makeClient = (webSocketDebuggerUrl) => {
 };
 
 // What the "native" button does, through the button itself.
-const clickNative = (client) =>
-  client.ev(`(() => { const b = document.getElementById("fxNativeButton"); if (!b) throw new Error("no native button"); b.click(); return true; })()`);
+const clickNative = (client, times = 1) =>
+  client.ev(`(() => { const b = document.getElementById("fxNativeButton"); if (!b) throw new Error("no native button"); for (let i = 0; i < ${times}; i++) b.click(); return true; })()`);
 
 async function noFileAccess(extId) {
   if (!URL0.startsWith("file:")) throw new Error("--no-file-access needs a file:// PDF URL");
@@ -85,13 +85,33 @@ async function noFileAccess(extId) {
   await sleep(5000);
   const inViewer = await c.ev("location.href");
   if (!inViewer.startsWith("chrome-extension://")) throw new Error("the popup path did not open the viewer");
-  await clickNative(c);
+  // The viewer's own entries (PDF.js pushes one per jump once a document is
+  // open) sit between it and the file; the step back must count them.
+  await c.ev(`history.pushState(null, "", "#page=2"); history.pushState(null, "", "#page=3"); true`);
+  // A double-click must still land on the file, not past it. (Here the page
+  // unloads before a second reply arrives, so this passes without the
+  // viewer's one-request latch too — it guards a slower worker.)
+  await clickNative(c, 2);
   await sleep(3000);
   const back = await c.ev("location.href").catch(() => "(navigating)");
   console.log("popup path:   ", back.slice(0, 90));
   if (!back.startsWith("file:")) throw new Error("the button did not return to the native view behind the viewer");
 
-  // 2. The context-menu path: a new tab with nothing behind the viewer. The
+  // 2. The viewer opened AGAIN from the viewer: two viewer documents now sit
+  //    between it and the file, and a plain history.back() lands on the first.
+  await swc.ev(`chrome.tabs.query({}).then((ts) => chrome.tabs.update(ts.find((t) => t.url === ${JSON.stringify(native0)}).id, { url: ${JSON.stringify(viewerFor(native0))} })).then(() => true)`);
+  await sleep(4000);
+  await c.send("Page.navigate", { url: viewerFor(native0) + "#again" });
+  await sleep(1000);
+  await c.send("Page.navigate", { url: viewerFor(native0) });
+  await sleep(4000);
+  await clickNative(c);
+  await sleep(2000);
+  const twice = await c.ev("location.href").catch(() => "(navigating)");
+  console.log("viewer twice: ", twice.slice(0, 90));
+  if (!twice.startsWith("file:")) throw new Error("with a viewer behind the viewer, the button did not reach the file");
+
+  // 3. The context-menu path: a new tab with nothing behind the viewer. The
   //    browser allows no way to the file, so the viewer must say why.
   const tab2 = await http(`/json/new?about:blank`, "PUT");
   const c2 = makeClient(tab2.webSocketDebuggerUrl);

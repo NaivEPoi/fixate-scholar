@@ -282,10 +282,12 @@ async function allowOnce(tabId) {
 // viewer, leaving that view as the entry directly behind it.
 //
 // Per tab, from the commits: { url, behind }. A file: commit records the file;
-// a FRESH viewer commit for that same file marks it behind the viewer (a fresh
-// navigation always lands on the entry right after the one it left); a reload
-// of that viewer keeps the mark. Anything else clears it — including a
-// back/forward commit, which can't say which side of the viewer the file is on.
+// a FRESH viewer commit for that same file marks it behind (a fresh navigation
+// lands on the entry right after the one it left), and so does a reload or a
+// further fresh viewer commit for it — the viewer documents then sit, all
+// same-origin, between the file and the current entry, and the viewer counts
+// them when it steps back (openNatively). Anything else clears the mark,
+// including a back/forward commit, which can't say which side the file is on.
 const FILE_BEHIND_KEY = "fileBehind"; // { [tabId]: { url, behind } }
 
 function nextFileBehind(entry, details) {
@@ -342,10 +344,10 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
 
 // A local file with no file access: back to the native view behind the
 // viewer if that is what is there, otherwise report why nothing can happen.
-// The VIEWER steps back (history.back()), not chrome.tabs.goBack: the native
+// The VIEWER steps back (history.go), not chrome.tabs.goBack: the native
 // view was left without a gesture on it, so the browser's history intervention
 // marks it skippable and goBack jumps straight past it to whatever came before.
-// A step the page itself takes moves exactly one entry.
+// A step the page itself takes is counted exactly (openNatively).
 async function leaveForLocalFile(tabId, url) {
   await fileBehindChain;
   const { [FILE_BEHIND_KEY]: all = {} } = await chrome.storage.session.get(FILE_BEHIND_KEY);
