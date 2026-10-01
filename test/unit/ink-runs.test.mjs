@@ -55,3 +55,10 @@ test("one faint blended glyph at a colour change is not a colour of its own", ()
 test("red and blue in one span are two runs", () => {
   assert.deepEqual(colourRuns(chars("RRR BBB")), [{ from: 0, to: 3, color: RED }, { from: 4, to: 7, color: BLUE }]);
 });
+
+test("one faint letter in a colour of its own keeps it", () => {
+  // A struck single letter "a" (red) on a line that also has blue: faint, but
+  // not a shade of the blue, so not a blend.
+  const samples = [...chars("BB K"), { space: true }, { color: RED, n: 10 }];
+  assert.deepEqual(colourRuns(samples), [{ from: 0, to: 2, color: BLUE }, { from: 5, to: 6, color: RED }]);
+});

@@ -537,6 +537,11 @@ export class TypographyEngine {
       const spans = pv.textLayer?.div?.querySelectorAll("span[data-fx-done]");
       for (const span of spans ?? []) {
         if (this.#reapplyEmphasisSpan(span)) n++;
+        // PDF.js rebuilt the div, so a mixed span's colour wraps went with it
+        // — re-applied whether or not there was emphasis to repair, and only
+        // onto the same text.
+        const ink = this.#inkRuns.get(span);
+        if (ink && ink.len === span.textContent.length) wrapInk(span, ink.runs);
       }
     };
     if (pageIndex >= 0) {
@@ -597,9 +602,6 @@ export class TypographyEngine {
       );
       node.replaceWith(frag);
     }
-    // PDF.js rebuilt the div, so a mixed span's colour wraps went with it.
-    const runs = this.#inkRuns.get(span);
-    if (runs) wrapInk(span, runs);
     return true;
   }
 
@@ -3609,8 +3611,10 @@ export class TypographyEngine {
                     const r = s.d[i], g = s.d[i + 1], b = s.d[i + 2];
                     px.push([r, g, b]);
                     const hi = Math.max(r, g, b), c = hi - Math.min(r, g, b);
-                    if (c >= 90) hues[hi === r ? 0 : hi === g ? 1 : 2]++;
-                    else if (c < 40 && 0.299 * r + 0.587 * g + 0.114 * b < 110) neutral++;
+                    // Coloured from a chroma of 50 (a dark navy or forest green
+                    // is 60-70); neutral below 30 — antialiased black is grey.
+                    if (c >= 50) hues[hi === r ? 0 : hi === g ? 1 : 2]++;
+                    else if (c < 30 && 0.299 * r + 0.587 * g + 0.114 * b < 110) neutral++;
                   }
                 }
                 const n = px.length;
@@ -3622,9 +3626,10 @@ export class TypographyEngine {
                 const chroma = Math.max(...mean) - Math.min(...mean);
                 // Counted, not proportioned: two black words leading a line of
                 // red are a few percent of its ink, and a share threshold took
-                // the line for red. Wrongly "mixed" costs only the per-character
-                // pass, which comes back uniform.
-                const some = (k) => k >= 8;
+                // the line for red; and a struck single letter is a handful of
+                // pixels. Wrongly "mixed" costs only the per-character pass,
+                // which comes back uniform.
+                const some = (k) => k >= 4;
                 const coloured = hues.filter(some).length;
                 const mixed = coloured > 1 || (coloured === 1 && some(neutral));
                 return { color: chroma >= 60 ? `rgb(${mean.join(", ")})` : null, n, mixed };
@@ -4090,7 +4095,7 @@ export class TypographyEngine {
           // runs. Cut out of every mask instead: the box below its top 30%,
           // which the line it underlines does not reach. In box fractions, so
           // the same at every zoom.
-          if (!wordy) descenderZones.push({ left: r.left, right: r.right, top: r.top + dh * 0.3, bottom: r.bottom });
+          if (!wordy) descenderZones.push({ left: r.left, right: r.right, top: r.top + dh * 0.3, bottom: r.bottom, art: true });
           // A lone slanted glyph ("/", "|", "\") overhangs its box sideways the
           // whole height: the next word's mask took the top of the "/" in
           // "conditions/actions", which then read as a comma.
@@ -4425,8 +4430,10 @@ export class TypographyEngine {
             // Glyph art under this span's glyphs (a wavy underline) is cut out
             // of the mask exactly; clamped like text, its box — which reaches
             // up into the word — pulled the mask's END in, baring the canvas
-            // copy of the word's last letter.
-            if (o.art && o.art.top >= (r2.top + r2.bottom) / 2) continue;
+            // copy of the word's last letter. Only art whose box reaches well
+            // into the glyphs: a wordless run on the NEXT line (a symbol, a
+            // dash) keeps the clamp that stops this mask above its top.
+            if (o.art && o.art.top >= (r2.top + r2.bottom) / 2 && o.top < r2.bottom - h * 0.15) continue;
             // A protect zone whose own glyphs lie wholly on the line ABOVE or
             // BELOW: its padding reaches into this span's box, and the overlap
             // rule below then cut the mask SIDEWAYS — the canvas copy of the
@@ -4495,7 +4502,11 @@ export class TypographyEngine {
           // "To" under a kept subscript).
           const ownTop = r2.top + h * 0.05;
           for (const zone of descenderZones) {
-            const z = zone.top < r2.top ? { ...zone, bottom: Math.min(zone.bottom, ownTop) } : zone;
+            let z = zone.top < r2.top ? { ...zone, bottom: Math.min(zone.bottom, ownTop) } : zone;
+            // A glyph-art cut never bares this span's own glyph core: a wave
+            // runs below the word, and a wordless run sitting ON the words (a
+            // hidden copy's dashes) must not open their canvas copy.
+            if (zone.art && z.top < r2.top + h * 0.7) z = { ...z, top: r2.top + h * 0.7 };
             if (z.right <= L || z.left >= R || z.bottom <= T || z.top >= B || z.bottom <= z.top) continue;
             pieces = pieces.flatMap(([l, t, r, b]) => {
               if (z.right <= l || z.left >= r || z.bottom <= t || z.top >= b) return [[l, t, r, b]];
@@ -4595,7 +4606,7 @@ export class TypographyEngine {
           if (!runs) continue;
           if (runs.uniform) span.style.setProperty("--fx-ink", runs.uniform);
           else if (runs.length) {
-            this.#inkRuns.set(span, runs);
+            this.#inkRuns.set(span, { runs, len: span.textContent.length });
             wrapInk(span, runs);
           }
         }
