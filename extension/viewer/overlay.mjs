@@ -107,10 +107,48 @@ function addNativeViewerButton() {
   button.title = "Open in the browser's native PDF viewer";
   button.textContent = "native";
   button.style.cssText = "width:auto;padding:0 8px;";
-  button.addEventListener("click", () => {
-    chrome.runtime.sendMessage({ type: "fx-bypass-once", url });
-  });
+  button.addEventListener("click", () => openNatively(url));
   right.prepend(button);
+}
+
+// When the browser won't let the extension open a local file at all ("Allow
+// access to file URLs" is off), the service worker answers `back` if the
+// file's native view is the entry right behind this one — the page steps back
+// to it — and `file-access` if nothing is, so the viewer says why rather than
+// leave a button that does nothing.
+async function openNatively(url) {
+  const reply = await chrome.runtime
+    .sendMessage({ type: "fx-bypass-once", url })
+    .catch(() => null);
+  if (reply?.back) history.back();
+  else if (reply?.reason === "file-access") showFileAccessNote();
+}
+
+/** Why a local file can't be opened, and the one place to change it. */
+function fileAccessHint() {
+  const hint = document.createElement("span");
+  hint.className = "fx-file-access";
+  hint.append(
+    "The browser lets FixateScholar open local files only when “Allow access to file URLs” is on for it: ",
+  );
+  const link = document.createElement("a");
+  link.textContent = "open its extension settings";
+  link.href = "#";
+  link.addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
+  });
+  hint.append(link, ".");
+  return hint;
+}
+
+function showFileAccessNote() {
+  if (document.querySelector(".fx-file-access")) return; // already explained
+  const note = document.createElement("div");
+  note.id = "fxFileAccessNote";
+  note.className = "fx-load-error";
+  note.append(fileAccessHint());
+  document.getElementById("outerContainer")?.prepend(note);
 }
 
 const app = window.PDFViewerApplication;
@@ -554,11 +592,14 @@ if (app.pdfDocument) {
 
 // Auth-gated or otherwise unfetchable PDFs: offer the native viewer, which
 // re-navigates with the page's own cookies/session semantics.
-app.eventBus.on("documenterror", () => {
-  if (document.getElementById("fxLoadError")) return;
+app.eventBus.on("documenterror", async () => {
   if (!chrome.runtime?.sendMessage) return;
   const url = currentFileUrl();
   if (!url) return;
+  // A local file fails to load for exactly this reason, so say it up front.
+  const noFileAccess =
+    url.startsWith("file:") && !(await chrome.extension.isAllowedFileSchemeAccess());
+  if (document.getElementById("fxLoadError")) return;
   const banner = document.createElement("div");
   banner.id = "fxLoadError";
   banner.className = "fx-load-error";
@@ -568,9 +609,10 @@ app.eventBus.on("documenterror", () => {
   link.href = "#";
   link.addEventListener("click", (e) => {
     e.preventDefault();
-    chrome.runtime.sendMessage({ type: "fx-bypass-once", url });
+    openNatively(url);
   });
   banner.append(link);
+  if (noFileAccess) banner.append(". ", fileAccessHint());
   document.getElementById("outerContainer")?.prepend(banner);
 });
 

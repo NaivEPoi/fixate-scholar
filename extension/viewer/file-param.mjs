@@ -34,10 +34,17 @@ const MARKER = "?file=";
  *
  * The DNR parameter can't be mistaken for one: it still holds the literal `:`
  * and `/` of a real URL, which encodeURIComponent always escapes.
+ *
+ * `'` and `%27` count as the same character. encodeURIComponent leaves an
+ * apostrophe alone, but the browser escapes it in the viewer's query, so a
+ * local `Author's paper.pdf` arrived as `%27` and failed the round trip — the
+ * parameter was escaped a second time, PDF.js was handed `file%3A…`, and the
+ * document neither loaded nor got a "native" button.
  */
 function isEncoded(raw) {
+  const apostrophes = (s) => s.replace(/'/g, "%27");
   try {
-    return encodeURIComponent(decodeURIComponent(raw)) === raw;
+    return apostrophes(encodeURIComponent(decodeURIComponent(raw))) === apostrophes(raw);
   } catch {
     return false; // a `%` that isn't an escape — so, not our own output
   }
