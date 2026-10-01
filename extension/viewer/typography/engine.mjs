@@ -18,7 +18,8 @@
 import { emphasizeParts } from "./segmenter.mjs";
 import { findCitations, findInternalRefs } from "../references/parser.mjs";
 import { scanRules } from "./rules.mjs";
-import { artUnder, vectorArt } from "./vector-art.mjs";
+import { artUnder, strikesThrough, vectorArt } from "./vector-art.mjs";
+import { colourRuns, wrapInk } from "./ink-runs.mjs";
 import { anchorNear } from "./pdfhints.mjs";
 
 const CHUNK = 150;
@@ -261,6 +262,7 @@ export class TypographyEngine {
   #settings;
   #enabled = false;
   #pristine = new WeakMap(); // span -> { html, scaleX, fontFamily }
+  #inkRuns = new WeakMap(); // span -> its colour runs, re-applied after a rewrite (wrapInk)
   #wordStart = new WeakMap(); // span -> running word index it was emphasized from
   #joinCtx = new WeakMap(); // span -> {head, tail} of a word split across spans
   #pending = new Map(); // pageNumber -> cancel flag holder
@@ -595,6 +597,9 @@ export class TypographyEngine {
       );
       node.replaceWith(frag);
     }
+    // PDF.js rebuilt the div, so a mixed span's colour wraps went with it.
+    const runs = this.#inkRuns.get(span);
+    if (runs) wrapInk(span, runs);
     return true;
   }
 
@@ -641,6 +646,7 @@ export class TypographyEngine {
         span.style.marginTop = orig.marginTop || "";
       }
       span.style.removeProperty("--fx-ink");
+      this.#inkRuns.delete(span);
       delete span.dataset.fxDone;
     }
     for (const d of layerDiv.querySelectorAll("[data-fx-keep]")) {
@@ -2737,7 +2743,7 @@ export class TypographyEngine {
     // the zoom it is px per point at 100% — one page px per unit.
     const ptScale = pageView.viewport.scale / pageView.scale;
     const unit = page.getViewport({ scale: ptScale, rotation });
-    const entry = { rotation, w: unit.width, h: unit.height, rules: undefined, art: null };
+    const entry = { rotation, w: unit.width, h: unit.height, rules: undefined, art: null, bars: null };
     this.#ruleBaseline.set(page, entry);
     const ppu = globalThis.__fxRulePPU > 0 ? globalThis.__fxRulePPU : RULE_PPU; // test override
     const gen = this.#ruleGen;
@@ -2770,9 +2776,11 @@ export class TypographyEngine {
           const OPS = globalThis.pdfjsLib?.OPS;
           if (OPS) {
             const opList = await page.getOperatorList({ annotationMode: globalThis.pdfjsLib.AnnotationMode?.ENABLE_FORMS });
-            entry.art = vectorArt(opList, OPS, page.view);
+            const bars = [];
+            entry.art = vectorArt(opList, OPS, page.view, bars);
+            entry.bars = bars;
           }
-        } catch { entry.art = null; }
+        } catch { entry.art = null; entry.bars = null; }
         const W = canvas.width, H = canvas.height;
         const kx = W / entry.w, ky = H / entry.h;
         const scanHere = () => scanRules(ctx.getImageData(0, 0, W, H).data, W, H, kx, ky)
@@ -3354,10 +3362,12 @@ export class TypographyEngine {
     let obstacleRects = null;
     const artKept = new Set(); // spans kept for the vector art on them (work())
     const artBoxes = []; // their art, viewport rects [x0, y0, x1, y1] relative to the page
+    const strikeBoxes = []; // bars striking through candidates' glyphs, same frame
     const descenderZones = []; // kept glyph runs' descender bands, masks cut around them
     let zoneDrops = null; // candidates inside rule-bounded table zones — left on the canvas
     let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
-    let inkColor = null; // (rect) => the glyphs' own colour when it is not black/grey, else null
+    let inkColor = null; // (rect) => { color: the glyphs' own colour unless black/grey, mixed: several }
+    let inkRuns = null; // (span) => a mixed span's colours as character runs (see inkColor)
     let inkFit = null; // (rect) => how line-like the ink under it is — overlap resolver
     const lowResSrc = (s) => s.csy < 1.5; // too coarse for reliable band metrics
     let overlapVeto = null; // candidates whose rects pile on another candidate
@@ -3456,6 +3466,19 @@ export class TypographyEngine {
           obstacleDivs.push(pairs[i].div);
           pairs.splice(i, 1);
         }
+        // Strike-through bars (vector-art.mjs strikesThrough): the struck words
+        // are processed like any other, and the bar is cut out of every mask
+        // below, so the canvas's own bar stays over them — unmasked, it showed
+        // only in the gaps between masked words, as dashes.
+        const bars = baseline?.bars;
+        const struck = new Set();
+        for (const p of bars?.length ? pairs : []) {
+          for (const bar of strikesThrough(bars, p.item)) {
+            if (struck.has(bar)) continue;
+            struck.add(bar);
+            strikeBoxes.push(pageView.viewport.convertToViewportRectangle(bar));
+          }
+        }
         // Art on text that stays on the canvas anyway (a boxed "C2": the "C"
         // and "2" are kept for being short) is an obstacle too — only its
         // processed neighbour would otherwise decide how far its mask reaches.
@@ -3504,6 +3527,14 @@ export class TypographyEngine {
             // ...and cut out of every mask outright: a clamp gives way where a
             // mask's own glyphs reach the frame (the comma after a boxed "C2").
             descenderZones.push({ left: art.left - 1, right: art.right + 1, top: art.top - 1, bottom: art.bottom + 1 });
+          }
+          // A struck word's bar, cut out exactly (half a px of antialiasing
+          // each side): it is canvas ink over the glyphs, so the strip shows the
+          // bar and nothing doubled. Not an obstacle — the word is processed.
+          for (const [x0, y0, x1, y1] of strikeBoxes) {
+            const top = pb.top + Math.min(y0, y1), bottom = pb.top + Math.max(y0, y1);
+            const mid = (top + bottom) / 2, half = Math.max(0.5, (bottom - top) / 2) + 0.5;
+            descenderZones.push({ left: pb.left + Math.min(x0, x1), right: pb.left + Math.max(x0, x1), top: mid - half, bottom: mid + half });
           }
         }
         // HIDDEN-TEXT guard. A PDF's text layer can carry items the canvas
@@ -3555,26 +3586,77 @@ export class TypographyEngine {
               // antialiased rims are paper-tinted), and only a clearly
               // chromatic mean counts; black and grey text keep the reading
               // colour.
-              inkColor = (rect) => {
+              //
+              // One span can carry SEVERAL colours — a latexdiff line runs
+              // black, red and blue within one text item — and one colour for
+              // all of it turned the struck red words black, or black words
+              // red. `mixed` says so: clearly coloured ink beside dark neutral
+              // ink, or two hues. Such a span is coloured per character
+              // (inkRuns, after the width pass), everything else as before.
+              const inkOf = (rect, step, minPx) => {
                 const s = srcFor(rect);
                 const x0 = Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx));
                 const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
                 const y0 = Math.max(0, Math.floor((rect.top + rect.height * 0.3 - s.cr.top) * s.csy));
                 const y1 = Math.min(s.H, Math.ceil((rect.bottom - rect.height * 0.3 - s.cr.top) * s.csy));
                 const px = [];
+                let neutral = 0;
+                const hues = [0, 0, 0];
                 for (let y = y0; y < y1; y++) {
-                  for (let x = x0; x < x1; x += 2) {
+                  for (let x = x0; x < x1; x += step) {
                     const i = (y * s.W + x) * 4;
-                    if (inkedIn(s, i)) px.push([s.d[i], s.d[i + 1], s.d[i + 2]]);
+                    if (!inkedIn(s, i)) continue;
+                    const r = s.d[i], g = s.d[i + 1], b = s.d[i + 2];
+                    px.push([r, g, b]);
+                    const hi = Math.max(r, g, b), c = hi - Math.min(r, g, b);
+                    if (c >= 90) hues[hi === r ? 0 : hi === g ? 1 : 2]++;
+                    else if (c < 40 && 0.299 * r + 0.587 * g + 0.114 * b < 110) neutral++;
                   }
                 }
-                if (px.length < 12) return null;
+                const n = px.length;
+                if (n < minPx) return { color: null, n, mixed: false };
                 const lum = (p) => 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
                 px.sort((a, b) => lum(a) - lum(b));
-                const core = px.slice(0, Math.max(6, Math.ceil(px.length / 3)));
-                const mean = [0, 1, 2].map((c) => Math.round(core.reduce((n, p) => n + p[c], 0) / core.length));
+                const core = px.slice(0, Math.max(Math.min(6, n), Math.ceil(n / 3)));
+                const mean = [0, 1, 2].map((c) => Math.round(core.reduce((t, p) => t + p[c], 0) / core.length));
                 const chroma = Math.max(...mean) - Math.min(...mean);
-                return chroma >= 60 ? `rgb(${mean.join(", ")})` : null;
+                // Counted, not proportioned: two black words leading a line of
+                // red are a few percent of its ink, and a share threshold took
+                // the line for red. Wrongly "mixed" costs only the per-character
+                // pass, which comes back uniform.
+                const some = (k) => k >= 8;
+                const coloured = hues.filter(some).length;
+                const mixed = coloured > 1 || (coloured === 1 && some(neutral));
+                return { color: chroma >= 60 ? `rgb(${mean.join(", ")})` : null, n, mixed };
+              };
+              inkColor = (rect) => inkOf(rect, 2, 12);
+              // A mixed span's colour per character, measured where the width
+              // pass left each glyph: over its own canvas ink in the original
+              // face, and close to it in a reading face. The rects are taken
+              // NOW, so they are moved into the frame the pixels were read in
+              // (the page may have scrolled since).
+              inkRuns = (span) => {
+                const now = pageView.canvas?.getBoundingClientRect();
+                if (!now) return null;
+                const dx = base.cr.left - now.left, dy = base.cr.top - now.top;
+                const range = document.createRange();
+                const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+                const chars = [];
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                  for (let k = 0; k < node.data.length; k++) {
+                    if (/\s/.test(node.data[k])) { chars.push({ space: true }); continue; }
+                    range.setStart(node, k);
+                    range.setEnd(node, k + 1);
+                    const r = range.getBoundingClientRect();
+                    if (!(r.width > 0 && r.height > 0)) { chars.push({}); continue; }
+                    // Inset a fifth each side: a small glyph beside a colour
+                    // change (the "." of "al.has") read its neighbour's rim.
+                    const inset = r.width * 0.2;
+                    const ink = inkOf({ left: r.left + inset + dx, right: r.right - inset + dx, top: r.top + dy, bottom: r.bottom + dy, height: r.height }, 1, 4);
+                    chars.push(ink.n >= 4 ? { color: ink.color, n: ink.n } : {});
+                  }
+                }
+                return colourRuns(chars);
               };
               inkCheck = (rect) => {
                 const s = srcFor(rect);
@@ -3964,9 +4046,16 @@ export class TypographyEngine {
           // edge bands) reads to the fit below as a hidden copy's straddled ink —
           // dropped as an obstacle, the neighbours' masks cut the circles and the
           // line's descenders.
+          // The fit judges WORDS: a hidden copy is a line of text. A run of
+          // glyphs with no letter or digit in it — ulem's wavy underline is a
+          // row of wave glyphs, set in a box that reaches up into the line it
+          // underlines — inks its box's edge with that line, read as a hidden
+          // copy, and the words' masks erased the wave. It takes the plain
+          // ink check instead.
+          const wordy = /[\p{L}\p{N}]/u.test(d.textContent || "");
           if (artKept.has(d)) {
             /* always an obstacle */
-          } else if (inkFit && r.width > 40 && r.height > 8) {
+          } else if (inkFit && wordy && r.width > 40 && r.height > 8) {
             const f = inkFit(r);
             if (f && f.core - f.edgeMin - f.pen < 0.4) continue;
           } else if (inkCheck && r.width > 1 && r.height > 1) {
@@ -3978,7 +4067,14 @@ export class TypographyEngine {
             // (inkCheck samples the middle of the box it is given: centre it on
             // the band just under the box.)
             const probe = low ? { left: r.left, right: r.right, top: r.bottom - r.height * 0.2, bottom: r.bottom + r.height * 0.35, width: r.width, height: r.height * 0.55 } : r;
-            if (!inkCheck(probe)) continue;
+            // Other glyph art (wave glyphs) inks anywhere in the part of its box
+            // cut out of the masks below — a short run's glyphs sit lower than
+            // the core band the plain check reads: look at all of that part.
+            // (inkCheck reads the middle 40% of what it is given, so it is
+            // handed the box whose middle 40% that part is.)
+            const reads = (t, b) => ({ left: r.left, right: r.right, width: r.width, top: t - (b - t) * 0.75, bottom: b + (b - t) * 0.75, height: (b - t) * 2.5 });
+            const artInk = () => !wordy && !low && inkCheck(reads(r.top + r.height * 0.3, r.bottom));
+            if (!inkCheck(probe) && !artInk()) continue;
           }
           // A kept glyph run's descenders leave its text-layer box: below
           // it (the box comes from the substitute face's ascent), and to
@@ -3987,6 +4083,14 @@ export class TypographyEngine {
           // read "a" ("K⁺gNB" as "K⁺aNB"). Masks are cut around this band.
           const dh = r.height;
           descenderZones.push({ left: r.left - dh * 0.2, right: r.right, top: r.bottom - dh * 0.3, bottom: r.bottom + dh * 0.25 });
+          // A wordless run is glyph art — ulem's wavy underline is a row of
+          // wave glyphs, under the word, in a box whose top reaches up into
+          // that word's own glyphs. As an obstacle its box was clamped like
+          // text, down to the word's descender band, which is where the wave
+          // runs. Cut out of every mask instead: the box below its top 30%,
+          // which the line it underlines does not reach. In box fractions, so
+          // the same at every zoom.
+          if (!wordy) descenderZones.push({ left: r.left, right: r.right, top: r.top + dh * 0.3, bottom: r.bottom });
           // A lone slanted glyph ("/", "|", "\") overhangs its box sideways the
           // whole height: the next word's mask took the top of the "/" in
           // "conditions/actions", which then read as a comma.
@@ -4000,6 +4104,10 @@ export class TypographyEngine {
             // BEFORE the frame instead of exactly at the glyphs.
             const pad = r.height * 0.35;
             obstacleRects.push({ left: r.left - 3, right: r.right + 3, top: r.top - pad, bottom: r.bottom + pad, core: r });
+          } else if (!wordy) {
+            // Glyph art: its ink band (cut out of the masks above) rides along,
+            // for the mask clamp below.
+            obstacleRects.push({ left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height, art: { top: r.top + dh * 0.3 } });
           } else {
             obstacleRects.push(r);
           }
@@ -4271,7 +4379,8 @@ export class TypographyEngine {
           if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
           span.dataset.fxDone = "1";
           const ink = inkColor?.(entry.rect);
-          if (ink) span.style.setProperty("--fx-ink", ink);
+          if (ink?.mixed) entry.mixedInk = true;
+          else if (ink?.color) span.style.setProperty("--fx-ink", ink.color);
         }
         // Re-measure pass: one layout flush. The post-change rect is the bolded
         // text in the new face at the corrected baseline. The computed font
@@ -4313,6 +4422,11 @@ export class TypographyEngine {
           let B = Math.max(rect.bottom, r2.bottom) + padY;
           for (const o of obstacleRects) {
             if (o.right <= L || o.left >= R || o.bottom <= T || o.top >= B) continue;
+            // Glyph art under this span's glyphs (a wavy underline) is cut out
+            // of the mask exactly; clamped like text, its box — which reaches
+            // up into the word — pulled the mask's END in, baring the canvas
+            // copy of the word's last letter.
+            if (o.art && o.art.top >= (r2.top + r2.bottom) / 2) continue;
             // A protect zone whose own glyphs lie wholly on the line ABOVE or
             // BELOW: its padding reaches into this span's box, and the overlap
             // rule below then cut the mask SIDEWAYS — the canvas copy of the
@@ -4471,6 +4585,18 @@ export class TypographyEngine {
           } else {
             if (baseSpacingEm > 0) span.style.wordSpacing = `${baseSpacingEm}em`;
             span.style.setProperty("--scale-x", targetW / natural);
+          }
+        }
+        // Colour pass, mixed spans only (inkColor): every rect read first, in
+        // the one layout the width pass left, then every wrap written.
+        const mixedInk = inkRuns ? batch.filter((e) => e.mixedInk) : [];
+        const runsFor = mixedInk.map((e) => [e.pair.div, inkRuns(e.pair.div)]);
+        for (const [span, runs] of runsFor) {
+          if (!runs) continue;
+          if (runs.uniform) span.style.setProperty("--fx-ink", runs.uniform);
+          else if (runs.length) {
+            this.#inkRuns.set(span, runs);
+            wrapInk(span, runs);
           }
         }
         i = end;

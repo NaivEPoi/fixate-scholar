@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { artUnder, vectorArt } from "../../extension/viewer/typography/vector-art.mjs";
+import { artUnder, strikesThrough, vectorArt } from "../../extension/viewer/typography/vector-art.mjs";
 
 // The operator ids vector-art.mjs reads; the values only need to be distinct.
 const OPS = {
   save: 10, restore: 11, transform: 12, paintFormXObjectBegin: 74, paintFormXObjectEnd: 75,
   beginAnnotation: 80, endAnnotation: 81, setFillRGBColor: 59, constructPath: 91, clip: 30, eoClip: 31, beginGroup: 76, endGroup: 77,
-  stroke: 20, fill: 22, eoFill: 23, endPath: 28,
+  stroke: 20, fill: 22, eoFill: 23, endPath: 28, setLineWidth: 2,
 };
 const list = (...ops) => ({ fnArray: ops.map((o) => o[0]), argsArray: ops.map((o) => o[1]) });
 const path = (op, box) => [OPS.constructPath, [op, [null], box]];
@@ -93,4 +93,34 @@ test("a group form paints nothing outside its BBox", () => {
     path(OPS.stroke, [-500, 5, 20, 18]), // outside the group: the page view only
   ), OPS, [0, 0, 612, 792]);
   assert.deepEqual(art, [[0, 5, 20, 18], [100, 95, 120, 108]]);
+});
+
+// Strike-through: the bar runs through the glyphs between baseline and
+// x-height; the engine cuts it out of the masks so struck words stay struck.
+test("a stroked strike-out bar is collected at its line width; art is unchanged", () => {
+  const bars = [];
+  // ulem's \sout: a zero-height stroked line at 0.4 pt, through the x-height.
+  const art = vectorArt(list([OPS.setLineWidth, [0.4]], path(OPS.stroke, [50, 102.5, 150, 102.5])), OPS, undefined, bars);
+  assert.deepEqual(art, []);
+  assert.equal(bars.length, 1);
+  assert.deepEqual(bars[0].map((v) => +v.toFixed(2)), [50, 102.3, 150, 102.7]);
+  assert.equal(strikesThrough(bars, item).length, 1);
+});
+
+test("a filled bar strikes too; underlines, overlines and other lines do not", () => {
+  const bars = [];
+  vectorArt(list(
+    path(OPS.fill, [60, 102, 140, 102.4]), // \rule through the x-height: struck
+    path(OPS.fill, [50, 98, 150, 98.4]), // under the baseline: an underline
+    path(OPS.fill, [50, 109, 150, 109.4]), // above the glyphs: an overline
+    path(OPS.fill, [50, 202, 150, 202.4]), // another line's
+  ), OPS, undefined, bars);
+  assert.equal(bars.length, 4);
+  assert.deepEqual(strikesThrough(bars, item), [[60, 102, 140, 102.4]]);
+});
+
+test("a bar must run along the text, not just touch it", () => {
+  const bars = [];
+  vectorArt(list(path(OPS.fill, [148, 102, 160, 102.4])), OPS, undefined, bars);
+  assert.deepEqual(strikesThrough(bars, item), []);
 });

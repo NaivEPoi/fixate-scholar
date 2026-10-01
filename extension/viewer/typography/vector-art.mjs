@@ -39,48 +39,64 @@ const intersect = (a, b) => {
  * Each box is cut to the clip it is painted under, starting from the page's
  * `view`: a plot's lines run far off the figure and are clipped to it, and
  * their raw extent laid "art" across the text beside the figure.
+ *
+ * `bars`, when given, collects the HORIZONTAL rules left out above — thinner
+ * than THIN, longer than they are thick — for strikesThrough.
  */
-export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infinity, Infinity, Infinity]) {
+export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infinity, Infinity, Infinity], bars = null) {
   const out = [];
-  let ctm = [1, 0, 0, 1, 0, 0], fill = "#000000", clip = view, pendingClip = false;
+  let ctm = [1, 0, 0, 1, 0, 0], fill = "#000000", clip = view, pendingClip = false, lineWidth = 1;
   const stack = [];
   let inAnnotation = 0;
   for (let i = 0; i < fnArray.length; i++) {
     const fn = fnArray[i], args = argsArray[i];
     switch (fn) {
-      case OPS.save: stack.push([ctm, fill, clip]); break;
-      case OPS.restore: if (stack.length) [ctm, fill, clip] = stack.pop(); break;
+      case OPS.save: stack.push([ctm, fill, clip, lineWidth]); break;
+      case OPS.restore: if (stack.length) [ctm, fill, clip, lineWidth] = stack.pop(); break;
       case OPS.transform: ctm = mul(ctm, args); break;
       case OPS.paintFormXObjectBegin:
-        stack.push([ctm, fill, clip]);
+        stack.push([ctm, fill, clip, lineWidth]);
         if (args?.[0]) ctm = mul(ctm, args[0]);
         // The form paints nothing outside its BBox.
         if (args?.[1] && clip) clip = intersect(clip, transformBox(ctm, args[1]));
         break;
-      case OPS.paintFormXObjectEnd: if (stack.length) [ctm, fill, clip] = stack.pop(); break;
+      case OPS.paintFormXObjectEnd: if (stack.length) [ctm, fill, clip, lineWidth] = stack.pop(); break;
       // A form with a /Group passes its BBox here, not to paintFormXObjectBegin;
       // PDF.js clips to it through the form matrix.
       case OPS.beginGroup: {
-        stack.push([ctm, fill, clip]);
+        stack.push([ctm, fill, clip, lineWidth]);
         const g = args?.[0];
         if (g?.bbox && clip) clip = intersect(clip, transformBox(g.matrix ? mul(ctm, g.matrix) : ctm, g.bbox));
         break;
       }
-      case OPS.endGroup: if (stack.length) [ctm, fill, clip] = stack.pop(); break;
+      case OPS.endGroup: if (stack.length) [ctm, fill, clip, lineWidth] = stack.pop(); break;
       case OPS.beginAnnotation: inAnnotation++; break;
       case OPS.endAnnotation: inAnnotation = Math.max(0, inAnnotation - 1); break;
       case OPS.clip: case OPS.eoClip: pendingClip = true; break;
       case OPS.setFillRGBColor: if (typeof args?.[0] === "string") fill = args[0]; break;
+      case OPS.setLineWidth: if (args?.[0] >= 0) lineWidth = args[0]; break;
       case OPS.constructPath: {
         const [op, , minMax] = args ?? [];
         const raw = minMax ? transformBox(ctm, minMax) : null;
         const painted = raw && clip ? intersect(raw, clip) : null;
         // W n / W f: the path narrows the clip for what follows (itself too).
         if (pendingClip) { clip = raw && clip ? intersect(clip, raw) : null; pendingClip = false; }
-        if (inAnnotation || !painted || op === OPS.endPath) break;
         const filledOnly = op === OPS.fill || op === OPS.eoFill;
+        // A STROKED horizontal rule — ulem's strike-out is one — has a box of
+        // no height; its ink is the line width thick, so that is its bar.
+        if (bars && raw && clip && !inAnnotation && !filledOnly && op !== OPS.endPath && raw[3] - raw[1] < THIN) {
+          const half = (lineWidth * Math.hypot(ctm[2], ctm[3])) / 2;
+          const bar = intersect([raw[0], raw[1] - half, raw[2], raw[3] + half], clip);
+          if (bar && bar[3] - bar[1] < THIN && bar[2] - bar[0] > 2 * Math.max(bar[3] - bar[1], 0.5)) bars.push(bar);
+        }
+        if (inAnnotation || !painted || op === OPS.endPath) break;
         if (filledOnly && WHITE.test(fill)) break;
-        if (Math.min(painted[2] - painted[0], painted[3] - painted[1]) < THIN) break;
+        const w = painted[2] - painted[0], h = painted[3] - painted[1];
+        if (Math.min(w, h) < THIN) {
+          // A filled bar (a TeX \rule); a stroked one was taken above.
+          if (bars && filledOnly && h < THIN && w > 2 * Math.max(h, 0.5)) bars.push(painted);
+          break;
+        }
         out.push(painted);
         break;
       }
@@ -88,7 +104,36 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
   }
   // By bottom edge, for artUnder's binary search: a plot-heavy page has tens
   // of thousands of boxes, and every candidate line is tested against them.
+  bars?.sort((a, b) => a[1] - b[1]);
   return out.sort((a, b) => a[1] - b[1]);
+}
+
+/**
+ * The rules that STRIKE THROUGH this text item: thin horizontal bars (from
+ * vectorArt's `bars`, sorted) running through its glyphs between the baseline
+ * and the x-height — a struck-out word (ulem's \sout, soul's \st, latexdiff's
+ * deleted text, a word processor's strikethrough). An underline lies at or
+ * below the baseline and an overline above the glyphs; neither counts. A
+ * processed span masks the canvas under its glyphs, bar and all, so struck
+ * text read as plain text; the engine cuts these bars out of the masks.
+ * Returns the matching bars (PDF user space), possibly none.
+ */
+export function strikesThrough(bars, item) {
+  const t = item?.transform;
+  if (!bars?.length || !t || t[1] || t[2] || !(item.height > 0) || !(item.width > 0)) return [];
+  const h = item.height;
+  const x0 = t[4], x1 = t[4] + item.width;
+  const lo = t[5] + 0.15 * h, hi = t[5] + 0.65 * h; // the bar's centre lies in here
+  let a = 0, b = bars.length;
+  while (a < b) { const mid = (a + b) >> 1; if (bars[mid][1] < lo - THIN) a = mid + 1; else b = mid; }
+  const out = [];
+  for (let i = a; i < bars.length && bars[i][1] < hi; i++) {
+    const [b0, y0, b1, y1] = bars[i];
+    const cy = (y0 + y1) / 2;
+    if (cy < lo || cy > hi || y1 - y0 > 0.25 * h) continue;
+    if (Math.min(x1, b1) - Math.max(x0, b0) > Math.min(0.5 * h, 0.5 * (b1 - b0))) out.push(bars[i]);
+  }
+  return out;
 }
 
 /**
