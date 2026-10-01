@@ -12,6 +12,13 @@ const FAINT = 24;
 
 const parse = (c) => c.match(/\d+/g).map(Number);
 
+/** `a` is `b` darkened toward black: the same direction in RGB, less of it. */
+function shadeOf(a, b) {
+  const na = Math.hypot(...a), nb = Math.hypot(...b);
+  if (!(na > 0 && nb > 0) || na >= nb) return false;
+  return a.reduce((t, v, k) => t + v * b[k], 0) / (na * nb) > 0.95;
+}
+
 /**
  * `chars`: one entry per character of the span's text, in order —
  * `{ space: true }` for whitespace, `{ color, n }` for a glyph sampled from `n`
@@ -37,10 +44,13 @@ export function colourRuns(chars) {
     return c;
   };
   const cls = chars.map((ch) => (ch.space ? undefined : "color" in ch ? snap(ch.color) : undefined));
-  // A colour only one faint glyph has is a blend at a colour change — a full
-  // stop beside the first red letter read dark red — not a colour of its own.
+  // A colour only one faint glyph has, and that is a DARKER SHADE of another
+  // colour in the span, is a blend at a colour change — a full stop beside the
+  // first red letter read dark red — not a colour of its own. A faint glyph in
+  // a colour of its own (one struck letter) keeps it.
   for (let i = 0; i < cls.length; i++) {
-    if (cls[i]?.n === 1 && chars[i].n < FAINT && palette.length > 1) cls[i] = undefined;
+    const c = cls[i];
+    if (c?.n === 1 && chars[i].n < FAINT && palette.some((p) => p !== c && shadeOf(c.rgb, p.rgb))) cls[i] = undefined;
   }
   // An unsampled glyph: nearest sampled one in its own word, left first.
   for (let i = 0; i < chars.length; i++) {
@@ -93,6 +103,9 @@ function wrapRun(el, from, to, color) {
     if (!group.length) return;
     const wrap = el.ownerDocument.createElement("fx-ink");
     wrap.style.color = color;
+    // Also as --fx-ink, which a search match inside reads its colour from
+    // (overlay.css): set on the span for a one-colour span, here for a run.
+    wrap.style.setProperty("--fx-ink", color);
     group[0].before(wrap);
     wrap.append(...group);
     group = [];
