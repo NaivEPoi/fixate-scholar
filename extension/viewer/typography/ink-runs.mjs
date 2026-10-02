@@ -58,7 +58,12 @@ export function inkColour(d, need, local = false) {
  * `chars`: one entry per character of the span's text, in order —
  * `{ space: true }` for whitespace, `{ color, n }` for a glyph sampled from `n`
  * inked pixels (`color` null when its ink is black or grey), `{}` when it had
- * too little ink to say.
+ * too little ink to say, and `{ punct: true, color }` for punctuation.
+ *
+ * Punctuation is mostly its neighbours' edges, so its own reading is weak: it
+ * takes the colour of the letter before it only where it reads that colour
+ * itself ("data," struck red), and is neutral otherwise (the black comma after
+ * a green link digit, a tinted full stop in black text).
  *
  * Returns `{ uniform }` when the whole span turns out to be one colour, an empty
  * array when it is all neutral, and otherwise the coloured runs
@@ -78,7 +83,7 @@ export function colourRuns(chars) {
     c.n++;
     return c;
   };
-  const cls = chars.map((ch) => (ch.space ? undefined : "color" in ch ? snap(ch.color) : undefined));
+  const cls = chars.map((ch) => (ch.space || ch.punct ? undefined : "color" in ch ? snap(ch.color) : undefined));
   // A colour only one faint glyph has, and that is a DARKER SHADE of another
   // colour in the span, is a blend at a colour change — a full stop beside the
   // first red letter read dark red — not a colour of its own. A faint glyph in
@@ -86,6 +91,14 @@ export function colourRuns(chars) {
   for (let i = 0; i < cls.length; i++) {
     const c = cls[i];
     if (c?.n === 1 && chars[i].n < FAINT && palette.some((p) => p !== c && shadeOf(c.rgb, p.rgb))) cls[i] = undefined;
+  }
+  // Punctuation: the letter before it, if it reads that colour itself.
+  for (let i = 0; i < chars.length; i++) {
+    if (!chars[i].punct) continue;
+    let left;
+    for (let j = i - 1; j >= 0 && !chars[j].space && left === undefined; j--) if (!chars[j].punct) left = cls[j];
+    const own = chars[i].color ? parse(chars[i].color) : null;
+    cls[i] = left && own && left.rgb.every((v, k) => Math.abs(v - own[k]) < SAME) ? left : null;
   }
   // An unsampled glyph: nearest sampled one in its own word, left first.
   for (let i = 0; i < chars.length; i++) {

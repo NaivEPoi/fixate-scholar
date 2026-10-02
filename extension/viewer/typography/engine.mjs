@@ -3723,14 +3723,18 @@ export class TypographyEngine {
                     // A faint glyph is mostly the facing edge of the letter before
                     // it, with nothing on the other side to cancel that tint: a
                     // tint-shaped colour there is the tint (the strict, local
-                    // reading). Punctuation is not read at all: it takes its
-                    // word's colour (colourRuns), as a struck full stop after a
-                    // struck word does, and "al." stays black before "has".
+                    // reading).
                     const faint = ink.n < 24;
                     const rgb = faint ? inkColour(ink.d, LOCAL_CHROMA, true) : null;
                     const color = faint ? (rgb ? `rgb(${rgb.join(", ")})` : null) : ink.color;
                     const punct = !/[\p{L}\p{N}]/u.test(node.data[k]);
-                    chars.push(ink.n >= 4 && !punct ? { color, n: ink.n } : {});
+                    if (punct) {
+                      // Read strictly, and kept only where it agrees with the
+                      // letter before it (colourRuns): "data," struck red stays
+                      // red, the black comma after a green link digit black.
+                      const own = inkColour(ink.d, LOCAL_CHROMA, true);
+                      chars.push({ punct: true, color: ink.n >= 4 && own ? `rgb(${own.join(", ")})` : null, n: ink.n });
+                    } else chars.push(ink.n >= 4 ? { color, n: ink.n } : {});
                   }
                 }
                 return colourRuns(chars);
