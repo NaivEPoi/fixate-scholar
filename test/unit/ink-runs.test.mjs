@@ -103,3 +103,14 @@ test("the chroma a colour must reach", () => {
   assert.deepEqual(inkColour(ink([0, 0, 90]), 60), [0, 0, 90]); // navy, whole span
   assert.equal(inkColour(ink([0, 0, 90]), 120), null); // too dark for a letter alone
 });
+
+test("punctuation keeps the colour before it only when it reads that colour", () => {
+  const P = (color) => ({ punct: true, color, n: 30 });
+  // "data," struck red: the comma reads red too.
+  assert.deepEqual(colourRuns([...chars("RRRR"), P(RED)]), { uniform: RED });
+  // "4," : a green link digit, then a black comma.
+  const GREEN = "rgb(0, 200, 0)";
+  assert.deepEqual(colourRuns([...chars("KK "), { color: GREEN, n: 40 }, P(null)]), [{ from: 3, to: 4, color: GREEN }]);
+  // A tinted full stop in black text stays black.
+  assert.deepEqual(colourRuns([...chars("KKK"), P("rgb(0, 115, 215)")]), []);
+});
