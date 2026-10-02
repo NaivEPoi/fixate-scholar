@@ -88,6 +88,17 @@ test("an edge's tint left over is not ink: green strictly between red and blue",
   assert.equal(inkColour(ink([148, 91, 0]), 60), null);
 });
 
+test("over a letter or a window, a tint-shaped colour is never ink, however bright", () => {
+  assert.equal(inkColour(ink([0, 146, 234]), 120, true), null); // measured on a black "l"
+  assert.equal(inkColour(ink([255, 165, 0]), 120, true), null);
+});
+
+test("bright ink in a tint's hues is kept over a whole span", () => {
+  assert.deepEqual(inkColour(ink([255, 165, 0]), 60), [255, 165, 0]); // orange
+  // Goldenrod: its blue floor does not survive the recovery, the hue does.
+  assert.deepEqual(inkColour(ink([218, 165, 32]), 60), [213, 152, 0]);
+});
+
 test("the chroma a colour must reach", () => {
   assert.deepEqual(inkColour(ink([0, 0, 90]), 60), [0, 0, 90]); // navy, whole span
   assert.equal(inkColour(ink([0, 0, 90]), 120), null); // too dark for a letter alone
