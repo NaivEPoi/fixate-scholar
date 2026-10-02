@@ -19,18 +19,23 @@ function shadeOf(a, b) {
   return a.reduce((t, v, k) => t + v * b[k], 0) / (na * nb) > 0.95;
 }
 
-// What survives of a subpixel tint where a glyph edge is cut off (a thin "i",
-// a two-letter span) keeps the subpixels' ORDER: red, green, blue falling or
-// rising in turn, green strictly between — orange or steel blue. Ink colours
-// don't: red and blue have green at the bottom, green has it at the top.
-const tint = ([r, g, b]) => {
+// What survives of a subpixel tint where a glyph edge is cut off keeps the
+// subpixels' ORDER — red, green, blue falling or rising in turn, green strictly
+// between: orange or steel blue. Read over one letter or a window (`local`),
+// such a remainder can be bright — (0, 146, 234) on a black "l" — and is never
+// ink. Over a whole span the tints nearly cancel and what is left stays DARK —
+// (68, 33, 0) at most — so there only a dark one is a tint, and a bright span
+// in those hues (orange, goldenrod) keeps its colour. Dark ink in them cannot
+// be told from a tint: brown or steel-blue text reads as black.
+const tint = ([r, g, b], local) => {
   const lo = Math.min(r, b), hi = Math.max(r, b), k = (hi - lo) * 0.15;
-  return g > lo + k && g < hi - k;
+  return g > lo + k && g < hi - k && (local || Math.max(r, g, b) <= 200);
 };
 
 /**
  * The ink colour behind summed channel DARKNESS `d` ([R, G, B], each the sum
- * of 255 - value over the pixels read), or null when it is black or grey.
+ * over the pixels read of 1 - value / background — 255 - value on white
+ * paper, to scale), or null when it is black or grey.
  *
  * The canvas is opaque, so the browser draws its text with subpixel (LCD)
  * antialiasing and a black glyph's edges are tinted, blue on one side and red
@@ -39,13 +44,14 @@ const tint = ([r, g, b]) => {
  * sideways, so summed over a glyph the three come out level for black ink and
  * in the ink's own proportions for coloured ink. Taking the ink's darkest
  * channel as full gives the colour back: darkness (0, k, k) is rgb(255, 0, 0).
- * `need` is the chroma (on 255) it must reach to count as coloured.
+ * `need` is the chroma (on 255) it must reach to count as coloured; `local`
+ * says the sums cover a letter or a window rather than a whole span.
  */
-export function inkColour(d, need) {
+export function inkColour(d, need, local = false) {
   const hi = Math.max(...d);
   if (!(hi > 0)) return null;
   const rgb = d.map((v) => Math.round(255 * (1 - v / hi)));
-  return Math.max(...rgb) - Math.min(...rgb) >= need && !tint(rgb) ? rgb : null;
+  return Math.max(...rgb) - Math.min(...rgb) >= need && !tint(rgb, local) ? rgb : null;
 }
 
 /**

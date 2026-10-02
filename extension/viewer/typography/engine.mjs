@@ -3590,14 +3590,36 @@ export class TypographyEngine {
               // Read as each channel's DARKNESS summed over the core band, not
               // pixel by pixel: the browser's subpixel antialiasing tints a
               // black glyph's edges, and the sums cancel the tints (inkColour).
-              const darkness = (s, x0, x1, y0, y1, step) => {
+              //
+              // Darkness against the PAPER UNDER THE GLYPH, not against white:
+              // a highlight, a shaded table cell or a listing's background is
+              // itself unequal in its channels, and summed as ink it turned black
+              // text on yellow olive. Ink over a background darkens each channel
+              // by the same FRACTION of that background, so 1 - value/background
+              // comes out level for black ink on any paper. The background is
+              // each column's brightest value over the whole box (bg rows), which
+              // the gaps between lines and letters always reach; a column on a
+              // dark background (light text on dark) is left out.
+              const darkness = (s, x0, x1, y0, y1, step, b0, b1) => {
                 const d = [0, 0, 0];
                 let n = 0;
-                for (let y = y0; y < y1; y++) {
-                  for (let x = x0; x < x1; x += step) {
+                const bg = [0, 0, 0];
+                for (let x = x0; x < x1; x += step) {
+                  bg[0] = bg[1] = bg[2] = 0;
+                  for (let y = b0; y < b1; y++) {
                     const i = (y * s.W + x) * 4;
                     if (s.d[i + 3] <= 40) continue;
-                    d[0] += 255 - s.d[i]; d[1] += 255 - s.d[i + 1]; d[2] += 255 - s.d[i + 2];
+                    if (s.d[i] > bg[0]) bg[0] = s.d[i];
+                    if (s.d[i + 1] > bg[1]) bg[1] = s.d[i + 1];
+                    if (s.d[i + 2] > bg[2]) bg[2] = s.d[i + 2];
+                  }
+                  if (bg[0] < 128 || bg[1] < 128 || bg[2] < 128) continue;
+                  for (let y = y0; y < y1; y++) {
+                    const i = (y * s.W + x) * 4;
+                    if (s.d[i + 3] <= 40) continue;
+                    d[0] += Math.max(0, 1 - s.d[i] / bg[0]);
+                    d[1] += Math.max(0, 1 - s.d[i + 1] / bg[1]);
+                    d[2] += Math.max(0, 1 - s.d[i + 2] / bg[2]);
                     if (inkedIn(s, i)) n++;
                   }
                 }
@@ -3618,26 +3640,31 @@ export class TypographyEngine {
               // says so: windows about an em wide along the span that disagree
               // (one coloured, one neutral, or two hues). Such a span is coloured
               // per character (inkRuns, after the width pass).
-              const inkOf = (rect, step, minPx, need) => {
+              const inkOf = (rect, step, minPx, need, local) => {
                 const s = srcFor(rect);
                 const x0 = Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx));
                 const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
                 const y0 = Math.max(0, Math.floor((rect.top + rect.height * 0.3 - s.cr.top) * s.csy));
                 const y1 = Math.min(s.H, Math.ceil((rect.bottom - rect.height * 0.3 - s.cr.top) * s.csy));
-                const all = darkness(s, x0, x1, y0, y1, step);
+                const b0 = Math.max(0, Math.floor((rect.top - s.cr.top) * s.csy));
+                const b1 = Math.min(s.H, Math.ceil((rect.bottom - s.cr.top) * s.csy));
+                const all = darkness(s, x0, x1, y0, y1, step, b0, b1);
                 if (all.n < minPx) return { color: null, n: all.n, mixed: false };
-                const rgb = inkColour(all.d, need);
+                const rgb = inkColour(all.d, need, local);
+                // Windows overlap by half: an edit falling across a window's
+                // edge is whole in the next one. A single struck letter is a
+                // handful of pixels, so a window counts from four.
                 const em = Math.max(4, Math.round(rect.height * s.csx));
                 const seen = new Set();
-                for (let wx = x0; wx < x1 && seen.size < 2; wx += em) {
-                  const w = darkness(s, wx, Math.min(x1, wx + em), y0, y1, step);
-                  if (w.n >= minPx) seen.add(hueOf(inkColour(w.d, LOCAL_CHROMA)));
+                for (let wx = x0; wx < x1 && seen.size < 2; wx += Math.max(2, em >> 1)) {
+                  const w = darkness(s, wx, Math.min(x1, wx + em), y0, y1, step, b0, b1);
+                  if (w.n >= 4) seen.add(hueOf(inkColour(w.d, LOCAL_CHROMA, true)));
                 }
                 return { color: rgb ? `rgb(${rgb.join(", ")})` : null, n: all.n, mixed: seen.size > 1 };
               };
               // A span of a few letters ("if", "CN") does not cancel its tints
               // either: under three ems wide it must show strong colour too.
-              inkColor = (rect) => inkOf(rect, 2, 12, rect.width >= rect.height * 3 ? SPAN_CHROMA : LOCAL_CHROMA);
+              inkColor = (rect) => (rect.width >= rect.height * 3 ? inkOf(rect, 2, 12, SPAN_CHROMA, false) : inkOf(rect, 2, 12, LOCAL_CHROMA, true));
               // A mixed span's colour per character, measured where the width
               // pass left each glyph: over its own canvas ink in the original
               // face, and close to it in a reading face. The rects are taken
@@ -3660,7 +3687,7 @@ export class TypographyEngine {
                     // Inset a fifth each side: a small glyph beside a colour
                     // change (the "." of "al.has") read its neighbour's rim.
                     const inset = r.width * 0.2;
-                    const ink = inkOf({ left: r.left + inset + dx, right: r.right - inset + dx, top: r.top + dy, bottom: r.bottom + dy, height: r.height }, 1, 4, LOCAL_CHROMA);
+                    const ink = inkOf({ left: r.left + inset + dx, right: r.right - inset + dx, top: r.top + dy, bottom: r.bottom + dy, height: r.height }, 1, 4, LOCAL_CHROMA, true);
                     chars.push(ink.n >= 4 ? { color: ink.color, n: ink.n } : {});
                   }
                 }
