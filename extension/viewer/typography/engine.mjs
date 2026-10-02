@@ -3640,7 +3640,7 @@ export class TypographyEngine {
               // says so: windows about an em wide along the span that disagree
               // (one coloured, one neutral, or two hues). Such a span is coloured
               // per character (inkRuns, after the width pass).
-              const inkOf = (rect, step, minPx, need, local) => {
+              const inkOf = (rect, step, minPx, need, local, windows = true) => {
                 const s = srcFor(rect);
                 const x0 = Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx));
                 const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
@@ -3649,22 +3649,53 @@ export class TypographyEngine {
                 const b0 = Math.max(0, Math.floor((rect.top - s.cr.top) * s.csy));
                 const b1 = Math.min(s.H, Math.ceil((rect.bottom - s.cr.top) * s.csy));
                 const all = darkness(s, x0, x1, y0, y1, step, b0, b1);
-                if (all.n < minPx) return { color: null, n: all.n, mixed: false };
+                if (all.n < minPx) return { color: null, n: all.n, mixed: false, d: all.d };
                 const rgb = inkColour(all.d, need, local);
-                // Windows overlap by half: an edit falling across a window's
-                // edge is whole in the next one. A single struck letter is a
-                // handful of pixels, so a window counts from four.
-                const em = Math.max(4, Math.round(rect.height * s.csx));
+                // Windows about a letter wide (0.6 em): a single coloured letter
+                // among black ones (a category letter in a sentence) is most of
+                // one, where an em-wide window let its neighbours dilute it below
+                // the bar. Each window ends at the faintest column near its
+                // width — between letters — so it holds whole glyphs, whose tints
+                // cancel, and does not cut one through. A single struck letter is
+                // a handful of pixels, so a window counts from four.
                 const seen = new Set();
-                for (let wx = x0; wx < x1 && seen.size < 2; wx += Math.max(2, em >> 1)) {
-                  const w = darkness(s, wx, Math.min(x1, wx + em), y0, y1, step, b0, b1);
-                  if (w.n >= 4) seen.add(hueOf(inkColour(w.d, LOCAL_CHROMA, true)));
+                if (windows) {
+                  const win = Math.max(4, Math.round(rect.height * 0.6 * s.csx));
+                  const col = [];
+                  for (let x = x0; x < x1; x++) {
+                    let t = 0;
+                    for (let y = y0; y < y1; y++) {
+                      const i = (y * s.W + x) * 4;
+                      t += 765 - s.d[i] - s.d[i + 1] - s.d[i + 2];
+                    }
+                    col.push(t);
+                  }
+                  const reach = Math.max(1, Math.round(win / 3));
+                  for (let a = 0; a < col.length && seen.size < 2; ) {
+                    let cut = Math.min(col.length, a + win);
+                    if (cut < col.length) {
+                      for (let c = Math.max(a + 2, cut - reach); c <= Math.min(col.length - 1, cut + reach); c++) if (col[c] < col[cut]) cut = c;
+                    }
+                    const w = darkness(s, x0 + a, x0 + cut, y0, y1, step, b0, b1);
+                    if (w.n >= 4) seen.add(hueOf(inkColour(w.d, LOCAL_CHROMA, false)));
+                    a = cut;
+                  }
                 }
-                return { color: rgb ? `rgb(${rgb.join(", ")})` : null, n: all.n, mixed: seen.size > 1 };
+                return { color: rgb ? `rgb(${rgb.join(", ")})` : null, n: all.n, mixed: seen.size > 1, d: all.d };
               };
-              // A span of a few letters ("if", "CN") does not cancel its tints
-              // either: under three ems wide it must show strong colour too.
-              inkColor = (rect) => (rect.width >= rect.height * 3 ? inkOf(rect, 2, 12, SPAN_CHROMA, false) : inkOf(rect, 2, 12, LOCAL_CHROMA, true));
+              // A span's box ends at its glyphs' advances, and the subpixel
+              // tint spills a pixel or so past them: cut off at one end, it
+              // left a few-letter span ("if", "CN") tinted. Spans are set apart
+              // by spaces, so the box is read two canvas pixels wider on each
+              // side, taking in the spill and nothing else. What a few letters
+              // leave over is still up to ~95, so under three ems a span must
+              // show strong colour — but whole, it is judged as a span: a bright
+              // orange category letter is ink, not a tint.
+              inkColor = (rect) => {
+                const pad = 2 / srcFor(rect).csx;
+                const wide = { left: rect.left - pad, right: rect.right + pad, top: rect.top, bottom: rect.bottom, width: rect.width + 2 * pad, height: rect.height };
+                return inkOf(wide, 2, 12, rect.width >= rect.height * 3 ? SPAN_CHROMA : LOCAL_CHROMA, false);
+              };
               // A mixed span's colour per character, measured where the width
               // pass left each glyph: over its own canvas ink in the original
               // face, and close to it in a reading face. The rects are taken
@@ -3684,11 +3715,22 @@ export class TypographyEngine {
                     range.setEnd(node, k + 1);
                     const r = range.getBoundingClientRect();
                     if (!(r.width > 0 && r.height > 0)) { chars.push({}); continue; }
-                    // Inset a fifth each side: a small glyph beside a colour
-                    // change (the "." of "al.has") read its neighbour's rim.
-                    const inset = r.width * 0.2;
-                    const ink = inkOf({ left: r.left + inset + dx, right: r.right - inset + dx, top: r.top + dy, bottom: r.bottom + dy, height: r.height }, 1, 4, LOCAL_CHROMA, true);
-                    chars.push(ink.n >= 4 ? { color: ink.color, n: ink.n } : {});
+                    // The letter's box widened by its tint's spill: the whole glyph,
+                    // whose tints cancel, plus a neighbour's facing edge on each
+                    // side, whose tints are of opposite hues and mostly cancel too.
+                    const pad = 1.5 / base.csx;
+                    const ink = inkOf({ left: r.left - pad + dx, right: r.right + pad + dx, top: r.top + dy, bottom: r.bottom + dy, height: r.height }, 1, 4, LOCAL_CHROMA, false, false);
+                    // A faint glyph is mostly the facing edge of the letter before
+                    // it, with nothing on the other side to cancel that tint: a
+                    // tint-shaped colour there is the tint (the strict, local
+                    // reading). Punctuation is not read at all: it takes its
+                    // word's colour (colourRuns), as a struck full stop after a
+                    // struck word does, and "al." stays black before "has".
+                    const faint = ink.n < 24;
+                    const rgb = faint ? inkColour(ink.d, LOCAL_CHROMA, true) : null;
+                    const color = faint ? (rgb ? `rgb(${rgb.join(", ")})` : null) : ink.color;
+                    const punct = !/[\p{L}\p{N}]/u.test(node.data[k]);
+                    chars.push(ink.n >= 4 && !punct ? { color, n: ink.n } : {});
                   }
                 }
                 return colourRuns(chars);
