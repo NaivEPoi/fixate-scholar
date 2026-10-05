@@ -92,7 +92,9 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
           if (bar && bar[3] - bar[1] < THIN && bar[2] - bar[0] > 2 * Math.max(bar[3] - bar[1], 0.5)) bars.push(bar);
         }
         if (inAnnotation || !painted || op === OPS.endPath) break;
-        if (filledOnly && WHITE.test(fill)) break;
+        // A path in paper colour inks nothing: a white fill, a white outline.
+        const strokes = !filledOnly, fills = op !== OPS.stroke && op !== OPS.closeStroke;
+        if (!(strokes && !WHITE.test(stroke)) && !(fills && !WHITE.test(fill))) break;
         const w = painted[2] - painted[0], h = painted[3] - painted[1];
         if (Math.min(w, h) < THIN) {
           // A filled bar (a TeX \rule); a stroked one was taken above.
