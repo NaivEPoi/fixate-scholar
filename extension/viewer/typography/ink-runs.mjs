@@ -61,9 +61,10 @@ export function inkColour(d, need, local = false) {
  * too little ink to say, and `{ punct: true, color }` for punctuation.
  *
  * Punctuation is mostly its neighbours' edges, so its own reading is weak: it
- * takes the colour of the letter before it only where it reads that colour
- * itself ("data," struck red), and is neutral otherwise (the black comma after
- * a green link digit, a tinted full stop in black text).
+ * takes the colour of the letter before it — after it, opening a word: "(new"
+ * — only where it reads that colour itself ("data," struck red), and is
+ * neutral otherwise (the black comma after a green link digit, a tinted full
+ * stop in black text).
  *
  * Returns `{ uniform }` when the whole span turns out to be one colour, an empty
  * array when it is all neutral, and otherwise the coloured runs
@@ -92,11 +93,13 @@ export function colourRuns(chars) {
     const c = cls[i];
     if (c?.n === 1 && chars[i].n < FAINT && palette.some((p) => p !== c && shadeOf(c.rgb, p.rgb))) cls[i] = undefined;
   }
-  // Punctuation: the letter before it, if it reads that colour itself.
+  // Punctuation: the letter before it (after it, opening a word), if it reads
+  // that colour itself.
   for (let i = 0; i < chars.length; i++) {
     if (!chars[i].punct) continue;
-    let left;
-    for (let j = i - 1; j >= 0 && !chars[j].space && left === undefined; j--) if (!chars[j].punct) left = cls[j];
+    let left, opens = true;
+    for (let j = i - 1; j >= 0 && !chars[j].space && left === undefined; j--) if (!chars[j].punct) { left = cls[j]; opens = false; }
+    if (opens) for (let j = i + 1; j < chars.length && !chars[j].space && left === undefined; j++) if (!chars[j].punct) left = cls[j];
     const own = chars[i].color ? parse(chars[i].color) : null;
     cls[i] = left && own && left.rgb.every((v, k) => Math.abs(v - own[k]) < SAME) ? left : null;
   }

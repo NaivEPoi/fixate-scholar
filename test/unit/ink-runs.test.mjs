@@ -114,3 +114,11 @@ test("punctuation keeps the colour before it only when it reads that colour", ()
   // A tinted full stop in black text stays black.
   assert.deepEqual(colourRuns([...chars("KKK"), P("rgb(0, 115, 215)")]), []);
 });
+
+test("opening punctuation takes the colour of the letter after it", () => {
+  const P = (color) => ({ punct: true, color, n: 30 });
+  // "KK (BB)": the bracket opening a blue word reads blue, and so does the closer.
+  assert.deepEqual(colourRuns([...chars("KK "), P(BLUE), ...chars("BB"), P(BLUE)]), [{ from: 3, to: 7, color: BLUE }]);
+  // ...but not when it reads black itself.
+  assert.deepEqual(colourRuns([...chars("KK "), P(null), ...chars("BB")]), [{ from: 4, to: 6, color: BLUE }]);
+});
