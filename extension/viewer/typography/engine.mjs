@@ -18,7 +18,7 @@
 import { emphasizeParts } from "./segmenter.mjs";
 import { findCitations, findInternalRefs } from "../references/parser.mjs";
 import { scanRules } from "./rules.mjs";
-import { artUnder, strikesThrough, vectorArt } from "./vector-art.mjs";
+import { artUnder, barsNear, vectorArt } from "./vector-art.mjs";
 import { colourRuns, inkColour, wrapInk } from "./ink-runs.mjs";
 import { anchorNear } from "./pdfhints.mjs";
 
@@ -3364,7 +3364,7 @@ export class TypographyEngine {
     let obstacleRects = null;
     const artKept = new Set(); // spans kept for the vector art on them (work())
     const artBoxes = []; // their art, viewport rects [x0, y0, x1, y1] relative to the page
-    const strikeBoxes = []; // bars striking through candidates' glyphs, same frame
+    const strikeBoxes = []; // thin bars within candidates' masks' reach, same frame
     const descenderZones = []; // kept glyph runs' descender bands, masks cut around them
     let zoneDrops = null; // candidates inside rule-bounded table zones — left on the canvas
     let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
@@ -3468,14 +3468,15 @@ export class TypographyEngine {
           obstacleDivs.push(pairs[i].div);
           pairs.splice(i, 1);
         }
-        // Strike-through bars (vector-art.mjs strikesThrough): the struck words
-        // are processed like any other, and the bar is cut out of every mask
-        // below, so the canvas's own bar stays over them — unmasked, it showed
-        // only in the gaps between masked words, as dashes.
+        // Thin bars within a mask's reach (vector-art.mjs barsNear) — a
+        // strike-out, an underscore drawn as a rule, an underline, a stroke in
+        // the leading — are cut out of every mask below, so the canvas's own
+        // bar stays: struck text showed its bar only between the masked words,
+        // as dashes, and "file_id" read "file id".
         const bars = baseline?.bars;
         const struck = new Set();
         for (const p of bars?.length ? pairs : []) {
-          for (const bar of strikesThrough(bars, p.item)) {
+          for (const bar of barsNear(bars, p.item)) {
             if (struck.has(bar)) continue;
             struck.add(bar);
             strikeBoxes.push(pageView.viewport.convertToViewportRectangle(bar));
@@ -3530,9 +3531,9 @@ export class TypographyEngine {
             // mask's own glyphs reach the frame (the comma after a boxed "C2").
             descenderZones.push({ left: art.left - 1, right: art.right + 1, top: art.top - 1, bottom: art.bottom + 1 });
           }
-          // A struck word's bar, cut out exactly (half a px of antialiasing
-          // each side): it is canvas ink over the glyphs, so the strip shows the
-          // bar and nothing doubled. Not an obstacle — the word is processed.
+          // Each bar, cut out exactly (half a px of antialiasing each side):
+          // the strip shows the bar's own ink. Not an obstacle — the words
+          // around it are processed.
           for (const [x0, y0, x1, y1] of strikeBoxes) {
             const top = pb.top + Math.min(y0, y1), bottom = pb.top + Math.max(y0, y1);
             const mid = (top + bottom) / 2, half = Math.max(0.5, (bottom - top) / 2) + 0.5;

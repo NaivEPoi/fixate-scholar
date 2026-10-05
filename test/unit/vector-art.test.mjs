@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { artUnder, strikesThrough, vectorArt } from "../../extension/viewer/typography/vector-art.mjs";
+import { artUnder, barsNear, vectorArt } from "../../extension/viewer/typography/vector-art.mjs";
 
 // The operator ids vector-art.mjs reads; the values only need to be distinct.
 const OPS = {
@@ -104,23 +104,23 @@ test("a stroked strike-out bar is collected at its line width; art is unchanged"
   assert.deepEqual(art, []);
   assert.equal(bars.length, 1);
   assert.deepEqual(bars[0].map((v) => +v.toFixed(2)), [50, 102.3, 150, 102.7]);
-  assert.equal(strikesThrough(bars, item).length, 1);
+  assert.equal(barsNear(bars, item).length, 1);
 });
 
-test("a filled bar strikes too; underlines, overlines and other lines do not", () => {
+test("bars through, under and around the line count; a distant one does not", () => {
   const bars = [];
   vectorArt(list(
-    path(OPS.fill, [60, 102, 140, 102.4]), // \rule through the x-height: struck
-    path(OPS.fill, [50, 98, 150, 98.4]), // under the baseline: an underline
-    path(OPS.fill, [50, 109, 150, 109.4]), // above the glyphs: an overline
-    path(OPS.fill, [50, 202, 150, 202.4]), // another line's
+    path(OPS.fill, [60, 102, 140, 102.4]), // through the x-height: a strike-out
+    path(OPS.fill, [70, 98.6, 75, 99.1]), // under the baseline: an underscore drawn as a rule
+    path(OPS.fill, [50, 109, 150, 109.4]), // above the glyphs
+    path(OPS.fill, [50, 202, 150, 202.4]), // another line, far away
   ), OPS, undefined, bars);
   assert.equal(bars.length, 4);
-  assert.deepEqual(strikesThrough(bars, item), [[60, 102, 140, 102.4]]);
+  assert.deepEqual(barsNear(bars, item), [[70, 98.6, 75, 99.1], [60, 102, 140, 102.4], [50, 109, 150, 109.4]]);
 });
 
 test("a bar must run along the text, not just touch it", () => {
   const bars = [];
   vectorArt(list(path(OPS.fill, [148, 102, 160, 102.4])), OPS, undefined, bars);
-  assert.deepEqual(strikesThrough(bars, item), []);
+  assert.deepEqual(barsNear(bars, item), []);
 });
