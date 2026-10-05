@@ -4153,6 +4153,7 @@ export class TypographyEngine {
         } catch {
           /* canvas zone guard unavailable — classification skips still apply */
         }
+        const itemOf = new Map(allPairs.map((p) => [p.div, p.item]));
         for (const d of obstacleDivs) {
           if (!d.isConnected) continue;
           // Lost the ink-fit resolution against a real overlapping span:
@@ -4232,7 +4233,13 @@ export class TypographyEngine {
           // run of one or two glyphs is cut out of the masks the same way.
           const kept = (d.textContent || "").trim();
           const symbol = kept && [...kept].length <= 2 && (!wordy || /[^\x00-\x7f]/.test(kept));
-          if (/^[/\\|]$/.test(kept) || symbol) {
+          // ...and so does a sub- or superscript run kept with its formula: set
+          // small and high, the n of an exponent "2^{n_k}" reaches down into
+          // the line above's mask padding, which took its lower half — the n
+          // read as an apostrophe.
+          const kItem = itemOf.get(d);
+          const script = kept && [...kept].length <= 8 && dominant && kItem?.height > 0 && kItem.height < dominant * 0.85;
+          if (/^[/\\|]$/.test(kept) || symbol || script) {
             descenderZones.push({ left: r.left - dh * 0.15, right: r.right + dh * 0.15, top: r.top, bottom: r.bottom });
           }
           if (protectSet.has(d)) {
