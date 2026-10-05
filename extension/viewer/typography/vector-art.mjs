@@ -45,35 +45,36 @@ const intersect = (a, b) => {
  */
 export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infinity, Infinity, Infinity], bars = null) {
   const out = [];
-  let ctm = [1, 0, 0, 1, 0, 0], fill = "#000000", clip = view, pendingClip = false, lineWidth = 1;
+  let ctm = [1, 0, 0, 1, 0, 0], fill = "#000000", stroke = "#000000", clip = view, pendingClip = false, lineWidth = 1;
   const stack = [];
   let inAnnotation = 0;
   for (let i = 0; i < fnArray.length; i++) {
     const fn = fnArray[i], args = argsArray[i];
     switch (fn) {
-      case OPS.save: stack.push([ctm, fill, clip, lineWidth]); break;
-      case OPS.restore: if (stack.length) [ctm, fill, clip, lineWidth] = stack.pop(); break;
+      case OPS.save: stack.push([ctm, fill, stroke, clip, lineWidth]); break;
+      case OPS.restore: if (stack.length) [ctm, fill, stroke, clip, lineWidth] = stack.pop(); break;
       case OPS.transform: ctm = mul(ctm, args); break;
       case OPS.paintFormXObjectBegin:
-        stack.push([ctm, fill, clip, lineWidth]);
+        stack.push([ctm, fill, stroke, clip, lineWidth]);
         if (args?.[0]) ctm = mul(ctm, args[0]);
         // The form paints nothing outside its BBox.
         if (args?.[1] && clip) clip = intersect(clip, transformBox(ctm, args[1]));
         break;
-      case OPS.paintFormXObjectEnd: if (stack.length) [ctm, fill, clip, lineWidth] = stack.pop(); break;
+      case OPS.paintFormXObjectEnd: if (stack.length) [ctm, fill, stroke, clip, lineWidth] = stack.pop(); break;
       // A form with a /Group passes its BBox here, not to paintFormXObjectBegin;
       // PDF.js clips to it through the form matrix.
       case OPS.beginGroup: {
-        stack.push([ctm, fill, clip, lineWidth]);
+        stack.push([ctm, fill, stroke, clip, lineWidth]);
         const g = args?.[0];
         if (g?.bbox && clip) clip = intersect(clip, transformBox(g.matrix ? mul(ctm, g.matrix) : ctm, g.bbox));
         break;
       }
-      case OPS.endGroup: if (stack.length) [ctm, fill, clip, lineWidth] = stack.pop(); break;
+      case OPS.endGroup: if (stack.length) [ctm, fill, stroke, clip, lineWidth] = stack.pop(); break;
       case OPS.beginAnnotation: inAnnotation++; break;
       case OPS.endAnnotation: inAnnotation = Math.max(0, inAnnotation - 1); break;
       case OPS.clip: case OPS.eoClip: pendingClip = true; break;
       case OPS.setFillRGBColor: if (typeof args?.[0] === "string") fill = args[0]; break;
+      case OPS.setStrokeRGBColor: if (typeof args?.[0] === "string") stroke = args[0]; break;
       case OPS.setLineWidth: if (args?.[0] >= 0) lineWidth = args[0]; break;
       case OPS.constructPath: {
         const [op, , minMax] = args ?? [];
@@ -83,8 +84,9 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
         if (pendingClip) { clip = raw && clip ? intersect(clip, raw) : null; pendingClip = false; }
         const filledOnly = op === OPS.fill || op === OPS.eoFill;
         // A STROKED horizontal rule — ulem's strike-out is one — has a box of
-        // no height; its ink is the line width thick, so that is its bar.
-        if (bars && raw && clip && !inAnnotation && !filledOnly && op !== OPS.endPath && raw[3] - raw[1] < THIN) {
+        // no height; its ink is the line width thick, so that is its bar. Not
+        // a white one: it inks nothing a mask would hide.
+        if (bars && raw && clip && !inAnnotation && !filledOnly && op !== OPS.endPath && raw[3] - raw[1] < THIN && !WHITE.test(stroke)) {
           const half = (lineWidth * Math.hypot(ctm[2], ctm[3])) / 2;
           const bar = intersect([raw[0], raw[1] - half, raw[2], raw[3] + half], clip);
           if (bar && bar[3] - bar[1] < THIN && bar[2] - bar[0] > 2 * Math.max(bar[3] - bar[1], 0.5)) bars.push(bar);

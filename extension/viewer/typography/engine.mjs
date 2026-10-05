@@ -825,12 +825,20 @@ export class TypographyEngine {
     const LEGAL_TEXT = /(Permission to make digital or hard copies|Copyrights? for components of this work|Request permissions from|licensed to ACM|ACM ISBN|ACM Reference Format|©\s*(19|20)\d\d\s|creativecommons\.org|(https?:\/\/)?(dx\.)?doi\.org\/)/i;
     const isCaptionLead = (t) => CAP_LEAD.test(t) && !REF_PROSE.test(t);
     // A caption line ending on a word that cannot end a sentence — "… set
-    // as in", "… drawn by" — or a hyphen runs on to the next line: the
-    // next line is not a new caption even if it opens with "Table 1.", and this
-    // one does not end the caption even if it falls short of the measure (a
-    // narrower, centred caption).
-    const DANGLING = /(?:\b(?:a|an|and|as|at|between|by|for|from|in|into|of|on|or|over|than|the|to|under|versus|via|vs\.?|with)|-)\s*$/i;
-    const runsOn = (its) => DANGLING.test(its.map((p) => p.item.str).join(" ").trim());
+    // as in", "… drawn by" — or a word broken at a hyphen runs on to
+    // the next line: the next line is not a new caption even if it opens with
+    // "Table 1.", and this one does not end the caption even if it falls short
+    // of the measure (a narrower, centred caption). A word break only: two
+    // lowercase letters before the hyphen ("Cl-" is an ion, and ends a
+    // caption), and see brokeOff.
+    const DANGLING = /\b(?:a|an|and|as|at|between|by|for|from|in|into|of|on|or|over|than|the|to|under|versus|via|vs\.?|with)\s*$/i;
+    const BROKEN = /[a-zà-ÿ]{2}-\s*$/;
+    const lineText = (its) => its.map((p) => p.item.str).join(" ").trim();
+    const runsOn = (its) => DANGLING.test(lineText(its)) || BROKEN.test(lineText(its));
+    // A SHORT line runs on only by its broken word when the next line does
+    // not finish that word in lowercase: a short caption ending in a hyphen
+    // above a body paragraph ("The …") swallowed the paragraph.
+    const brokeOff = (its, next) => BROKEN.test(lineText(its)) && !/^[a-zà-ÿ]/.test(lineText(next));
     const isAlgoLead = (t) => ALGO_LEAD.test(t) && !REF_PROSE.test(t);
 
     const lowerWords = (its) => {
@@ -2297,6 +2305,7 @@ export class TypographyEngine {
         const short = (its) => rightOf(its) < fullTo(its) - (fullTo(its) - capL) * 0.08;
         let lastFull = !short(lines[k].items.filter(inBand)) || runsOn(lines[k].items.filter(inBand));
         let ranOn = runsOn(lines[k].items.filter(inBand));
+        let lastShort = short(lines[k].items.filter(inBand)) ? lines[k].items.filter(inBand) : null;
         const endsParagraph = (its) => {
           capL = Math.min(capL, leftOf(its));
           capR = Math.max(capR, rightOf(its));
@@ -2333,8 +2342,10 @@ export class TypographyEngine {
             // caption — stop before swallowing it.
             if (isBold(bandM[0])) break;
             if (!lastFull) break; // the previous line ended the caption
+            if (lastShort && brokeOff(lastShort, bandM)) break;
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
-            lastFull = !endsParagraph(bandM) || runsOn(bandM);
+            lastShort = endsParagraph(bandM) ? bandM : null;
+            lastFull = !lastShort || runsOn(bandM);
             ranOn = runsOn(bandM);
             prevY = curY;
           }
@@ -2364,8 +2375,10 @@ export class TypographyEngine {
             // new body paragraph below the caption — stop before swallowing it.
             if (isBold(bandM[0])) break;
             if (!lastFull) break; // the previous line ended the caption
+            if (lastShort && brokeOff(lastShort, bandM)) break;
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
-            lastFull = !endsParagraph(bandM) || runsOn(bandM);
+            lastShort = endsParagraph(bandM) ? bandM : null;
+            lastFull = !lastShort || runsOn(bandM);
             ranOn = runsOn(bandM);
             prevY = curY;
             absorbed++;
@@ -4124,7 +4137,8 @@ export class TypographyEngine {
           // text tight against both sides of it — cell padding, within a line
           // height — is a table row. Not a frame (its edges stand at the
           // line's ends, and across the gutter the other column's text is
-          // further off) nor a column separator (it runs most of the page).
+          // further off) nor a column separator (a long one is left out
+          // here, a short one below).
           const borders = vRules.filter((v) => v.bottom - v.top < pageHcss * 0.5);
           if (borders.length) {
             const rows = new Map();
@@ -4136,15 +4150,45 @@ export class TypographyEngine {
               if (!arr) rows.set(key, (arr = []));
               arr.push({ pr, r });
             }
-            for (const group of rows.values()) {
+            const lines = [...rows.values()].map((group) => {
               const gy0 = Math.min(...group.map((g) => g.r.top));
               const gy1 = Math.max(...group.map((g) => g.r.bottom));
-              const lineH = gy1 - gy0;
-              const cell = borders.some((v) =>
-                v.top <= gy0 + lineH * 0.2 && v.bottom >= gy1 - lineH * 0.2 &&
-                group.some((g) => g.r.right <= v.left + 1 && v.left - g.r.right <= lineH) &&
-                group.some((g) => g.r.left >= v.right - 1 && g.r.left - v.right <= lineH) &&
-                !group.some((g) => g.r.left < v.left - 1 && g.r.right > v.right + 1));
+              return { group, gy0, gy1, lineH: gy1 - gy0 };
+            });
+            // The text either side of a rule on one line, when the rule
+            // borders it (null otherwise).
+            const sides = (v, { group, gy0, gy1, lineH }) => {
+              if (!(v.top <= gy0 + lineH * 0.2 && v.bottom >= gy1 - lineH * 0.2)) return null;
+              if (group.some((g) => g.r.left < v.left - 1 && g.r.right > v.right + 1)) return null;
+              const left = group.filter((g) => g.r.right <= v.left + 1);
+              const right = group.filter((g) => g.r.left >= v.right - 1);
+              if (!left.some((g) => v.left - g.r.right <= lineH) || !right.some((g) => g.r.left - v.right <= lineH)) return null;
+              return { left, right };
+            };
+            // A column separator (\columnseprule) is shorter than half the
+            // page wherever the two-column part is — under a full-width
+            // abstract or float, on a last page — and its gutter is narrower
+            // than two line heights: every line of both columns read as a
+            // table row. It stands at the page centre with a column's line
+            // reaching far from it on either side, on most of its lines.
+            const pageW = pageBox.width;
+            const midX = pageBox.left + pageW / 2;
+            const columnRule = (v) => {
+              if (Math.abs((v.left + v.right) / 2 - midX) > pageW * 0.05) return false;
+              let n = 0, wide = 0;
+              for (const ln of lines) {
+                const s = sides(v, ln);
+                if (!s) continue;
+                n++;
+                if (v.left - Math.min(...s.left.map((g) => g.r.left)) >= pageW * 0.3 &&
+                    Math.max(...s.right.map((g) => g.r.right)) - v.right >= pageW * 0.3) wide++;
+              }
+              return n > 0 && wide >= n * 0.6;
+            };
+            const cellBorders = borders.filter((v) => !columnRule(v));
+            for (const ln of lines) {
+              const { group } = ln;
+              const cell = cellBorders.some((v) => sides(v, ln));
               if (!cell) continue;
               for (const g of group) zoneDrops.add(g.pr.div);
               if (globalThis.__fxDebug) for (const g of group) g.pr.div.dataset.fxWhy ||= "cell-border";
@@ -4213,9 +4257,11 @@ export class TypographyEngine {
           // it (the box comes from the substitute face's ascent), and to
           // the LEFT, where an italic tail sweeps back. Masks clamped to
           // the box covered them — a kept subscript "g" lost its tail and
-          // read "a" ("K⁺gNB" as "K⁺aNB"). Masks are cut around this band.
+          // read "a" ("K⁺gNB" as "K⁺aNB"). Masks are cut around this band —
+          // not into the letters of a processed word beside it (see `own`):
+          // a superscript's band is the middle of that word's line.
           const dh = r.height;
-          descenderZones.push({ left: r.left - dh * 0.2, right: r.right, top: r.bottom - dh * 0.3, bottom: r.bottom + dh * 0.25 });
+          descenderZones.push({ left: r.left - dh * 0.2, right: r.right, top: r.bottom - dh * 0.3, bottom: r.bottom + dh * 0.25, own: { left: r.left, right: r.right } });
           // A wordless run is glyph art — ulem's wavy underline is a row of
           // wave glyphs, under the word, in a box whose top reaches up into
           // that word's own glyphs. As an obstacle its box was clamped like
@@ -4239,8 +4285,11 @@ export class TypographyEngine {
           // read as an apostrophe.
           const kItem = itemOf.get(d);
           const script = kept && [...kept].length <= 8 && dominant && kItem?.height > 0 && kItem.height < dominant * 0.85;
+          // The overhang is cut only from mask PADDING: `own` keeps the cut
+          // out of an abutting processed word's glyph box ("system¹", a
+          // subscript with no space before it), whose canvas copy it bared.
           if (/^[/\\|]$/.test(kept) || symbol || script) {
-            descenderZones.push({ left: r.left - dh * 0.15, right: r.right + dh * 0.15, top: r.top, bottom: r.bottom });
+            descenderZones.push({ left: r.left - dh * 0.15, right: r.right + dh * 0.15, top: r.top, bottom: r.bottom, own: { left: r.left, right: r.right } });
           }
           if (protectSet.has(d)) {
             // A protected span (displayed formula) has structural canvas art —
@@ -4647,6 +4696,15 @@ export class TypographyEngine {
             // runs below the word, and a wordless run sitting ON the words (a
             // hidden copy's dashes) must not open their canvas copy.
             if (zone.art && z.top < r2.top + h * 0.7) z = { ...z, top: r2.top + h * 0.7 };
+            // A kept glyph's sideways overhang stops at this span's own glyph
+            // box when the glyph sits beside it on the line and the cut would
+            // reach its letters (above its baseline; below it lie only its
+            // descenders, where a kept subscript's tail sweeps back).
+            if (zone.own && z.top < r2.top + h * 0.75) {
+              const gL = rect.left, gR = rect.left + (targetW || rect.width);
+              if (zone.own.left >= gR - 1 && z.left < gR) z = { ...z, left: gR };
+              else if (zone.own.right <= gL + 1 && z.right > gL) z = { ...z, right: gL };
+            }
             if (z.right <= L || z.left >= R || z.bottom <= T || z.top >= B || z.bottom <= z.top) continue;
             pieces = pieces.flatMap(([l, t, r, b]) => {
               if (z.right <= l || z.left >= r || z.bottom <= t || z.top >= b) return [[l, t, r, b]];

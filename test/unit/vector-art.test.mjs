@@ -5,7 +5,7 @@ import { artUnder, barsNear, vectorArt } from "../../extension/viewer/typography
 // The operator ids vector-art.mjs reads; the values only need to be distinct.
 const OPS = {
   save: 10, restore: 11, transform: 12, paintFormXObjectBegin: 74, paintFormXObjectEnd: 75,
-  beginAnnotation: 80, endAnnotation: 81, setFillRGBColor: 59, constructPath: 91, clip: 30, eoClip: 31, beginGroup: 76, endGroup: 77,
+  beginAnnotation: 80, endAnnotation: 81, setFillRGBColor: 59, setStrokeRGBColor: 58, constructPath: 91, clip: 30, eoClip: 31, beginGroup: 76, endGroup: 77,
   stroke: 20, fill: 22, eoFill: 23, endPath: 28, setLineWidth: 2,
 };
 const list = (...ops) => ({ fnArray: ops.map((o) => o[0]), argsArray: ops.map((o) => o[1]) });
@@ -105,6 +105,17 @@ test("a stroked strike-out bar is collected at its line width; art is unchanged"
   assert.equal(bars.length, 1);
   assert.deepEqual(bars[0].map((v) => +v.toFixed(2)), [50, 102.3, 150, 102.7]);
   assert.equal(barsNear(bars, item).length, 1);
+});
+
+test("a white stroked bar inks nothing and is not collected", () => {
+  const bars = [];
+  vectorArt(list(
+    [OPS.save, []], [OPS.setStrokeRGBColor, ["#ffffff"]], path(OPS.stroke, [50, 102.5, 150, 102.5]), [OPS.restore, []],
+    path(OPS.stroke, [50, 98, 150, 98]), // back to black after restore
+  ), OPS, undefined, bars);
+  assert.equal(bars.length, 1);
+  assert.equal(bars[0][0], 50);
+  assert.ok(bars[0][1] < 98 && bars[0][3] > 98);
 });
 
 test("bars through, under and around the line count; a distant one does not", () => {
