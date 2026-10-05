@@ -41,7 +41,7 @@ const intersect = (a, b) => {
  * their raw extent laid "art" across the text beside the figure.
  *
  * `bars`, when given, collects the HORIZONTAL rules left out above — thinner
- * than THIN, longer than they are thick — for strikesThrough.
+ * than THIN, longer than they are thick — for barsNear.
  */
 export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infinity, Infinity, Infinity], bars = null) {
   const out = [];
@@ -109,28 +109,28 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
 }
 
 /**
- * The rules that STRIKE THROUGH this text item: thin horizontal bars (from
- * vectorArt's `bars`, sorted) running through its glyphs between the baseline
- * and the x-height — a struck-out word (ulem's \sout, soul's \st, latexdiff's
- * deleted text, a word processor's strikethrough). An underline lies at or
- * below the baseline and an overline above the glyphs; neither counts. A
- * processed span masks the canvas under its glyphs, bar and all, so struck
- * text read as plain text; the engine cuts these bars out of the masks.
- * Returns the matching bars (PDF user space), possibly none.
+ * The thin horizontal bars (from vectorArt's `bars`, sorted) within reach of
+ * this text item's mask: through its glyphs (a struck-out word — ulem's \sout,
+ * latexdiff's deleted text), under them (an underscore drawn as a rule, as
+ * LaTeX's classic encoding sets \_, an underline) or in the leading around
+ * the line, where a mask's padding reaches. A processed span masks the canvas
+ * around its glyphs, bars and all; the engine cuts these out of every mask.
+ * That is always safe to do: the strip a bar is cut from shows the bar's own
+ * ink. Returns the matching bars (PDF user space), possibly none.
  */
-export function strikesThrough(bars, item) {
+export function barsNear(bars, item) {
   const t = item?.transform;
   if (!bars?.length || !t || t[1] || t[2] || !(item.height > 0) || !(item.width > 0)) return [];
   const h = item.height;
   const x0 = t[4], x1 = t[4] + item.width;
-  const lo = t[5] + 0.15 * h, hi = t[5] + 0.65 * h; // the bar's centre lies in here
+  const lo = t[5] - 0.9 * h, hi = t[5] + 1.3 * h; // the bar's centre lies in here
   let a = 0, b = bars.length;
   while (a < b) { const mid = (a + b) >> 1; if (bars[mid][1] < lo - THIN) a = mid + 1; else b = mid; }
   const out = [];
   for (let i = a; i < bars.length && bars[i][1] < hi; i++) {
     const [b0, y0, b1, y1] = bars[i];
     const cy = (y0 + y1) / 2;
-    if (cy < lo || cy > hi || y1 - y0 > 0.25 * h) continue;
+    if (cy < lo || cy > hi) continue;
     if (Math.min(x1, b1) - Math.max(x0, b0) > Math.min(0.5 * h, 0.5 * (b1 - b0))) out.push(bars[i]);
   }
   return out;
