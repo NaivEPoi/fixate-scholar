@@ -4178,6 +4178,8 @@ export class TypographyEngine {
             // as it was before vertical borders were read; its other borders
             // still mark its rows.
             const pageW = pageBox.width;
+            // (Line numbers never widen it: a span without letters is no
+            // candidate.)
             const blockL = Math.min(...lines.map((ln) => Math.min(...ln.group.map((g) => g.r.left))));
             const blockR = Math.max(...lines.map((ln) => Math.max(...ln.group.map((g) => g.r.right))));
             const columnRule = (v) => {
@@ -4265,9 +4267,10 @@ export class TypographyEngine {
           // the box covered them — a kept subscript "g" lost its tail and
           // read "a" ("K⁺gNB" as "K⁺aNB"). Masks are cut around this band —
           // not into the letters of a processed word beside it (see `own`):
-          // a superscript's band is the middle of that word's line.
+          // a superscript's band is the middle of that word's line. Below
+          // that word's baseline the tail is cut in full (`tail`).
           const dh = r.height;
-          descenderZones.push({ left: r.left - dh * 0.2, right: r.right, top: r.bottom - dh * 0.3, bottom: r.bottom + dh * 0.25, own: { left: r.left, right: r.right } });
+          descenderZones.push({ left: r.left - dh * 0.2, right: r.right, top: r.bottom - dh * 0.3, bottom: r.bottom + dh * 0.25, own: { left: r.left, right: r.right, tail: true } });
           // A wordless run is glyph art — ulem's wavy underline is a row of
           // wave glyphs, under the word, in a box whose top reaches up into
           // that word's own glyphs. As an obstacle its box was clamped like
@@ -4703,18 +4706,19 @@ export class TypographyEngine {
             // hidden copy's dashes) must not open their canvas copy.
             if (zone.art && z.top < r2.top + h * 0.7) z = { ...z, top: r2.top + h * 0.7 };
             // A kept glyph's sideways overhang stops at this span's own glyph
-            // box when the glyph sits beside it on the line — above the span's
-            // baseline, where its letters are. Below it lie only descenders,
-            // and a kept subscript's tail sweeps back there: cut in full. Never
-            // short of the kept glyph's own edge.
+            // box when the glyph sits beside it on the line, never short of
+            // the kept glyph's own edge. A descender band's cut stops so only
+            // above the span's baseline, where its letters are: below it a
+            // kept subscript's tail sweeps back, and is cut in full.
             const zs = [z];
             const base = r2.top + h * 0.75;
-            if (zone.own && z.top < base) {
+            if (zone.own && z.top < (zone.own.tail ? base : z.bottom)) {
               const gL = rect.left, gR = rect.left + (targetW || rect.width);
               let up = null;
               if (zone.own.left >= gR - 1 && z.left < gR) up = { ...z, left: Math.min(gR, zone.own.left) };
               else if (zone.own.right <= gL + 1 && z.right > gL) up = { ...z, right: Math.max(gL, zone.own.right) };
-              if (up) zs.splice(0, 1, { ...up, bottom: Math.min(z.bottom, base) }, { ...z, top: base });
+              if (up && zone.own.tail) zs.splice(0, 1, { ...up, bottom: Math.min(z.bottom, base) }, { ...z, top: base });
+              else if (up) zs.splice(0, 1, up);
             }
             for (const c of zs) {
               if (c.right <= L || c.left >= R || c.bottom <= T || c.top >= B || c.bottom <= c.top) continue;
