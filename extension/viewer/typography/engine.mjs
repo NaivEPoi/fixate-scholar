@@ -4117,6 +4117,39 @@ export class TypographyEngine {
               }
             }
           }
+          // A table's rows are cells whether or not it has the three chained
+          // horizontal rules a zone needs: a table with only vertical cell
+          // borders ("Threat | A short description of it …") had its
+          // rows emphasized as prose. A line crossed by a vertical rule with
+          // text tight against both sides of it — cell padding, within a line
+          // height — is a table row. Not a frame (its edges stand at the
+          // line's ends, and across the gutter the other column's text is
+          // further off) nor a column separator (it runs most of the page).
+          const borders = vRules.filter((v) => v.bottom - v.top < pageHcss * 0.5);
+          if (borders.length) {
+            const rows = new Map();
+            for (const pr of pairs) {
+              const r = pr.div.getBoundingClientRect();
+              if (!(r.width > 0) || !(r.height > 0)) continue;
+              const key = lineOf(r);
+              let arr = rows.get(key);
+              if (!arr) rows.set(key, (arr = []));
+              arr.push({ pr, r });
+            }
+            for (const group of rows.values()) {
+              const gy0 = Math.min(...group.map((g) => g.r.top));
+              const gy1 = Math.max(...group.map((g) => g.r.bottom));
+              const lineH = gy1 - gy0;
+              const cell = borders.some((v) =>
+                v.top <= gy0 + lineH * 0.2 && v.bottom >= gy1 - lineH * 0.2 &&
+                group.some((g) => g.r.right <= v.left + 1 && v.left - g.r.right <= lineH) &&
+                group.some((g) => g.r.left >= v.right - 1 && g.r.left - v.right <= lineH) &&
+                !group.some((g) => g.r.left < v.left - 1 && g.r.right > v.right + 1));
+              if (!cell) continue;
+              for (const g of group) zoneDrops.add(g.pr.div);
+              if (globalThis.__fxDebug) for (const g of group) g.pr.div.dataset.fxWhy ||= "cell-border";
+            }
+          }
         } catch {
           /* canvas zone guard unavailable — classification skips still apply */
         }
