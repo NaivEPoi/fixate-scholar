@@ -1896,7 +1896,14 @@ export class TypographyEngine {
       const right = (its) => Math.max(...its.map((p) => p.item.transform[4] + (p.item.width || 0)));
       const h = last.item.height || 8;
       if (!measure) return;
-      if (!/[A-Za-zÀ-ɏ]-$/.test(last.item.str.trim()) && right(head) < measure - h * 1.5) return; // the heading did not wrap
+      // The heading WRAPPED if the next line's first word would not have fitted
+      // after it. Not "it reaches the measure": a long next word wraps early —
+      // "… A Rather Long Section / Title" stopped six ems short, and
+      // the second line was emphasized as body.
+      const nextStr = nextBand[0].item.str;
+      const firstWord = nextStr.trim().split(/\s+/)[0] || "";
+      const firstW = nextStr.length ? (nextBand[0].item.width || 0) * (firstWord.length / nextStr.length) : 0;
+      if (!/[A-Za-zÀ-ɏ]-$/.test(last.item.str.trim()) && right(head) + firstW + h * 0.3 < measure) return; // the heading did not wrap
       if (nextBand.some((p) => p.item.fontName !== last.item.fontName)) return;
       if (right(nextBand) > measure - h * 3) return; // a full line: the paragraph
       if (Math.abs(next.y - ln.y) > h * 1.6) return; // a gap: not the same heading
@@ -4185,8 +4192,14 @@ export class TypographyEngine {
           if (!wordy) descenderZones.push({ left: r.left, right: r.right, top: r.top + dh * 0.3, bottom: r.bottom, art: true });
           // A lone slanted glyph ("/", "|", "\") overhangs its box sideways the
           // whole height: the next word's mask took the top of the "/" in
-          // "conditions/actions", which then read as a comma.
-          if (/^[/\\|]$/.test((d.textContent || "").trim())) {
+          // "conditions/actions", which then read as a comma. So does an inline
+          // math letter or symbol kept on the canvas: the italic serifs of a
+          // math "I" reach past its narrow box on both sides, and the masks of
+          // "to" and ". For" either side took them — the "I" read "l". Any kept
+          // run of one or two glyphs is cut out of the masks the same way.
+          const kept = (d.textContent || "").trim();
+          const symbol = kept && [...kept].length <= 2 && (!wordy || /[^\x00-\x7f]/.test(kept));
+          if (/^[/\\|]$/.test(kept) || symbol) {
             descenderZones.push({ left: r.left - dh * 0.15, right: r.right + dh * 0.15, top: r.top, bottom: r.bottom });
           }
           if (protectSet.has(d)) {
