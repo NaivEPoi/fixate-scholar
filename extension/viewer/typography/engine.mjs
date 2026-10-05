@@ -824,6 +824,13 @@ export class TypographyEngine {
     // lines, ACM self-citation). Matched against a whole block's text.
     const LEGAL_TEXT = /(Permission to make digital or hard copies|Copyrights? for components of this work|Request permissions from|licensed to ACM|ACM ISBN|ACM Reference Format|©\s*(19|20)\d\d\s|creativecommons\.org|(https?:\/\/)?(dx\.)?doi\.org\/)/i;
     const isCaptionLead = (t) => CAP_LEAD.test(t) && !REF_PROSE.test(t);
+    // A caption line ending on a word that cannot end a sentence — "… set
+    // as in", "… drawn by" — or a hyphen runs on to the next line: the
+    // next line is not a new caption even if it opens with "Table 1.", and this
+    // one does not end the caption even if it falls short of the measure (a
+    // narrower, centred caption).
+    const DANGLING = /(?:\b(?:a|an|and|as|at|between|by|for|from|in|into|of|on|or|over|than|the|to|under|versus|via|vs\.?|with)|-)\s*$/i;
+    const runsOn = (its) => DANGLING.test(its.map((p) => p.item.str).join(" ").trim());
     const isAlgoLead = (t) => ALGO_LEAD.test(t) && !REF_PROSE.test(t);
 
     const lowerWords = (its) => {
@@ -2281,7 +2288,8 @@ export class TypographyEngine {
         const measure = bandMeasure(bx0, bx1);
         const fullTo = (its) => Math.max(capR, measure || 0);
         const short = (its) => rightOf(its) < fullTo(its) - (fullTo(its) - capL) * 0.08;
-        let lastFull = !short(lines[k].items.filter(inBand));
+        let lastFull = !short(lines[k].items.filter(inBand)) || runsOn(lines[k].items.filter(inBand));
+        let ranOn = runsOn(lines[k].items.filter(inBand));
         const endsParagraph = (its) => {
           capL = Math.min(capL, leftOf(its));
           capR = Math.max(capR, rightOf(its));
@@ -2310,16 +2318,17 @@ export class TypographyEngine {
             const lineH = Math.max(...bandM.map((p) => p.item.height || 0)) || lines[m].h;
             if (prevY - curY <= 0 || prevY - curY > Math.max(leadH, lineH) * 1.35) break; // gap
             if (Math.abs(lineH - leadH) > leadH * 0.2) break; // size change
-            if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
+            if (isCaptionLead(bandM[0].item.str.trim()) && !ranOn) break; // next caption
             // A new in-text reference sentence ("Figure 8 shows …") is body
             // prose, not caption continuation.
-            if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" "))) break;
+            if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" ")) && !ranOn) break;
             // A bold run-in heading opens a new body paragraph below the
             // caption — stop before swallowing it.
             if (isBold(bandM[0])) break;
             if (!lastFull) break; // the previous line ended the caption
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
-            lastFull = !endsParagraph(bandM);
+            lastFull = !endsParagraph(bandM) || runsOn(bandM);
+            ranOn = runsOn(bandM);
             prevY = curY;
           }
         } else {
@@ -2340,16 +2349,17 @@ export class TypographyEngine {
             const curY = bandM[0].item.transform[5];
             if (prevY - curY > Math.max(leadH, lines[m].h) * 1.3) break; // gap
             if (Math.abs(lines[m].h - leadH) > leadH * 0.2) break; // size change
-            if (isCaptionLead(bandM[0].item.str.trim())) break; // next caption
+            if (isCaptionLead(bandM[0].item.str.trim()) && !ranOn) break; // next caption
             // A new in-text reference sentence ("Figure 8 shows …") is body prose,
             // not caption continuation — stop absorbing here.
-            if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" "))) break;
+            if (REF_PROSE.test(bandM.map((p) => p.item.str).join(" ")) && !ranOn) break;
             // A bold run-in heading ("Evaluating collaborative learning.") opens a
             // new body paragraph below the caption — stop before swallowing it.
             if (isBold(bandM[0])) break;
             if (!lastFull) break; // the previous line ended the caption
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
-            lastFull = !endsParagraph(bandM);
+            lastFull = !endsParagraph(bandM) || runsOn(bandM);
+            ranOn = runsOn(bandM);
             prevY = curY;
             absorbed++;
           }
