@@ -128,6 +128,17 @@
   color: transparent;
 }
 
+/* ...and so is anything wrapped INSIDE one. A citation or reference wrap, or a
+   colour run, can split a hidden space off into its own element, whose own
+   colour then painted the box again — red, between "Section" and "3". The
+   colour run sets its colour inline, hence !important. */
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-sp .fx-cite-c,
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-sp .fx-ref-c,
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-sp fx-ink,
+#viewerContainer.fx-on .textLayer span[data-fx-done] .fx-sp *::selection {
+  color: transparent !important;
+}
+
 /* EMPHASIS. A hairline fake bold, painted with text-shadow rather than
    -webkit-text-stroke. DON'T switch it back to text-stroke: Chrome drops
    text-stroke while painting SELECTED text (the ::selection highlight style
