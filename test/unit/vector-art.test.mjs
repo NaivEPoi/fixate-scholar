@@ -6,7 +6,7 @@ import { artUnder, barsNear, vectorArt } from "../../extension/viewer/typography
 const OPS = {
   save: 10, restore: 11, transform: 12, paintFormXObjectBegin: 74, paintFormXObjectEnd: 75,
   beginAnnotation: 80, endAnnotation: 81, setFillRGBColor: 59, setStrokeRGBColor: 58, constructPath: 91, clip: 30, eoClip: 31, beginGroup: 76, endGroup: 77,
-  stroke: 20, fill: 22, eoFill: 23, endPath: 28, setLineWidth: 2,
+  stroke: 20, closeStroke: 21, fill: 22, fillStroke: 24, eoFill: 23, endPath: 28, setLineWidth: 2,
 };
 const list = (...ops) => ({ fnArray: ops.map((o) => o[0]), argsArray: ops.map((o) => o[1]) });
 const path = (op, box) => [OPS.constructPath, [op, [null], box]];
@@ -116,6 +116,13 @@ test("a white stroked bar inks nothing and is not collected", () => {
   assert.equal(bars.length, 1);
   assert.equal(bars[0][0], 50);
   assert.ok(bars[0][1] < 98 && bars[0][3] > 98);
+});
+
+test("a path in paper colour is not art; a white-filled black outline is", () => {
+  const box = [120, 97, 131, 108];
+  assert.equal(vectorArt(list([OPS.setStrokeRGBColor, ["#ffffff"]], path(OPS.stroke, box)), OPS).length, 0);
+  assert.equal(vectorArt(list([OPS.setStrokeRGBColor, ["#ffffff"]], [OPS.setFillRGBColor, ["#ffffff"]], path(OPS.fillStroke, box)), OPS).length, 0);
+  assert.equal(vectorArt(list([OPS.setFillRGBColor, ["#ffffff"]], path(OPS.fillStroke, box)), OPS).length, 1);
 });
 
 test("bars through, under and around the line count; a distant one does not", () => {

@@ -828,16 +828,16 @@ export class TypographyEngine {
     // as in", "… drawn by" — or a word broken at a hyphen runs on to
     // the next line: the next line is not a new caption even if it opens with
     // "Table 1.", and this one does not end the caption even if it falls short
-    // of the measure (a narrower, centred caption). A word break only: two
-    // lowercase letters before the hyphen ("Cl-" is an ion, and ends a
-    // caption), and see brokeOff.
+    // of the measure (a narrower, centred caption). A word or compound
+    // broken at its hyphen ("experi-", "LSTM-"), not a lone minus; and see
+    // brokeOff.
     const DANGLING = /\b(?:a|an|and|as|at|between|by|for|from|in|into|of|on|or|over|than|the|to|under|versus|via|vs\.?|with)\s*$/i;
-    const BROKEN = /[a-zà-ÿ]{2}-\s*$/;
+    const BROKEN = /[A-Za-zÀ-ÿ\d]{2}-\s*$/;
     const lineText = (its) => its.map((p) => p.item.str).join(" ").trim();
     const runsOn = (its) => DANGLING.test(lineText(its)) || BROKEN.test(lineText(its));
     // A SHORT line runs on only by its broken word when the next line does
     // not finish that word in lowercase: a short caption ending in a hyphen
-    // above a body paragraph ("The …") swallowed the paragraph.
+    // ("… of Cl-") above a body paragraph ("The …") swallowed the paragraph.
     const brokeOff = (its, next) => BROKEN.test(lineText(its)) && !/^[a-zà-ÿ]/.test(lineText(next));
     const isAlgoLead = (t) => ALGO_LEAD.test(t) && !REF_PROSE.test(t);
 
@@ -4169,21 +4169,27 @@ export class TypographyEngine {
             // page wherever the two-column part is — under a full-width
             // abstract or float, on a last page — and its gutter is narrower
             // than two line heights: every line of both columns read as a
-            // table row. It stands at the page centre with a column's line
-            // reaching far from it on either side, on most of its lines.
+            // table row. It stands in the middle of the page's text block (not
+            // of the page: margins can be unequal), and the text it borders on
+            // one side or the other reaches a column's width from it — over
+            // all its lines, so a column of short ones (a list) beside it does
+            // not count against it. A table as wide as the text with a rule
+            // down its middle and wide cells reads the same and is processed,
+            // as it was before vertical borders were read; its other borders
+            // still mark its rows.
             const pageW = pageBox.width;
-            const midX = pageBox.left + pageW / 2;
+            const blockL = Math.min(...lines.map((ln) => Math.min(...ln.group.map((g) => g.r.left))));
+            const blockR = Math.max(...lines.map((ln) => Math.max(...ln.group.map((g) => g.r.right))));
             const columnRule = (v) => {
-              if (Math.abs((v.left + v.right) / 2 - midX) > pageW * 0.05) return false;
-              let n = 0, wide = 0;
+              if (Math.abs((v.left + v.right) / 2 - (blockL + blockR) / 2) > (blockR - blockL) * 0.05) return false;
+              let l = Infinity, r = -Infinity;
               for (const ln of lines) {
                 const s = sides(v, ln);
                 if (!s) continue;
-                n++;
-                if (v.left - Math.min(...s.left.map((g) => g.r.left)) >= pageW * 0.3 &&
-                    Math.max(...s.right.map((g) => g.r.right)) - v.right >= pageW * 0.3) wide++;
+                for (const g of s.left) l = Math.min(l, g.r.left);
+                for (const g of s.right) r = Math.max(r, g.r.right);
               }
-              return n > 0 && wide >= n * 0.6;
+              return v.left - l >= pageW * 0.3 || r - v.right >= pageW * 0.3;
             };
             const cellBorders = borders.filter((v) => !columnRule(v));
             for (const ln of lines) {
@@ -4697,24 +4703,31 @@ export class TypographyEngine {
             // hidden copy's dashes) must not open their canvas copy.
             if (zone.art && z.top < r2.top + h * 0.7) z = { ...z, top: r2.top + h * 0.7 };
             // A kept glyph's sideways overhang stops at this span's own glyph
-            // box when the glyph sits beside it on the line and the cut would
-            // reach its letters (above its baseline; below it lie only its
-            // descenders, where a kept subscript's tail sweeps back).
-            if (zone.own && z.top < r2.top + h * 0.75) {
+            // box when the glyph sits beside it on the line — above the span's
+            // baseline, where its letters are. Below it lie only descenders,
+            // and a kept subscript's tail sweeps back there: cut in full. Never
+            // short of the kept glyph's own edge.
+            const zs = [z];
+            const base = r2.top + h * 0.75;
+            if (zone.own && z.top < base) {
               const gL = rect.left, gR = rect.left + (targetW || rect.width);
-              if (zone.own.left >= gR - 1 && z.left < gR) z = { ...z, left: gR };
-              else if (zone.own.right <= gL + 1 && z.right > gL) z = { ...z, right: gL };
+              let up = null;
+              if (zone.own.left >= gR - 1 && z.left < gR) up = { ...z, left: Math.min(gR, zone.own.left) };
+              else if (zone.own.right <= gL + 1 && z.right > gL) up = { ...z, right: Math.max(gL, zone.own.right) };
+              if (up) zs.splice(0, 1, { ...up, bottom: Math.min(z.bottom, base) }, { ...z, top: base });
             }
-            if (z.right <= L || z.left >= R || z.bottom <= T || z.top >= B || z.bottom <= z.top) continue;
-            pieces = pieces.flatMap(([l, t, r, b]) => {
-              if (z.right <= l || z.left >= r || z.bottom <= t || z.top >= b) return [[l, t, r, b]];
-              const zt = Math.max(t, z.top), zb = Math.min(b, z.bottom);
-              // Empty pieces are dropped HERE: a zero- or negative-width one still
-              // "intersects" the next zone and splits again, 4x per zone — a line
-              // of many kept runs hung the page for over a minute.
-              return [[l, t, r, zt], [l, zb, r, b], [l, zt, Math.min(r, z.left), zb], [Math.max(l, z.right), zt, r, zb]]
-                .filter(([pl, pt, pr, pb]) => pr > pl && pb > pt);
-            });
+            for (const c of zs) {
+              if (c.right <= L || c.left >= R || c.bottom <= T || c.top >= B || c.bottom <= c.top) continue;
+              pieces = pieces.flatMap(([l, t, r, b]) => {
+                if (c.right <= l || c.left >= r || c.bottom <= t || c.top >= b) return [[l, t, r, b]];
+                const zt = Math.max(t, c.top), zb = Math.min(b, c.bottom);
+                // Empty pieces are dropped HERE: a zero- or negative-width one still
+                // "intersects" the next zone and splits again, 4x per zone — a line
+                // of many kept runs hung the page for over a minute.
+                return [[l, t, r, zt], [l, zb, r, b], [l, zt, Math.min(r, c.left), zb], [Math.max(l, c.right), zt, r, zb]]
+                  .filter(([pl, pt, pr, pb]) => pr > pl && pb > pt);
+              });
+            }
           }
           for (const [l, t, r, b] of pieces) box(l, t, r, b);
         }
