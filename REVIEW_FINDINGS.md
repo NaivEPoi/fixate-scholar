@@ -5016,3 +5016,146 @@ Lesson: check a claim against the surrounding sentence, not just the span.
 
 Small caps set as glyph variants of the regular face extract as lowercase and
 are processed; a dashed vertical table border is not seen as a rule.
+
+## R52 — the native button on local files, and a revision-marked document in reading mode
+
+### Fixed
+
+- The "native" button did nothing on a local PDF when "Allow access to file
+  URLs" is off — the default for a store install, and invisible to the
+  harnesses, whose command-line install has it on. The browser refuses every
+  extension navigation to a file: URL. The worker now tracks, per tab, whether
+  the file's native view is the entry right behind the viewer (the popup's
+  "Open in FixateScholar" leaves it there) and the viewer steps back to it —
+  counting its own entries, and not with `chrome.tabs.goBack`, which skips the
+  native view as history-intervention skippable. With nothing behind it, the
+  viewer explains the setting and links to it.
+- A local file whose name holds an apostrophe never loaded: `encodeURIComponent`
+  leaves `'`, the browser escapes it in the query, and the file parameter was
+  escaped a second time.
+- A latexdiff (ulem) document lost its revision markup in reading mode:
+  - a line running black, deleted red and added blue in one text item took one
+    sampled colour. Mixed spans are now coloured per character after the width
+    pass (`ink-runs.mjs`; wrapped in an inline `<fx-ink>`, not a span);
+  - strike-out bars were masked with the glyphs they cross. Thin horizontal
+    bars through a text item's glyph band — stroked lines included, whose box
+    has no height — are taken from the operator list (`barsNear`, below) and cut
+    out of every mask;
+  - the wavy underline, a kept run of wave glyphs, was erased: it failed the
+    hidden-copy fit (its box reaches into the line it underlines) and was
+    clamped like text. A wordless kept run is glyph art: the band below its
+    top 30% is cut out of the masks.
+- Plain black text read as coloured. The viewer's canvas is opaque, so the
+  browser draws its text with subpixel antialiasing, tinting a black glyph's
+  edges; sampled pixel by pixel those tints passed for ink. v1.3.1 already
+  coloured dozens of spans in papers with no colour (dark navy "(mod", "and");
+  the per-character pass, as first written, wrapped most lines of ordinary
+  papers. Colour is now each channel's darkness summed over the band, relative
+  to the paper under the glyph: the tints cancel, black stays black on any
+  background, and coloured ink comes back exactly. A window or one letter cuts
+  through glyphs and must show strong colour; a tint's channel order is never
+  ink there.
+
+
+### Pre-existing defects fixed (found in this round's visual review)
+
+All were already in v1.3.1; they were fixed before the release rather than
+carried.
+
+- An underscore that LaTeX's classic encoding draws as a short rule had no
+  text-layer glyph, and the processed word's mask covered it ("file_id" read
+  "file id"). The strike-out bars above were one case of this: every thin
+  horizontal bar within a processed item's reach — through, under, or in the
+  leading around its line — is cut out of the masks (`barsNear`, which
+  replaced `strikesThrough`). A bar in paper colour inks nothing and is not
+  collected, nor is a white outline vector art.
+- Captions:
+  - a caption wrapped so that a line opened with an in-caption "Table 1.", or
+    a narrow centred caption's short first line, ended the caption, and the
+    rest was emphasized as body. A line ending on a word that cannot end a
+    sentence, or on a word or compound broken at its hyphen, runs on; a short
+    line so broken does not continue into a line opening in capitals ("… Cl-"
+    above "The …");
+  - a one-line caption centred in the column and nearly its width passed for a
+    full line, and the justified paragraph under it was absorbed (found by
+    comparing the gate's per-page skip reasons with the previous candidate's).
+    The line right under such a caption ends it when it runs to the column's
+    right edge from its left edge or from an indent; a centred line, or one
+    keeping a narrower box's inset, runs on. Not for a caption spanning both
+    columns of a two-column page, where a full-width line under it is the
+    float's own description.
+- In a face whose space paints a box, a citation, reference or colour wrap
+  could split a hidden space into an element of its own colour, painting the
+  box again. Anything inside `.fx-sp` is transparent.
+- Kept glyphs beside processed words:
+  - an inline math letter kept on the canvas lost the italic serifs that reach
+    past its box to the neighbouring words' masks (a math "I" read "l"), and a
+    small exponent kept with its formula lost its lower half to the line above
+    ("n" read as an apostrophe). Kept runs of one or two symbols, and of up to
+    eight glyphs below 85% of body size, are cut out of the masks across their
+    whole box;
+  - those cuts, and a kept run's descender band, stop at an abutting processed
+    word's glyph box (never short of the kept glyph's own edge): a footnote
+    marker or subscript set against a word ("system¹") had bared the word's
+    canvas copy. A descender band is still cut in full below the word's
+    baseline, where a kept subscript's tail sweeps back (agy).
+- A wrapped heading's second line was emphasized when a long word wrapped
+  early; the wrap test now asks whether that word would have fitted.
+- A table with only vertical cell borders had its rows emphasized. A line with
+  text tight against both sides of a vertical rule is a table row — except at
+  a column separator (`\columnseprule`), which on a page whose two-column part
+  is short turned whole columns into table rows: a rule in the middle of the
+  page's text block, with the text it borders reaching a column's width from
+  it on either side over its lines, is not a cell border (agy).
+- Punctuation opening a coloured word ("(new") takes the colour of the letter
+  after it when it reads that colour itself.
+
+### Method
+
+The colour defect was invisible to every gate stage (none measures colour) and
+was found by counting colour wraps over the public corpus and comparing with
+v1.3.1 — a count worth keeping for any change to colour sampling. agy reviewed
+every commit; each finding was checked against the code and, where it could
+be, reproduced — on synthetic pages where the corpora have no instance (a
+short column separator: 50 of 54 lines lost; footnote markers and subscripts
+against words: 486 of 1400 sample points in the words' last 3 px bare; centred
+captions over indented and unindented paragraphs, a caption centred
+throughout, a caption in a narrower box) — and each fix has a control that
+fails without it.
+
+Comparing every page's skip reasons with the previous candidate's gate, on both
+corpora, caught what no stage fails on: a caption absorbing a paragraph and a
+paragraph absorbing a caption description are both "reasoned" skips. The last
+candidate differs from the one agy agreed before it on exactly the two pages
+its fix was for; agy re-derived that from the raw logs.
+
+The edge sheets of both corpora (525) were read by agy in full and sampled
+by Claude, with every claim checked at high zoom against the original: of
+agy's six, five were sheet artefacts (a strip's cropped neighbour, an
+underline present on both sides, a footnote marker that is black) and one
+is the highlight limitation below, identical in v1.3.1.
+
+### Known limitations
+
+- Dark ink in a subpixel tint's hues (brown, steel blue) cannot be told from a
+  tint and reads as black; a line mixing black with a dark colour is not split.
+- Without file access, a viewer reached by back/forward rather than a fresh
+  navigation shows the explanation instead of stepping back.
+- Centred captions: one set in by under 2% of the column, a short line or an
+  indent under 2.5% right under it, or a caption centred throughout whose
+  second line spans nearly the whole column, is not told from the paragraph
+  under it — those behave as before.
+- `bandMeasure` is cached by a band's left edge only, so a band spanning the
+  page can get the measure of the column it starts in; a centred title over a
+  spanning float runs on into the float's description because of it. Keying
+  it by both edges is a change to every spanning caption, not made here.
+- A table as wide as the text with a single rule down its middle and wide
+  cells reads as a column separator and is processed, as before vertical
+  borders were read.
+- Small caps set as glyph variants of the regular face are still processed
+  (R51).
+- On a highlight drawn on the page (a yellow band behind a phrase), a mask
+  takes the highlight's colour, and its padding paints it a little past the
+  band's edge (a thin strip under an unhighlighted heading above it); a kept
+  run inside the highlight shows a slightly darker box. Identical in v1.3.1;
+  a fix was tried this round and not kept, unproven.
