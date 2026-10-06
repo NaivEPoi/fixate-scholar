@@ -1798,18 +1798,25 @@ export class TypographyEngine {
       measureCache.set(key, m);
       return m;
     };
-    // ...and the left edge its lines start from, likewise.
+    // ...and the left edge its FULL lines start from: a tick label or any
+    // other item further left, on a line that does not reach the measure, is
+    // not the column's edge.
     const leftCache = new Map();
     const bandLeft = (bx0, bx1) => {
       const key = bx0 + "," + bx1;
       if (leftCache.has(key)) return leftCache.get(key);
+      const measure = bandMeasure(bx0, bx1);
       let m = Infinity;
-      for (const ln of lines)
+      for (const ln of lines) {
+        let l = Infinity, r = -Infinity;
         for (const p of ln.items) {
-          const x = p.item.transform[4];
-          if (x < bx0 || x + (p.item.width ?? 0) > bx1 + 2) continue;
-          m = Math.min(m, x);
+          const x = p.item.transform[4], end = x + (p.item.width ?? 0);
+          if (x < bx0 || end > bx1 + 2) continue;
+          l = Math.min(l, x);
+          r = Math.max(r, end);
         }
+        if (r >= measure - 2) m = Math.min(m, l);
+      }
       leftCache.set(key, m);
       return m;
     };
@@ -2320,19 +2327,24 @@ export class TypographyEngine {
         const fullTo = (its) => Math.max(capR, measure || 0);
         const short = (its) => rightOf(its) < fullTo(its) - (fullTo(its) - capL) * 0.08;
         // A one-line caption CENTRED in the column and nearly its width passed
-        // for a full line, and the paragraph under it was absorbed. Such a
-        // first line — set in from the column's left edge by about what it
-        // leaves on the right — ends the caption when the line under it runs
-        // to the right edge from well left of the caption's inset: that is the
-        // paragraph. A caption set in a narrower box keeps its inset on every
-        // line and runs on.
+        // for a full line, and the paragraph under it was absorbed. LaTeX
+        // centres a caption only when it fits one line, so a centred first line
+        // — set in from the column's left edge by about what it leaves on the
+        // right — ends the caption when the line under it is a paragraph's:
+        // run to the right edge from the column's left edge, or from an indent
+        // with nothing on the right. A centred line under it (a caption set
+        // centred throughout) is set in by about what it leaves on the right,
+        // and a caption in a narrower box keeps its inset: both run on.
         const colL = bandLeft(bx0, bx1);
         const colW = (measure || 0) - colL;
+        const gaps = (its) => [leftOf(its) - colL, (measure || 0) - rightOf(its)];
+        const isCentred = (lg, rg) => Math.abs(lg - rg) <= Math.max(lg, rg) * 0.35 + colW * 0.005;
         const first = lines[k].items.filter(inBand);
-        const inset = leftOf(first) - colL;
-        const capCentred = colW > 0 && inset > colW * 0.02 &&
-          Math.abs(inset - ((measure || 0) - rightOf(first))) <= inset * 0.35 + colW * 0.005;
-        const bodyUnder = (its) => capCentred && (measure || 0) - rightOf(its) <= colW * 0.01 && leftOf(its) - colL < inset - colW * 0.01;
+        const capCentred = colW > 0 && gaps(first)[0] > colW * 0.02 && isCentred(...gaps(first));
+        const bodyUnder = (its) => {
+          const [lg, rg] = gaps(its);
+          return capCentred && rg <= colW * 0.01 && (lg <= colW * 0.005 || !isCentred(lg, rg));
+        };
         let lastFull = !short(first) || runsOn(first);
         let ranOn = runsOn(first);
         let lastShort = short(first) ? first : null;
@@ -2374,7 +2386,7 @@ export class TypographyEngine {
             if (isBold(bandM[0])) break;
             if (!lastFull) break; // the previous line ended the caption
             if (lastShort && brokeOff(lastShort, bandM)) break;
-            if (nextToFirst && bodyUnder(bandM)) break; // the paragraph under a centred caption
+            if (nextToFirst && !ranOn && bodyUnder(bandM)) break; // the paragraph under a centred caption
             nextToFirst = false;
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
             lastShort = endsParagraph(bandM) ? bandM : null;
@@ -2409,7 +2421,7 @@ export class TypographyEngine {
             if (isBold(bandM[0])) break;
             if (!lastFull) break; // the previous line ended the caption
             if (lastShort && brokeOff(lastShort, bandM)) break;
-            if (nextToFirst && bodyUnder(bandM)) break; // the paragraph under a centred caption
+            if (nextToFirst && !ranOn && bodyUnder(bandM)) break; // the paragraph under a centred caption
             nextToFirst = false;
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
             lastShort = endsParagraph(bandM) ? bandM : null;
