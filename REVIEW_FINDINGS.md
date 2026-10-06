@@ -5135,6 +5135,33 @@ agy's six, five were sheet artefacts (a strip's cropped neighbour, an
 underline present on both sides, a footnote marker that is black) and one
 is the highlight limitation below, identical in v1.3.1.
 
+### Found after the first candidate, on the revision-marked document
+
+Neither corpus holds a latexdiff document, so the gate never saw these; a
+check of the document this round was for did.
+
+- A strike-out bar near the foot of a page vanished at 150% and 300% — the
+  red stayed, the line through it did not. A canvas whose resolution PDF.js
+  caps draws the whole viewport into its pixels and then gets a CSS box a few
+  px short of the page (1582 for 1584 at 150%), squeezing its content; the
+  bar's cut followed the text layer and landed 2 px off the ink, which the
+  mask covered. At 300% a canvas row is 2.3 CSS px and the bar is smeared over
+  it. Bar and art cuts now cover where the canvas drew them too, to whole
+  canvas rows.
+- Coloured text came out in the wrong colour after a scroll: a struck red line
+  once showed blue, and on one page 30 words lost their colour. A pass runs
+  over several idle callbacks; the obstacles, cut zones and canvas snapshots'
+  boxes were recorded in viewport coordinates by its first call, while each
+  later call measured its spans afresh, so once the page moved, colours were
+  sampled from where the spans used to be. They now move with the page.
+- `test/latexdiff.mjs` covers both on a synthetic two-page document (invented
+  words): colours of spans and runs against the canvas, and every bar's ink
+  uncovered, at four zooms and while scrolling mid-pass. On the first
+  candidate it fails at 150%, 200% and 300% and under scrolling (up to 591
+  bar points covered, 33 wrong colours); on the fix it passes, three runs out
+  of three. It needs more than one batch of spans on the page to yield
+  between calls — the reason its page is dense.
+
 ### Known limitations
 
 - Dark ink in a subpixel tint's hues (brown, steel blue) cannot be told from a
