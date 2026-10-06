@@ -1797,6 +1797,20 @@ export class TypographyEngine {
       measureCache.set(bx0, m);
       return m;
     };
+    // ...and the left edge its lines start from, likewise.
+    const leftCache = new Map();
+    const bandLeft = (bx0, bx1) => {
+      if (leftCache.has(bx0)) return leftCache.get(bx0);
+      let m = Infinity;
+      for (const ln of lines)
+        for (const p of ln.items) {
+          const x = p.item.transform[4];
+          if (x < bx0 || x + (p.item.width ?? 0) > bx1 + 2) continue;
+          m = Math.min(m, x);
+        }
+      leftCache.set(bx0, m);
+      return m;
+    };
     /**
      * The heading part of a NUMBERED RUN-IN heading line, or null when the line
      * is an ordinary standalone heading (the caller then skips the whole band).
@@ -2303,9 +2317,23 @@ export class TypographyEngine {
         const measure = bandMeasure(bx0, bx1);
         const fullTo = (its) => Math.max(capR, measure || 0);
         const short = (its) => rightOf(its) < fullTo(its) - (fullTo(its) - capL) * 0.08;
-        let lastFull = !short(lines[k].items.filter(inBand)) || runsOn(lines[k].items.filter(inBand));
-        let ranOn = runsOn(lines[k].items.filter(inBand));
-        let lastShort = short(lines[k].items.filter(inBand)) ? lines[k].items.filter(inBand) : null;
+        // A CENTRED caption runs while its lines stay centred: a one-line
+        // caption nearly the column's width passed for a full line, and the
+        // paragraph under it was absorbed. Centred: set in from the column's
+        // left edge by about what it leaves on the right — a paragraph's
+        // first line is indented with nothing on the right, its other lines
+        // run edge to edge.
+        const colL = bandLeft(bx0, bx1);
+        const colW = (measure || 0) - colL;
+        const centred = (its, inset) => {
+          const lg = leftOf(its) - colL, rg = (measure || 0) - rightOf(its);
+          return lg > colW * inset && Math.abs(lg - rg) <= Math.max(lg, rg) * 0.35 + colW * 0.005;
+        };
+        const first = lines[k].items.filter(inBand);
+        const capCentred = colW > 0 && centred(first, 0.02);
+        let lastFull = capCentred || !short(first) || runsOn(first);
+        let ranOn = runsOn(first);
+        let lastShort = short(first) ? first : null;
         const endsParagraph = (its) => {
           capL = Math.min(capL, leftOf(its));
           capR = Math.max(capR, rightOf(its));
@@ -2343,9 +2371,10 @@ export class TypographyEngine {
             if (isBold(bandM[0])) break;
             if (!lastFull) break; // the previous line ended the caption
             if (lastShort && brokeOff(lastShort, bandM)) break;
+            if (capCentred && !centred(bandM, 0.005)) break; // the body under a centred caption
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
             lastShort = endsParagraph(bandM) ? bandM : null;
-            lastFull = !lastShort || runsOn(bandM);
+            lastFull = capCentred || !lastShort || runsOn(bandM);
             ranOn = runsOn(bandM);
             prevY = curY;
           }
@@ -2376,9 +2405,10 @@ export class TypographyEngine {
             if (isBold(bandM[0])) break;
             if (!lastFull) break; // the previous line ended the caption
             if (lastShort && brokeOff(lastShort, bandM)) break;
+            if (capCentred && !centred(bandM, 0.005)) break; // the body under a centred caption
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
             lastShort = endsParagraph(bandM) ? bandM : null;
-            lastFull = !lastShort || runsOn(bandM);
+            lastFull = capCentred || !lastShort || runsOn(bandM);
             ranOn = runsOn(bandM);
             prevY = curY;
             absorbed++;
