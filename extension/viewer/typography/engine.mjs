@@ -3447,6 +3447,8 @@ export class TypographyEngine {
       )
       .map((p) => p.div);
     let obstacleRects = null;
+    let frame = null; // the text layer's viewport position when the geometry below was recorded
+    const snaps = new Set(); // canvas snapshots read by this pass (their `cr` is viewport geometry too)
     const artKept = new Set(); // spans kept for the vector art on them (work())
     const artBoxes = []; // their art, viewport rects [x0, y0, x1, y1] relative to the page
     const strikeBoxes = []; // thin bars within candidates' masks' reach, same frame
@@ -3592,6 +3594,34 @@ export class TypographyEngine {
       }
       if (!obstacleRects && holder.pixels === null) return; // the read resumes the pass
       const layerRect = textLayerDiv.getBoundingClientRect();
+      // A pass runs over several idle callbacks, and the page can move between
+      // them (the reader scrolls; pages above settle). The obstacles, the cut
+      // zones and the canvas snapshots' boxes were recorded in viewport
+      // coordinates by the first call; the spans are measured afresh in each.
+      // Out of step, a strike strip was cut where the bar no longer was, and a
+      // colour was sampled from the wrong place on the canvas — a struck red
+      // line read the blue of the line beside it. Move them with the page.
+      if (frame) {
+        const dx = layerRect.left - frame.left, dy = layerRect.top - frame.top;
+        if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+          const moved = (r) => {
+            if (!r || typeof r !== "object") return r;
+            const o = { ...r };
+            o.left = r.left + dx; o.right = r.right + dx; o.top = r.top + dy; o.bottom = r.bottom + dy;
+            if (Number.isFinite(r.width)) o.width = r.width;
+            if (Number.isFinite(r.height)) o.height = r.height;
+            o.x = o.left; o.y = o.top;
+            if (r.art && typeof r.art === "object") o.art = moved(r.art);
+            if (r.core) o.core = moved(r.core);
+            if (r.own) o.own = { ...r.own, left: r.own.left + dx, right: r.own.right + dx };
+            return o;
+          };
+          if (obstacleRects) for (let n = 0; n < obstacleRects.length; n++) obstacleRects[n] = moved(obstacleRects[n]);
+          for (let n = 0; n < descenderZones.length; n++) descenderZones[n] = moved(descenderZones[n]);
+          for (const sn of snaps) sn.cr = moved(sn.cr);
+        }
+      }
+      frame = { left: layerRect.left, top: layerRect.top };
       const tObs = timing && !obstacleRects ? performance.now() : 0;
       if (!obstacleRects) {
         obstacleRects = [];
@@ -3609,20 +3639,49 @@ export class TypographyEngine {
           // Viewport rects are relative to the page box the canvas and the text
           // layer share — not the page div, which has a border.
           const pb = pageView.textLayer.div.getBoundingClientRect();
+          // The canvas does not always sit exactly on that box. A canvas whose
+          // resolution PDF.js caps (a large page, a high zoom) draws the whole
+          // viewport into its pixels and then gets a CSS box rounded a few px
+          // short of the viewport: its content is squeezed into it, by up to
+          // 2 px at the far edge at 150%. The cuts below, made to show the
+          // canvas's own ink, cover where the canvas drew it too — a strike
+          // bar near the foot of a page was cut out 2 px below its ink, which
+          // the mask then covered.
+          const cb = pageView.canvas?.getBoundingClientRect();
+          const vw = pageView.viewport?.width, vh = pageView.viewport?.height;
+          const onCanvas = cb && cb.width > 0 && cb.height > 0 && vw > 0 && vh > 0;
+          const fx = onCanvas ? cb.width / vw : 1, fy = onCanvas ? cb.height / vh : 1;
+          // Canvas pixels per CSS px. A capped canvas has fewer than one: a
+          // thin bar is smeared over a whole canvas row (2.3 CSS px at 300%),
+          // so its cut covers the rows it falls in, not just its geometry.
+          const ky = onCanvas ? pageView.canvas.height / cb.height : 1;
+          const rowUp = (y) => cb.top + Math.floor((y - cb.top) * ky) / ky;
+          const rowDown = (y) => cb.top + Math.ceil((y - cb.top) * ky) / ky;
+          // [left, top, right, bottom] covering a viewport rect in both frames.
+          const both = (x0, y0, x1, y1) => {
+            const l = Math.min(x0, x1), r = Math.max(x0, x1), t = Math.min(y0, y1), b = Math.max(y0, y1);
+            if (!onCanvas) return [pb.left + l, pb.top + t, pb.left + r, pb.top + b];
+            return [
+              Math.min(pb.left + l, cb.left + l * fx), Math.min(pb.top + t, ky < 1 ? rowUp(cb.top + t * fy) : cb.top + t * fy),
+              Math.max(pb.left + r, cb.left + r * fx), Math.max(pb.top + b, ky < 1 ? rowDown(cb.top + b * fy) : cb.top + b * fy),
+            ];
+          };
           for (const [x0, y0, x1, y1] of artBoxes) {
             const art = { left: pb.left + Math.min(x0, x1), right: pb.left + Math.max(x0, x1), top: pb.top + Math.min(y0, y1), bottom: pb.top + Math.max(y0, y1) };
             obstacleRects.push(art);
             // ...and cut out of every mask outright: a clamp gives way where a
             // mask's own glyphs reach the frame (the comma after a boxed "C2").
-            descenderZones.push({ left: art.left - 1, right: art.right + 1, top: art.top - 1, bottom: art.bottom + 1 });
+            const [l, t, r, b] = both(x0, y0, x1, y1);
+            descenderZones.push({ left: l - 1, right: r + 1, top: t - 1, bottom: b + 1 });
           }
           // Each bar, cut out exactly (half a px of antialiasing each side):
           // the strip shows the bar's own ink. Not an obstacle — the words
           // around it are processed.
           for (const [x0, y0, x1, y1] of strikeBoxes) {
-            const top = pb.top + Math.min(y0, y1), bottom = pb.top + Math.max(y0, y1);
-            const mid = (top + bottom) / 2, half = Math.max(0.5, (bottom - top) / 2) + 0.5;
-            descenderZones.push({ left: pb.left + Math.min(x0, x1), right: pb.left + Math.max(x0, x1), top: mid - half, bottom: mid + half });
+            const [l, t, r, b] = both(x0, y0, x1, y1);
+            // Each frame's bar at least 1 px thick, then half a px either side.
+            const grow = Math.max(0, (1 - (Math.max(y0, y1) - Math.min(y0, y1))) / 2) + 0.5;
+            descenderZones.push({ left: l, right: r, top: t - grow, bottom: b + grow });
           }
         }
         // HIDDEN-TEXT guard. A PDF's text layer can carry items the canvas
@@ -3642,9 +3701,11 @@ export class TypographyEngine {
           // ink into a line's edge rows and the fit scores turn to noise.
           const readCanvas = (canvas) => this.#snapshotFor(canvas, snapMemo);
           const base = readCanvas(pageView.canvas);
+          if (base) snaps.add(base);
           const inkedIn = (s, i) => s.d[i + 3] > 40 && 0.299 * s.d[i] + 0.587 * s.d[i + 1] + 0.114 * s.d[i + 2] < 200;
           if (base) {
             const detail = pageView.detailView?.renderingState === 3 ? readCanvas(pageView.detailView.canvas) : null;
+            if (detail) snaps.add(detail);
             const useDetail = detail && detail.csx > base.csx * 1.2;
             const srcFor = (rect) => {
               if (useDetail) {
