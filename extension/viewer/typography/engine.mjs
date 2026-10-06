@@ -1779,10 +1779,15 @@ export class TypographyEngine {
     // The measure of a column band: the right edge its full lines reach. Taken
     // as the widest line end in the band (justified text makes them all equal),
     // so a line ending at the measure is a FULL line and a short line is not.
+    // Cached by the band's LEFT edge only, so a band spanning the page gets
+    // the measure of the column it starts in when that was asked for first —
+    // a known accident: it is what lets a centred title over a spanning
+    // float run on into the float's description below it (keyed by both
+    // edges, that title is a short line and ends the caption). Changing it
+    // is a change to every spanning caption, not made here.
     const measureCache = new Map();
     const bandMeasure = (bx0, bx1) => {
-      const key = bx0 + "," + bx1;
-      if (measureCache.has(key)) return measureCache.get(key);
+      if (measureCache.has(bx0)) return measureCache.get(bx0);
       let m = 0;
       for (const ln of lines)
         for (const p of ln.items) {
@@ -1795,7 +1800,7 @@ export class TypographyEngine {
           if (x < bx0 || end > bx1 + 2) continue;
           m = Math.max(m, end);
         }
-      measureCache.set(key, m);
+      measureCache.set(bx0, m);
       return m;
     };
     // ...and the left edge its FULL lines start from: a tick label or any
@@ -2340,7 +2345,10 @@ export class TypographyEngine {
         const gaps = (its) => [leftOf(its) - colL, (measure || 0) - rightOf(its)];
         const isCentred = (lg, rg) => Math.abs(lg - rg) <= Math.max(lg, rg) * 0.35 + colW * 0.005;
         const first = lines[k].items.filter(inBand);
-        const capCentred = colW > 0 && gaps(first)[0] > colW * 0.02 && isCentred(...gaps(first));
+        // Not across both columns of a two-column page: the body there is
+        // set in columns, and a line spanning them under the caption is the
+        // float's own description (a centred title, then its text).
+        const capCentred = colW > 0 && !(twoColumn && capCrosses) && gaps(first)[0] > colW * 0.02 && isCentred(...gaps(first));
         const bodyUnder = (its) => {
           const [lg, rg] = gaps(its);
           return capCentred && rg <= colW * 0.01 && (lg <= colW * 0.005 || !isCentred(lg, rg));
