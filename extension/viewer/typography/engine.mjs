@@ -3876,11 +3876,14 @@ export class TypographyEngine {
                     const color = faint ? (rgb ? `rgb(${rgb.join(", ")})` : null) : ink.color;
                     const punct = !/[\p{L}\p{N}]/u.test(node.data[k]);
                     if (punct) {
-                      // Read strictly, and kept only where it agrees with the
+                      // Read strictly, on its own box only — padded, a comma read
+                      // the green edge of the link digit before it and took the
+                      // link's colour — and kept only where it agrees with the
                       // letter before it (colourRuns): "data," struck red stays
                       // red, the black comma after a green link digit black.
-                      const own = inkColour(ink.d, LOCAL_CHROMA, true);
-                      chars.push({ punct: true, color: ink.n >= 4 && own ? `rgb(${own.join(", ")})` : null, n: ink.n });
+                      const bare = inkOf({ left: r.left + dx, right: r.right + dx, top: r.top + dy, bottom: r.bottom + dy, height: r.height }, 1, 4, LOCAL_CHROMA, false, false);
+                      const own = inkColour(bare.d, LOCAL_CHROMA, true);
+                      chars.push({ punct: true, color: bare.n >= 4 && own ? `rgb(${own.join(", ")})` : null, n: bare.n });
                     } else chars.push(ink.n >= 4 ? { color, n: ink.n } : {});
                   }
                 }
