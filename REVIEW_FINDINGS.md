@@ -5162,10 +5162,12 @@ check of the document this round was for did.
   of three. It needs more than one batch of spans on the page to yield
   between calls — the reason its page is dense.
 - The edge sheets of that candidate showed a black comma after a green link
-  digit ("ure 3,") coloured green — new in this release, black in v1.3.1.
-  Punctuation was read through the same window as a letter, padded into its
-  neighbours, and the comma read the digit's green edge. It is read on its own
-  box now; a struck red comma's own ink is red, and stays red.
+  digit ("ure 3,") coloured green — new in this release, black in v1.3.1 (see
+  the limitation below). Reading punctuation on its own box was tried and
+  withdrawn: agy showed the letters' core band misses a comma, and with the
+  band widened, a page built with known colours showed the reading wrong in
+  both directions — a mark is a handful of pixels, and its text-layer box can
+  sit off its glyph — so it fixed this comma by luck and broke others.
 
 ### Known limitations
 
@@ -5186,6 +5188,11 @@ check of the document this round was for did.
   borders were read.
 - Small caps set as glyph variants of the regular face are still processed
   (R51).
+- In a span coloured character by character, a punctuation mark takes the
+  colour of the letter before it when its padded reading agrees, and the
+  padding reaches that letter: a black comma right after a coloured word (a
+  green link digit) can come out in the word's colour. New with per-character
+  colouring in this release.
 - On a highlight drawn on the page (a yellow band behind a phrase), a mask
   takes the highlight's colour, and its padding paints it a little past the
   band's edge (a thin strip under an unhighlighted heading above it); a kept
