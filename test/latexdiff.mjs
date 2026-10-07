@@ -28,20 +28,27 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- The page --------------------------------------------------------------
 // Times-Roman advance widths (AFM, per 1000 em) for what the page uses.
-const AFM = { a: 444, b: 500, c: 444, d: 500, e: 444, f: 333, g: 500, h: 500, i: 278, j: 278, k: 500, l: 278, m: 778, n: 500, o: 500, p: 500, q: 500, r: 333, s: 389, t: 278, u: 500, v: 500, w: 722, x: 500, y: 500, z: 444, " ": 250 };
+const AFM = { a: 444, b: 500, c: 444, d: 500, e: 444, f: 333, g: 500, h: 500, i: 278, j: 278, k: 500, l: 278, m: 778, n: 500, o: 500, p: 500, q: 500, r: 333, s: 389, t: 278, u: 500, v: 500, w: 722, x: 500, y: 500, z: 444, " ": 250, ",": 250, ".": 250, "(": 333, ")": 333, "'": 333, "-": 333 };
 const SIZE = 8;
 const width = (t) => [...t].reduce((s, c) => s + (AFM[c] ?? 500), 0) * SIZE / 1000;
-const WORDS = "the reader keeps each line in view while the column moves on and every word stays where the page set it so that nothing drifts across the measure".split(" ");
+// Punctuation in every colour, and black marks right after coloured words: the
+// runs around them must keep their colours. (Each mark's own colour is not
+// checked: on this page's standard, unembedded font the text layer's character
+// boxes drift off the canvas glyphs, so a mark's box is no ground truth.)
+const WORDS = "the reader's line keeps (each) word in view, while the column moves on. every well-set word stays where the page put it, so nothing drifts across the measure.".split(" ");
 let wi = 0;
 const words = (n) => Array.from({ length: n }, () => WORDS[wi++ % WORDS.length]).join(" ");
+const esc = (t) => t.replace(/[()\\]/g, (m) => "\\" + m);
 const COL = { k: "0 0 0", r: "1 0 0", b: "0 0 1" };
-// Each line: runs of [colour, word count]; red runs are struck, blue underlined.
+// Each line: runs of [colour, word count] — or [colour, literal text]; red
+// runs are struck, blue underlined. The literal "," and "." are black marks
+// right after a coloured word.
 const PATTERNS = [
   [["k", 3], ["r", 3], ["k", 2], ["b", 3]],
   [["r", 9]],
-  [["k", 2], ["b", 4], ["k", 3]],
+  [["k", 2], ["b", 4], ["k", ","], ["k", 3]],
   [["b", 8]],
-  [["k", 4], ["r", 2], ["b", 2], ["k", 1]],
+  [["k", 4], ["r", 2], ["k", "."], ["b", 2], ["k", 1]],
 ];
 function buildPdf() {
   let c = "";
@@ -57,16 +64,18 @@ function buildPdf() {
     const split = row % 2 === 1;
     let x = left;
     c += `BT /F1 ${SIZE} Tf ${x} ${y} Td\n`;
-    const pieces = runs.map(([col, n], i) => [col, words(n) + (i < runs.length - 1 ? " " : "")]);
+    // A literal mark joins the word before it: no space, and no gap, in between.
+    const gapAfter = (i) => split && i < runs.length - 1 && typeof runs[i + 1][1] !== "string";
+    const pieces = runs.map(([col, n], i) => [col, (typeof n === "string" ? n : words(n)) + (i < runs.length - 1 && typeof runs[i + 1][1] !== "string" ? " " : "")]);
     pieces.forEach(([col, text], i) => {
-      c += `${COL[col]} rg [(${text})${split && i < pieces.length - 1 ? ` -${GAP}` : ""}] TJ\n`;
+      c += `${COL[col]} rg [(${esc(text)})${gapAfter(i) ? ` -${GAP}` : ""}] TJ\n`;
     });
     c += "ET\n";
     pieces.forEach(([col, text], i) => {
       const w = width(text.trimEnd());
       if (col === "r") bars.push({ kind: "strike", x0: x, x1: x + w, y: y + SIZE * 0.25, col });
       if (col === "b") bars.push({ kind: "under", x0: x, x1: x + w, y: y - 1.5, col });
-      x += width(text) + (split && i < pieces.length - 1 ? (GAP * SIZE) / 1000 : 0);
+      x += width(text) + (gapAfter(i) ? (GAP * SIZE) / 1000 : 0);
     });
   }
   for (const b of bars) c += `${COL[b.col]} RG 0.4 w ${b.x0.toFixed(2)} ${b.y.toFixed(2)} m ${b.x1.toFixed(2)} ${b.y.toFixed(2)} l S\n`;
