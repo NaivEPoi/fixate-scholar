@@ -5161,6 +5161,11 @@ check of the document this round was for did.
   bar points covered, 33 wrong colours); on the fix it passes, three runs out
   of three. It needs more than one batch of spans on the page to yield
   between calls — the reason its page is dense.
+- The edge sheets of that candidate showed a black comma after a green link
+  digit ("ure 3,") coloured green — new in this release, black in v1.3.1.
+  Punctuation was read through the same window as a letter, padded into its
+  neighbours, and the comma read the digit's green edge. It is read on its own
+  box now; a struck red comma's own ink is red, and stays red.
 
 ### Known limitations
 
