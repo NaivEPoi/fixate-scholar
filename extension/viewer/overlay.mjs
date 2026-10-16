@@ -9,6 +9,7 @@ import { ReferencesFeature } from "./references/citations.mjs";
 import { HyphenVocabulary, installFlowCopy, loadWordList } from "./copytext.mjs";
 import { extractStructureHints } from "./typography/pdfhints.mjs";
 import { currentFileUrl } from "./file-param.mjs";
+import { BUILD } from "../build.mjs";
 
 // Crisper page canvases: PDF.js rasterizes each page at devicePixelRatio.
 // On standard-density displays (dpr < 2) the glyph rasterization at ~1×
@@ -132,6 +133,11 @@ addEventListener("pageshow", () => {
 async function openNatively(url) {
   if (openingNatively) return;
   openingNatively = true;
+  if (!(await workerIsCurrent())) {
+    openingNatively = false;
+    showStaleWorkerNote();
+    return;
+  }
   const reply = await chrome.runtime
     .sendMessage({ type: "fx-bypass-once", url })
     .catch(() => null);
@@ -141,6 +147,48 @@ async function openNatively(url) {
   }
   openingNatively = false;
   if (reply?.reason === "file-access") showFileAccessNote();
+}
+
+// Is the background worker the one these files describe? The browser stores
+// the worker's script when the extension is installed or reloaded and keeps
+// running it, restart after restart, while an unpacked extension's files move
+// on and this page loads from them as they are now. A worker from an earlier
+// install answers the bypass request in its own old way — re-intercepting the
+// local PDF it just let through, so the button did nothing — and no change
+// to the worker reaches it. It is asked first, and must answer with this
+// page's own build: an older worker answers with its build, or, from before
+// the question existed, not at all.
+async function workerIsCurrent() {
+  if (!chrome.runtime?.sendMessage) return true;
+  const reply = await chrome.runtime.sendMessage({ type: "fx-worker" }).catch(() => null);
+  return reply?.build === BUILD;
+}
+
+// The one way to a current worker is reloading the extension, which installs
+// its script afresh — what the Reload button on the extensions page does. A
+// restart does not: the browser keeps the worker it stored, and so does a new
+// manifest version (measured once, R53: a worker installed at 0.1.0 outlived
+// a bump to 0.2.0 across restarts). The reload closes every page of the
+// extension, this document's tab with it, so the note says so
+// (test/stale-worker.mjs).
+function showStaleWorkerNote() {
+  if (document.getElementById("fxStaleWorkerNote")) return;
+  const note = document.createElement("div");
+  note.id = "fxStaleWorkerNote";
+  note.className = "fx-load-error";
+  note.append(
+    "The browser is still running FixateScholar's background worker from an earlier install, so this button can't reach the current one. ",
+  );
+  const link = document.createElement("a");
+  link.id = "fxReloadExtension";
+  link.textContent = "Reload FixateScholar";
+  link.href = "#";
+  link.addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.runtime.reload();
+  });
+  note.append(link, " — this closes the document; open it again afterwards.");
+  document.getElementById("outerContainer")?.prepend(note);
 }
 
 /** Why a local file can't be opened, and the one place to change it. */
