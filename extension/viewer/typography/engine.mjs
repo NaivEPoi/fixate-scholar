@@ -1171,13 +1171,49 @@ export class TypographyEngine {
       const pitch = gaps.length
         ? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
         : rows[0].h * 1.2;
+      // A body-height row and an off-size row are cut apart even inside the
+      // size tolerance below. That tolerance is for a paragraph's own
+      // variation; it also let a code listing set at 70% of the body size
+      // (its line numbers nearer 75%) run on from the paragraph above it into
+      // one block, whose lowercase words were then counted over the listing's
+      // rows too, fell short of four a row, and the paragraph went onto the
+      // canvas as a table with it (two body paragraphs over a 19-line listing:
+      // 43 rows, 141 words against the 172 needed). The body size is the
+      // page's: a row at it is body text, a row well under it is not, and a
+      // change between the two is a block boundary. Measured on the stream's
+      // own items — a column stream's `h` is the baseline's, so a listing row
+      // sharing a baseline with the other column's prose carries body height.
+      const ownH = (r) => {
+        let m = 0;
+        for (const p of r.items) m = Math.max(m, p.item.height || 0);
+        return m || r.h;
+      };
+      const body = rows.map((r) => ownH(r) >= dominant * 0.9);
+      // Only a RUN of the other size is a boundary: three rows, or fewer that
+      // carry prose. A sub- or superscript sits on its own baseline and so
+      // makes a row of its own, a few small glyphs between two body rows —
+      // one row, or two where one line's subscripts meet the next line's
+      // superscripts. Cut there, a sentence between two equations was a block
+      // of its own, short of lowercase words, and went onto the canvas as a
+      // table (measured on two papers). Such a run keeps its neighbours' size.
+      for (let i = 0; i < rows.length;) {
+        let j = i;
+        while (j < rows.length && body[j] === body[i]) j++;
+        const real = j - i >= 3 || rows.slice(i, j).some((r) => proseWords(r) >= 3);
+        if (!real) {
+          const around = i > 0 ? body[i - 1] : j < rows.length ? body[j] : body[i];
+          for (let k = i; k < j; k++) body[k] = around;
+        }
+        i = j;
+      }
       const groups = [];
       let cur = [rows[0]];
       for (let i = 1; i < rows.length; i++) {
         const gap = rows[i - 1].y - rows[i].y;
         const dh = Math.abs(rows[i].h - rows[i - 1].h);
         if (gap > Math.max(pitch * 1.5, rows[i].h * 1.8) ||
-            dh > Math.max(rows[i].h, rows[i - 1].h) * 0.3) {
+            dh > Math.max(rows[i].h, rows[i - 1].h) * 0.3 ||
+            body[i] !== body[i - 1]) {
           groups.push(cur);
           cur = [];
         }
@@ -1329,6 +1365,29 @@ export class TypographyEngine {
             if (pb.yBot - below.yTop > pageH * 0.16) break; // vertical gap
             const plc = lowerWords(pb.items);
             if (plc >= pb.rows.length * 4 && plc >= 4) break; // running prose
+            // ...or the shape of it: a body-height row of four lowercase
+            // words and the next body-height row carrying on with two — a
+            // line and its continuation, the last line of a paragraph being
+            // short. The average above is diluted by rows that carry no
+            // words — a small-caps heading cut in with the paragraph under
+            // it, a sub- or superscript on a baseline of its own — and once
+            // the figure's own wordy label rows were cut out of such a block
+            // (R54), two body lines above a figure read as its content. The
+            // off-size rows are passed over, not counted against it. The
+            // first of the two must be a LINE: from the column's left edge
+            // (a first-line indent allowed) across most of its measure. A
+            // table's description cells make the same word counts — "Generate
+            // a string with a random length" over "Generate an empty string"
+            // — but start at their column, a third of the way in, and span a
+            // third of the region; a paragraph's lines fill it.
+            const bodyRows = pb.rows.filter((r) => r.items.some((q) => (q.item.height || 0) >= dominant * 0.9));
+            let para = false;
+            for (let k = 1; k < bodyRows.length && !para; k++) {
+              if (lowerWords(bodyRows[k - 1].items) < 4 || lowerWords(bodyRows[k].items) < 2) continue;
+              const [x0, x1] = rowSpan(bodyRows[k - 1]);
+              para = regW > 0 && x1 - x0 >= regW * 0.7 && x0 - regX0 <= regW * 0.1;
+            }
+            if (para) break;
             if (pb.h > dominant * 1.15) break; // heading/title
             if (isCaptionLead(pb.lead)) break; // the previous figure's caption
             budget -= Math.max(0, pb.yTop - pb.yBot);
