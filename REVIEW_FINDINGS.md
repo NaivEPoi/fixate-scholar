@@ -5240,3 +5240,43 @@ check of the document this round was for did.
   stored worker across restarts and a version bump is the measurement above.)
 - For the author's Chrome the one-time remedy is that reload; the viewer now
   says so instead of doing nothing.
+
+### Verification
+
+- `npm test` 298/298, naming guard and vendor check passed. `test/latexdiff.mjs`
+  PASS (six runs: four zooms and two scrolling). `test/native-button.mjs` PASS
+  on http, on a local file with file access, and `--no-file-access`;
+  `test/stale-worker.mjs` PASS.
+- The combined gate, both corpora: PASS on 00e4610 (34.3 min, every stage
+  49/49, no retries, not contended; the native-button edits above landed in
+  the working tree while its private lanes were still launching, so it is not
+  a clean record of either tree) and PASS again on ac199a2, the committed
+  tree (34.9 min, every stage 49/49, no retries, not contended).
+- Edge sheets on ac199a2: public 14/14 (150 sheets), private 35/35 (375
+  sheets). agy read every sheet and raised 9 public and 7 private claims;
+  each was checked against the sentence on the sheet, against the same sheet
+  from the v1.3.2 review where one existed, and the emphasis claims with
+  `wordshot`. Twelve were false positives (a caption read as a typeface
+  change, a bold caption clipped on both sides, a link border taken for text
+  colour, a paper's own spacing, emphasis that does start at the word, red
+  that is on the whole reference, italic tails that are italic). The rest
+  are pre-existing — pixel-identical in the v1.3.2 sheets — and recorded
+  under the limitations below. No regression; the two gates and the sheets
+  agree with the one engine change since 1.3.2 (a4820f8).
+
+### Known limitations (found in this round's sheets; identical in v1.3.2)
+
+- In an author–year citation whose author is a word of a few letters, the
+  author loses the citation colour and is emphasised while the year keeps
+  it: the few-letter rule (R52) wants strong colour, and the paper's link
+  blue is not.
+- A reference split by a line break so that only its number starts the next
+  line ("Listing" at one line's end, "2" at the next's) colours the word and
+  leaves the number black and emphasised.
+- The last line of a pseudocode block that abuts a heading can be processed
+  as prose (an assignment line emphasised).
+- A text item that runs from a small-caps run into regular words ("Proof of
+  Lemma 5.5. We apply a") is set in small caps throughout.
+- A small-caps logotype whose text layer splits it ("B ASEECHO", "ZC OVER")
+  gets a widened gap at the split and emphasis on the second part — the
+  glyph-variant small caps of R51.
