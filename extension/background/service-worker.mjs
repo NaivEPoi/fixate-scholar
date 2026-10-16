@@ -3,6 +3,7 @@
 // responseHeaders conditions), with a webNavigation fallback for file:// and
 // a context-menu fallback for anything else.
 
+import { BUILD } from "../build.mjs";
 import { clearCached } from "../viewer/references/lookup-cache.mjs";
 import { normalizeBypassUrl, urlsMatch } from "../viewer/settings-client.mjs";
 
@@ -356,12 +357,29 @@ async function leaveForLocalFile(tabId, url) {
   return { ok: true, back: true };
 }
 
+// Security: a message is acted on only from this extension's own pages.
+const ownPage = (sender) =>
+  sender.id === chrome.runtime.id && !!sender.url && sender.url.startsWith(chrome.runtime.getURL(""));
+
+// Which files this worker was loaded from. The browser stores the worker's
+// script at install and keeps running it across restarts, while an unpacked
+// extension's files move on and its pages load from them as they are now —
+// one such worker, installed in July, answered the viewer's bypass request
+// through October, re-intercepting every local PDF the "native" button let
+// through, and no fix since reached it. A worker from before this message
+// answers nothing at all (the port closes with no response), which the viewer
+// reads the same way: not current (overlay.mjs, workerIsCurrent).
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== "fx-worker") return false;
+  if (!ownPage(sender)) return false;
+  sendResponse({ build: BUILD });
+  return false;
+});
+
 // "Open in native viewer": escape to the browser's native viewer, once.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== "fx-bypass-once" || !msg.url) return false;
-  // Security: only accept messages from this extension's own pages
-  if (sender.id !== chrome.runtime.id) return false;
-  if (!sender.url || !sender.url.startsWith(chrome.runtime.getURL(""))) return false;
+  if (!ownPage(sender)) return false;
 
   const cleanUrl = normalizeBypassUrl(msg.url);
   const tabId = sender.tab?.id;

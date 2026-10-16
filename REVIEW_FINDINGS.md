@@ -5198,3 +5198,45 @@ check of the document this round was for did.
   band's edge (a thin strip under an unhighlighted heading above it); a kept
   run inside the highlight shows a slightly darker box. Identical in v1.3.1;
   a fix was tried this round and not kept, unproven.
+
+## R53 — the native button that no fix had reached: a background worker kept from the first install
+
+### Found
+
+- The "native" button still did nothing in the author's own Chrome after R52.
+  The extension there is the unpacked checkout, with file access on, so none
+  of R52's conditions held. The cause was outside the code: the browser was
+  running the background worker it had stored when the extension was first
+  loaded in July — a worker from before the one-time bypass, before the
+  file-bypass check, before every native-button fix since. The viewer pages
+  load from the files as they are now; the worker does not. Its old handler
+  re-navigated the tab to the local file and its own listener intercepted that
+  navigation straight back into the viewer, which is "nothing happens".
+- Measured in a throwaway profile (the June tree installed, then the current
+  files put under it): a browser restart keeps the stored worker; so does a
+  new manifest version (installed at 0.1.0, bumped to 0.2.0, restarted: still
+  the June worker; the prefs' registration record stays at 0.1.0, since the
+  re-registration resolves to the registration that exists and stores nothing
+  new). Only reloading the extension — the extensions page's Reload, or
+  `chrome.runtime.reload()` — installs the current worker. Every harness runs
+  a fresh profile, so no test could see this.
+
+### Fixed
+
+- The worker answers an `fx-worker` message with the build its files carry
+  (`extension/build.mjs`, a literal held equal to the manifest version by
+  `test/unit/build.test.mjs`; not `getManifest().version`, which the browser
+  hands every page and worker alike). Before acting on a native click the
+  viewer asks, and unless the answer is its own build — an older worker answers
+  its own, one from before the question answers nothing — it says the browser
+  is still running the worker from an earlier install and offers to reload the
+  extension, which closes the document's tab (measured) and says so.
+- `test/stale-worker.mjs` installs the extension with the handshake removed at
+  a lower version, puts the current files under the running browser, and
+  checks the button names the old worker rather than acting, once, and that
+  the reload link installs the current worker, after which the button works.
+  (It does not restart the browser: the harness's command-line install did
+  not keep a stable extension id across a restart, and the survival of the
+  stored worker across restarts and a version bump is the measurement above.)
+- For the author's Chrome the one-time remedy is that reload; the viewer now
+  says so instead of doing nothing.
