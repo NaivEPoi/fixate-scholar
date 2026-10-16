@@ -5280,3 +5280,84 @@ check of the document this round was for did.
 - A small-caps logotype whose text layer splits it ("B ASEECHO", "ZC OVER")
   gets a widened gap at the split and emphasis on the second part — the
   glyph-variant small caps of R51.
+
+## R54 — a paragraph cut into one block with the listing under it
+
+### Found
+
+- On a paper outside both corpora (reported by the author from an open tab;
+  nothing of it enters the repo), two body paragraphs over a numbered code
+  listing had no emphasis at all. `whyskip` named the reason: `blk-table`,
+  31 spans. The block cutter had run the paragraphs and the listing into one
+  block — the listing is set at 70% of the body size and its line numbers
+  nearer 75%, just inside the cutter's 30% size tolerance, with no whitespace
+  gap between — and the table rule then counted the paragraphs' lowercase
+  words over the listing's rows too: 43 rows, 141 words against the 172 that
+  four a row demand, so the whole block, paragraphs included, went onto the
+  canvas as a table.
+
+### Fixed
+
+- The block cutter (`blocksOf`) now also cuts between body-height rows and a
+  RUN of off-size rows — body height being the page's dominant size, a row at
+  90% of it or more counts as body — even when the two are within the size
+  tolerance. The tolerance is for a paragraph's own variation; a change
+  across the body line is a block boundary. Row height is taken from the
+  stream's own items, since a column stream's row carries the whole
+  baseline's height and a listing row sharing a baseline with the other
+  column's prose would otherwise read as body-height.
+- A run counts only when it is three rows long or carries prose (a row with
+  three words of three letters or more). The first version cut at every
+  off-size row, and a sub- or superscript on its own baseline is one: a
+  sentence between two equations then became a block of its own, short of
+  lowercase words, and went onto the canvas as a table — two to four lines
+  on one private page, two on another, both processed before. Shorter runs
+  keep their neighbours' size. The gate's `whyskip` records were diffed page
+  by page between the runs to find this; the diff is what to read after any
+  change to the cutter.
+- The caption's upward walk, which absorbs every block between a caption and
+  the prose above it as figure content, judged "prose" by an average of four
+  lowercase words a row over the block. With the finer cut a figure's own
+  wordy label rows no longer pad that average, and on two private pages two
+  body lines above a figure — one block with the small-caps heading over
+  them, the other with sub- and superscript rows between them — fell under
+  it and were absorbed. The walk now also stops at the shape of a paragraph:
+  a body-height row of four lowercase words followed by the next body-height
+  row carrying two, the off-size rows passed over — and the first of the two
+  a line, from the column's left edge across 70% of its measure. Without
+  that last condition the description cells of a table ("Generate a string
+  with a random length" over "Generate an empty string") made the shape, the
+  walk stopped under the table, and the table was processed: the gate's
+  `tables` probe caught it on a public paper (one gate run failed on it).
+- On that page the paragraphs now form their own block (prose-dense,
+  processed) and the listing its own (absorbed as the figure body of the
+  caption under it). The same cut frees, across the corpora, body paragraphs
+  that had been merged with the smaller block under them — a paper's whole
+  abstract skipped with the copyright block, paragraphs above figures
+  absorbed as figure content, paragraphs over a bulleted list read as a
+  table — and separates footnotes from the paragraph above them, which the
+  footnote rule then skips as it should.
+
+### Verification
+
+- `npm test` 298/298, naming guard and vendor check passed. On the reported
+  document (outside both corpora): `whyskip` page 3 from 50 unprocessed prose
+  spans with `blk-table` 31 to 21 with none; `wordshot` on three words of the
+  two paragraphs `processed=true`; its 13 edge sheets captured on the final
+  engine, rows identical to the first capture, page 3 and every other page
+  read.
+- The combined gate, both corpora, on the working tree: PASS with the first
+  cut (49/49), PASS with the run rule (49/49), FAIL with the paragraph-shape
+  stop without the line condition (public 13/14: `tables` on one paper, a
+  table processed), PASS with the final version (49/49, 35.2 min, no retries,
+  not contended). Every run's `whyskip` records were diffed page by page
+  against the previous engine's (ac199a2): 773 pages; the final version
+  changes 55 pages' classification, 32 of them in the count of unprocessed
+  prose. Each of those 32 was dumped span by span with both engines and read:
+  every page that processes more now does so on body prose the original had
+  skipped (as a table, as the figure above a caption, as part of the
+  copyright block — one paper's whole abstract, another's first three
+  introduction lines); every page that skips more now skips a footnote the
+  original had processed as the tail of the paragraph above it; the two
+  regressions of the intermediate versions (prose above a figure absorbed;
+  the table processed) are gone, those pages back to the original's output.
