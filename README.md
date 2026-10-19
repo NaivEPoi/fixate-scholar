@@ -276,6 +276,25 @@ off the main thread, after the page's own render. `node test/diag-layout.mjs
 provider it ran on and the regions it found; the release gate takes
 `--layout` to run the probes with the option on.
 
+### Line classifier (experimental, off by default)
+
+A second model, trained in this repository (`ml/`): a gradient-boosted
+classifier over each text LINE of a page — its place against the column,
+its face and size against the body's, the shape of its text, its two
+neighbours each side, its block — that names it a heading, caption,
+formula, table row, figure label, header or footer. No pixels, no
+runtime: a few milliseconds a page on any CPU, in the engine's own thread.
+Trained on DocBank (500k arXiv pages, token labels from the LaTeX source)
+and DocLayNet's scientific pages, held out by paper. On 940 held-out
+DocLayNet pages it names lines correctly 94.9% of the time (keep-vs-process
+F1 0.947) where the stock layout detector reaches 89.5% (0.884), and it is
+far stronger on the lines the engine most often gets wrong: headings
+(0.95 vs 0.78 F1), table rows (0.93 vs 0.66) and headers and footers
+(0.93 vs 0.57). Like the layout model it is evidence only: a line it names
+a kept class keeps its text; it never un-keeps what the rules kept. The
+model file (`extension/vendor/layout/line-model.json`) is produced by
+`ml/README.md`'s recipe and is not in the repository.
+
 ## Naming and legal
 
 This project deliberately does **not** use the trademarked two-word brand name commonly

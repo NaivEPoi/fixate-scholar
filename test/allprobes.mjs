@@ -183,7 +183,8 @@ try {
   await sleep(1500);
   // --layout: the layout model option on (layout-model.mjs), so a gate can be
   // run with regions on and off and the skip-reason diff read between them.
-  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true, layoutModel: ${process.argv.includes("--layout")} }, r))`);
+  // --line: the line classifier option on (line-model.mjs), measured the same way.
+  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true, layoutModel: ${process.argv.includes("--layout")}, lineModel: ${process.argv.includes("--line")} }, r))`);
   // The document-wide warm-up refcolor and citepoint wait for: enough
   // emphasis to know the engine is running, and the reference index built.
   for (let i = 0; i < 40; i++) {

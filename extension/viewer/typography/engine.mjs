@@ -21,6 +21,28 @@ import { scanRules } from "./rules.mjs";
 import { artUnder, barsNear, vectorArt } from "./vector-art.mjs";
 import { colourRuns, inkColour, wrapInk } from "./ink-runs.mjs";
 import { anchorNear } from "./pdfhints.mjs";
+import { buildLines, pageFeatures, tokensOfItems } from "./line-features.mjs";
+import { classify, loadLineModel } from "./line-model.mjs";
+
+// The line classifier (line-model.mjs; trained in ml on DocBank and
+// DocLayNet, exported by export_js.py), fetched once when the option is on;
+// null when the file is not there. A keep class at LINE_MODEL_MIN or better
+// keeps its candidates — evidence like the layout model's regions.
+let lineModelPromise = null;
+let lineModelLoaded = null; // the model once resolved, for the synchronous first stage
+const LINE_MODEL_MIN = 0.75;
+function ensureLineModel() {
+  if (lineModelPromise) return lineModelPromise;
+  lineModelPromise = (async () => {
+    try {
+      const res = await fetch(new URL("../../vendor/layout/line-model.json", import.meta.url));
+      if (!res.ok) return null;
+      lineModelLoaded = loadLineModel(await res.json());
+      return lineModelLoaded;
+    } catch { return null; }
+  })();
+  return lineModelPromise;
+}
 
 // Spans rewritten per idle callback. Each batch reads its rects, rewrites
 // its spans and is measured again — one forced layout a batch — so a bigger
@@ -337,6 +359,7 @@ export class TypographyEngine {
   constructor(app, settings) {
     this.#app = app;
     this.#settings = settings;
+    if (settings?.lineModel === true) ensureLineModel();
   }
 
   /**
@@ -485,9 +508,11 @@ export class TypographyEngine {
     // baseline taken without it.
     if (this.#settings && settings && settings.layoutModel !== this.#settings.layoutModel) this.#ruleBaseline.clear();
     this.#settings = settings;
+    // The line model is fetched before the re-process, so the pages the
+    // switch re-processes see it (a harness turns the option on after load).
+    const modelReady = settings?.lineModel === true ? ensureLineModel() : Promise.resolve();
     if (!this.#enabled || unchanged) return Promise.resolve();
-    this.#restoreAll();
-    return this.#processAll();
+    return modelReady.then(() => { this.#restoreAll(); return this.#processAll(); });
   }
 
   /** Re-process every rendered page from a clean (restored) state. Used when
@@ -2162,7 +2187,14 @@ export class TypographyEngine {
       const i = lines.indexOf(ln);
       if (inCol(i).length !== band.length) return no("row"); // its row is its own
       const prevT = inCol(i - 1).map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim();
-      if (prevT && !/[.:!?]$/.test(prevT) && prevT.split(" ").length > 3) return no("prev");
+      // ...unless the line above is more than a line and a half away: a
+      // box's bottom edge and the blank between boxes stand there (the
+      // second prompt listing's title, under the first listing's last
+      // line, which ends in no period, R55).
+      const hT = Math.max(...band.map((p) => p.item.height || 0)) || 10;
+      const prevY = inCol(i - 1).length ? Math.max(...inCol(i - 1).map((p) => p.item.transform[5])) : null;
+      const gapAbove = prevY == null ? Infinity : prevY - Math.max(...band.map((p) => p.item.transform[5]));
+      if (prevT && !/[.:!?]$/.test(prevT) && prevT.split(" ").length > 3 && gapAbove < hT * 1.6) return no("prev");
       const nextT = inCol(i + 1).map((p) => p.item.str).join(" ").trim();
       return /^[a-z]/.test(nextT) ? no("next") : true;
     };
@@ -4209,6 +4241,41 @@ export class TypographyEngine {
             candidateDivs.delete(pairs[i].div);
             pairs.splice(i, 1);
           }
+        }
+        // The line classifier (line-model.mjs; ml): the page's items
+        // become the lines and features of line-features.mjs — the same
+        // numbers the model was trained on, which a fixture test holds the
+        // two extractors to — and a line named a heading, caption, formula,
+        // table row, figure label, header or footer at LINE_MODEL_MIN or
+        // better keeps its candidates (`model-<class>`). Evidence, like the
+        // layout model's regions: it never un-keeps. The model is fetched
+        // once the option is on; a page processed before it arrives is
+        // processed by the rules alone.
+        if (this.#settings?.lineModel === true && lineModelLoaded && pairs.length && pageView.pdfPage?.view) {
+          try {
+            const view = pageView.pdfPage.view;
+            const pageW = view[2] - view[0], pageH = view[3] - view[1];
+            const fontNameOf = (it) => { try { return pageView.pdfPage.commonObjs.get(it.fontName)?.name ?? it.fontName; } catch { return it.fontName; } };
+            const items = allPairs.map((p) => p.item).filter((it) => it?.transform && it.str);
+            const shifted = items.map((it) => ({ ...it, transform: [it.transform[0], it.transform[1], it.transform[2], it.transform[3], it.transform[4] - view[0], it.transform[5] - view[1]] }));
+            const tokens = tokensOfItems(shifted, pageW, pageH, fontNameOf);
+            // each token remembers its item (tokensOfItems keeps the source index in slot 9)
+            const lines = buildLines(tokens);
+            const feats = pageFeatures(lines);
+            const lineOf = new Map();
+            lines.forEach((L, li) => { for (const t of L) lineOf.set(items[t[9]], li); });
+            const verdicts = feats.map((f) => classify(lineModelLoaded, f));
+            if (globalThis.__fxDebug) (globalThis.__fxLineModel ??= {})[pageView.id] = lines.map((L, li) => ({ text: L.map((t) => t[0]).join(" ").slice(0, 60), label: verdicts[li].label, p: +verdicts[li].p.toFixed(3) }));
+            for (let i = pairs.length; i--; ) {
+              const li = lineOf.get(pairs[i].item);
+              if (li === undefined) continue;
+              const v = verdicts[li];
+              if (!v.keep || v.p < LINE_MODEL_MIN) continue;
+              reject(pairs[i].div, "model-" + v.label);
+              candidateDivs.delete(pairs[i].div);
+              pairs.splice(i, 1);
+            }
+          } catch { /* the rules alone */ }
         }
         const art = baseline?.art;
         for (let i = pairs.length; art?.length && i--; ) {

@@ -1,0 +1,4 @@
+# data, models, the venv and generated fixtures stay local (DocBank asks for no redistribution)
+data/
+models/
+.venv/
