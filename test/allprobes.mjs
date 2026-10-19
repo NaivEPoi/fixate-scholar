@@ -158,6 +158,11 @@ try {
   }
   if (!extId) throw new Error("extension did not load");
   const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(URL0)}`, "PUT");
+  // The front tab: a target opened here sits behind about:blank, hidden,
+  // and the overlay applies a settings change only once the page is visible
+  // — the --layout option set below never reached the engine (R55). The
+  // default run sets only the defaults, so it is unchanged.
+  await fetch(`http://127.0.0.1:${PORT}/json/activate/${tab.id}`).catch(() => {});
   await sleep(2500);
   const live = (await http("/json/list")).find((t) => t.id === tab.id) ?? tab;
   cdp = connect(live.webSocketDebuggerUrl, { where: "viewer" });
@@ -176,7 +181,9 @@ try {
   // The zoom BEFORE the engine runs, so every page is processed once, at it.
   await ev(`(() => { window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(ZOOM)}; return true; })()`);
   await sleep(1500);
-  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))`);
+  // --layout: the layout model option on (layout-model.mjs), so a gate can be
+  // run with regions on and off and the skip-reason diff read between them.
+  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true, layoutModel: ${process.argv.includes("--layout")} }, r))`);
   // The document-wide warm-up refcolor and citepoint wait for: enough
   // emphasis to know the engine is running, and the reference index built.
   for (let i = 0; i < 40; i++) {
@@ -279,7 +286,17 @@ try {
       const n = await ev(`document.querySelectorAll(".textLayer span[data-fx-done]").length`).catch(soft(0));
       if (n > 0) engineSeen = true;
     }
-    if (!engineSeen) throw new Error(`the engine never processed a span in this document (${pages.length} page(s)) — no verdict`);
+    if (!engineSeen) {
+      // A scan with an OCR layer (R55, `ocr-layer`): the engine keeps every
+      // span by design, and that is a verdict on the document, not a
+      // harness failure — nothing to probe, nothing wrong.
+      const ocr = await ev(`document.querySelectorAll('.textLayer span[data-fx-why="ocr-layer"]').length`).catch(soft(0));
+      if (ocr > 0) {
+        console.log(`${LABEL} zoom=${ZOOM} pages=${pages.length} scan: ${ocr} span(s) kept as an OCR layer — nothing to process; PASS`);
+        process.exit(0);
+      }
+      throw new Error(`the engine never processed a span in this document (${pages.length} page(s)) — no verdict`);
+    }
   }
   for (const pg of deferred) await measurePage(pg, true);
 

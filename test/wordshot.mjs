@@ -18,7 +18,7 @@
 // every one turned out to be a downsampling artifact, by-design behaviour, or
 // the manuscript's own typo.
 //
-// Usage: --url= --label= --page=N --find="word" [--pad=60] [--zoom=2.6] [--nth=1]
+// Usage: --url= --label= --page=N --find="word" [--pad=60] [--zoom=2.6] [--scale=1] [--nth=1]
 import { spawn } from "node:child_process";
 import { appendFileSync, rmSync, writeFileSync } from "node:fs";
 import { browserPath, extensionDir, outDir, profileDir, killBrowser, devtoolsPort } from "./lib/env.mjs";
@@ -26,6 +26,7 @@ import { browserPath, extensionDir, outDir, profileDir, killBrowser, devtoolsPor
 const arg = (n, d) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 const URL0 = arg("url"), LABEL = arg("label", "doc"), PAGE = parseInt(arg("page", "1"), 10);
 const FIND = arg("find"), PAD = parseInt(arg("pad", "60"), 10), ZOOM = arg("zoom", "2.6");
+const SCALE = parseFloat(arg("scale", "1")); // device pixels per CSS px in the capture: --zoom=1.0 --scale=4 shows what the reader sees at 100%, magnified
 const NTH = parseInt(arg("nth", "1"), 10);
 if (!URL0 || !FIND) { console.error('usage: --url= --page=N --find="word"'); process.exit(2); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -134,7 +135,7 @@ try {
     const shot = await send("Page.captureScreenshot", {
       format: "png", captureBeyondViewport: true,
       clip: { x: cx, y: cy, width: Math.min(hit.view.w + PAD * 2, hit.page.w),
-              height: hit.view.h + PAD * 2, scale: 1 },
+              height: hit.view.h + PAD * 2, scale: SCALE },
     });
     const file = `${outDir()}/word-${LABEL}-p${PAGE}-${FIND.replace(/\W+/g, "").slice(0, 14)}.png`;
     writeFileSync(file, Buffer.from(shot.data, "base64"));

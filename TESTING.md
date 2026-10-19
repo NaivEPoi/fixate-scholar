@@ -197,6 +197,8 @@ no error at all — which a sweep then reported as a product failure.
 | `node test/latexdiff.mjs [--zooms=1,1.5,2,3] [--debug] [--pdf-out=<file>]` | revision markup on a synthetic latexdiff-style page it builds itself (invented words; black, deleted red with a stroked strike-out, added blue with a stroked underline, colours changing inside one text item, down to the page foot; dense enough that the pass yields between idle callbacks). Page 2 is checked at each zoom and, at 100% and 150%, while the viewer scrolls mid-pass: every processed span and coloured run is the colour of the canvas ink under it, and no mask covers a strike-out or underline bar where the canvas drew it (a capped canvas squeezes its content into a box a few px short of the page; a pass that resumes after a scroll must move its recorded geometry with the page). Run it whenever colour sampling, bar cuts or mask geometry change | `latexdiff: PASS` (exit 1 on any wrong colour or covered bar point) |
 | `node test/native-button.mjs [pdf-url]` | the viewer's “native” button end-to-end, clicked: navigate → intercepted → fx-bypass-once → the tab lands on the original URL ONCE: a reload and a new tab are intercepted again, and nothing is written to sync bypassUrls (a lasting bypass is the user's own Options entry). http(s) uses a one-time DNR allow rule scoped to the tab; file:// a storage.session bypass. `--full-list` first fills bypassUrls to the 8 KB sync item cap, where the old persist-on-click failed silently. `--no-file-access <file-url>` turns “Allow access to file URLs” off (a store install's default — the harness's command-line install has it on, which hid the bug): the browser then refuses every extension navigation to file:, so the button must step BACK to the native view the popup left behind the viewer, and in a context-menu tab (nothing behind) explain the setting and link to it. Run it on a file name with an apostrophe too — `encodeURIComponent` leaves `'` and the browser escapes it, which once double-encoded the parameter so the file never loaded | `PASS — native once, intercepted again, nothing saved`; with `--no-file-access`, `PASS — no file access: back to the native view, or the setting explained` |
 | `node test/stale-worker.mjs [pdf-url]` | the background worker the browser kept from an earlier install (R53): it installs the extension with the worker's `fx-worker` handshake removed at a lower version, then puts the current files under the running browser (a pull into an unpacked checkout; the stored worker survives a restart AND a version bump too, measured once and recorded in R53) and checks that the “native” button names the old worker instead of acting through it (one note, a second click adds none) and that the note's Reload link installs the current worker, after which the button leaves the viewer. Every other harness runs a fresh profile, which is why none of them could see this | `PASS — the old worker is named, not used; its reload installs the current one` |
+| `node test/diag-layout.mjs --url=<pdf> [--pages=N] [--provider=wasm\|webgpu\|webnn]` | the layout model option (R55, experimental): with the option on, per page the model's time, the execution provider and the regions it found with class, score and box, plus the spans those regions kept (`region-*` reasons). It brings its tab to the front (a settings toggle reaches the engine only on a visible page), sets the option and arms the debug flag before the first baseline (which is cached per page), and `--provider=` forces one provider; a provider that opens a session but cannot run the graph (WebGPU on this export) is left for the next, once. Exits 2 when the model was unavailable on every page, and then prints the loader's or the detector's error, so an empty run cannot pass for a clean one | per-page lines; `the model was unavailable on every page — …` is a failure of the setup, not a verdict |
+| `node test/refpreview.mjs [pdf-url] [--page=N] [--expect=link\|text]` | the hover preview of an in-paper reference (R55): from `--page` on, the first page with a coloured reference, hovered at its centre; the popup must show a `.fx-preview` with a rendered clip and a page number, found through the PDF's link (`--expect=link`) or the document's text (`--expect=text`), and hide when the pointer leaves | `PASS — the reference's target previewed on hover, and hid after` |
 | `node test/stylemodes.mjs [url|template] [page]` | settings surface: dynamic+bundled font bolds AND preserves italic originals; emphasisMode “none” renders zero .fx-b with spans in the bundled face; none+original leaves the page pristine. Defaults to a body page of a template when given no args | `dynOk=true fontOnlyOk=true inertOk=true`, and `italicPreserved` either `true` or `n/a`. `n/a` means the page has NO italic-faced processed spans, so that check could not run — it is not a pass. No corpus paper has an italic TEXT face, so `n/a` is the normal result |
 | `node test/diag-drag.mjs <paper> [--tag=] [--trace]` | REAL mouse-drag selection (R16 guard): the drag selects something; PDF.js's `.endOfContent` stays in the `.textLayer` MID-DRAG (its pointerup reset hides the bug, so it is sampled during the drag); every fully-covered span's text is in the selection (non-bold tails not lost); the copy event carries it; emphasis uses a property `::selection` honors. `--trace` prints the selection after each mouse step | `<paper>: PASS` (exit 1 otherwise). Dispatches at INTEGER viewport coords — fractional ones do not register as a drag at all (caret placed, never extended), which mimics a product bug |
 | `node test/dump-stream.mjs <paper> <page> <left\|right\|full> [filter]` | the engine's-eye line/stream geometry (debug `#classifyBlocks`) | inspection |
@@ -452,6 +454,20 @@ All write to `test/out/`. Add `--headful` (where supported) for real-DPI.
   `REF_LEADER` or `INTERNAL_REF` changes in `parser.mjs`, change this copy too
   and re-derive the negative control** — revert the product fix, keep the
   harness fix, and check the count actually drops (21 → 11 for R45).
+  Since R55 the probe joins EVERY span of the page (kept ones included — a
+  kept math span between "…proof of Theorem" and "2, for every" used to
+  vanish from its view and it reported a reference the page does not
+  print); a reference running through a kept span is set aside as `kept=N`
+  on the page's line, not counted; a whitespace-only span is not one a
+  reference runs through; and a miss names its spans (`done:`/`kept:` and
+  the text) with the product's own joined text around them when the page
+  was processed under `__fxDebug`, so a hard break or an interleaved line
+  is visible in the log instead of guessed at.
+- **A scan with an OCR layer** (R55, `ocr-layer`): the engine keeps every
+  span of such a document by design, so `allprobes.mjs` and `edgepairs.mjs`
+  report it as a scan and PASS — "nothing to process" is the verdict on the
+  document, not a harness failure. The harnesses still refuse a document on
+  which the engine processed nothing for any other reason (no verdict).
 - **Kept faces stay kept**: `node test/fontkeep.mjs --url=<pdf> --all` → 0
   violations, i.e. no processed span resolves to a math, monospace, small-caps or
   bold-display face. Reads the font off each processed span and resolves it
@@ -489,6 +505,10 @@ All write to `test/out/`. Add `--headful` (where supported) for real-DPI.
   `emph=0` falsifies "emphasis applied here" outright. About twenty claimed
   render defects went through this during one gate and every one turned out to be
   a downsampling artifact, by-design behaviour, or the manuscript's own typo.
+  A defect that shows only at the reader's zoom — a mask's 2 px padding floor
+  taking an italic letter's overhang at 100% and not at 260% (R55) — is
+  captured with `--zoom=1.0 --scale=4`: the page as it is read, magnified
+  four times in device pixels.
 - **Baseline alignment**:
   `node test/diag-baseline.mjs <paper> <page> [--headful] [--zoom=1.25] [--dsf=1.75]`
   → `medBotErr` in the aligned range (~−2 to −3); per-span `topErr/botErr`.

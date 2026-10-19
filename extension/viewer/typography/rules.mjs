@@ -143,3 +143,33 @@ export function scanRules(data, W, H, ppu, ppuY) {
   }
   return out;
 }
+
+/**
+ * The colour each box shows in an RGBA bitmap: the most common pixel value
+ * inside it, 2 px in from its edges, on a grid of at most ~4k samples. A flat
+ * fill is one value and the ink on it a minority; the inset leaves out the
+ * anti-aliased rim. Boxes are [x0, y0, x1, y1] in bitmap px. Paper (every
+ * channel above 247) comes back null: a mask in that colour is the white one
+ * it has anyway. For the engine's shaded-box masks (vector-art.mjs shades).
+ */
+export function shadeColors(data, W, H, boxes) {
+  return boxes.map(([x0, y0, x1, y1]) => {
+    const l = Math.max(0, Math.round(x0) + 2), r = Math.min(W, Math.round(x1) - 2);
+    const t = Math.max(0, Math.round(y0) + 2), b = Math.min(H, Math.round(y1) - 2);
+    if (r - l < 2 || b - t < 2) return null;
+    const step = Math.max(1, Math.ceil(Math.sqrt(((r - l) * (b - t)) / 4096)));
+    const counts = new Map();
+    let best = -1, bestN = 0;
+    for (let y = t; y < b; y += step) {
+      for (let x = l, i = (y * W + l) * 4; x < r; x += step, i += 4 * step) {
+        const key = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+        const n = (counts.get(key) ?? 0) + 1;
+        counts.set(key, n);
+        if (n > bestN) { bestN = n; best = key; }
+      }
+    }
+    if (best < 0) return null;
+    const rr = best >> 16, gg = (best >> 8) & 255, bb = best & 255;
+    return rr > 247 && gg > 247 && bb > 247 ? null : `rgb(${rr}, ${gg}, ${bb})`;
+  });
+}

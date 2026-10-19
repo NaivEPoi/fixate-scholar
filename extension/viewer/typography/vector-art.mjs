@@ -43,13 +43,37 @@ const intersect = (a, b) => {
  * `bars`, when given, collects the HORIZONTAL rules left out above — thinner
  * than THIN, longer than they are thick — for barsNear.
  */
-export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infinity, Infinity, Infinity], bars = null) {
+export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infinity, Infinity, Infinity], bars = null, meta = null) {
   const out = [];
   let ctm = [1, 0, 0, 1, 0, 0], fill = "#000000", stroke = "#000000", clip = view, pendingClip = false, lineWidth = 1;
   const stack = [];
   let inAnnotation = 0;
+  // `meta`, when given, learns what kind of page this is: how many text
+  // operators draw INVISIBLY (text rendering mode 3 or 7 — an OCR layer
+  // laid over a scan, whose glyphs are the scan's pixels) and how large the
+  // largest image is, as a fraction of the view. A page whose text is all
+  // invisible is a scan: its text layer says what the OCR read, not what the
+  // page shows, and redrawn it replaced "number" with "ritimbtr" (R55).
+  // The rendering mode is graphics state: saved by q and restored by Q. A
+  // figure that sets mode 3 inside its own q…Q (labels drawn as clips, or
+  // hidden) must not make the body text after it count as hidden — it did,
+  // and a born-digital page of a private paper was taken for a scan.
+  let textMode = 0;
+  const modeStack = [];
+  const viewArea = Number.isFinite(view[2] - view[0]) && Number.isFinite(view[3] - view[1]) ? (view[2] - view[0]) * (view[3] - view[1]) : 0;
+  const imageOps = new Set([OPS.paintImageXObject, OPS.paintImageXObjectRepeat, OPS.paintJpegXObject, OPS.paintInlineImageXObject].filter((v) => v !== undefined));
   for (let i = 0; i < fnArray.length; i++) {
     const fn = fnArray[i], args = argsArray[i];
+    if (meta) {
+      if (fn === OPS.save || fn === OPS.paintFormXObjectBegin || fn === OPS.beginGroup) modeStack.push(textMode);
+      else if (fn === OPS.restore || fn === OPS.paintFormXObjectEnd || fn === OPS.endGroup) { if (modeStack.length) textMode = modeStack.pop(); }
+      else if (fn === OPS.setTextRenderingMode) textMode = args?.[0] ?? 0;
+      else if (fn === OPS.showText || fn === OPS.showSpacedText) { if (textMode === 3 || textMode === 7) meta.hiddenText++; else meta.visibleText++; }
+      else if (imageOps.has(fn) && viewArea > 0) {
+        const b = transformBox(ctm, [0, 0, 1, 1]);
+        meta.imageArea = Math.max(meta.imageArea, ((b[2] - b[0]) * (b[3] - b[1])) / viewArea);
+      }
+    }
     switch (fn) {
       case OPS.save: stack.push([ctm, fill, stroke, clip, lineWidth]); break;
       case OPS.restore: if (stack.length) [ctm, fill, stroke, clip, lineWidth] = stack.pop(); break;
@@ -94,6 +118,14 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
         if (inAnnotation || !painted || op === OPS.endPath) break;
         // A path in paper colour inks nothing: a white fill, a white outline.
         const strokes = !filledOnly, fills = op !== OPS.stroke && op !== OPS.closeStroke;
+        // ...but a white fill INSIDE a coloured one is a shade of its own: a
+        // white box in a grey panel, whose text must get white masks, not
+        // the panel's grey (R55 review). Recorded only inside a shade, so a
+        // chart's white rects do not fill the list.
+        if (meta?.shades?.length && fills && WHITE.test(fill) && painted[2] - painted[0] >= 12 && painted[3] - painted[1] >= 8 &&
+            meta.shades.some((s) => s[0] <= painted[0] + 0.5 && s[1] <= painted[1] + 0.5 && s[2] >= painted[2] - 0.5 && s[3] >= painted[3] - 0.5)) {
+          meta.shades.push([painted[0], painted[1], painted[2], painted[3], fill]);
+        }
         if (!(strokes && !WHITE.test(stroke)) && !(fills && !WHITE.test(fill))) break;
         const w = painted[2] - painted[0], h = painted[3] - painted[1];
         if (Math.min(w, h) < THIN) {
@@ -101,10 +133,25 @@ export function vectorArt({ fnArray, argsArray }, OPS, view = [-Infinity, -Infin
           if (bars && filledOnly && h < THIN && w > 2 * Math.max(h, 0.5)) bars.push(painted);
           break;
         }
+        // A coloured fill wide and tall enough to carry a line of text — a
+        // callout's shading, a prompt box, a banded table row — is a SHADE
+        // (`meta.shades`, with the fill as written): a span on it is masked
+        // in its colour, not paper white, which showed as a white band
+        // behind every line of a grey "Key Finding" box (R55, two private
+        // papers). The engine samples the colour the page really shows from
+        // its baseline render (rules-worker.mjs), so a translucent fill and a
+        // pattern read right; the fill string is the stand-in without it.
+        if (meta && fills && !WHITE.test(fill) && w >= 12 && h >= 8) (meta.shades ??= []).push([painted[0], painted[1], painted[2], painted[3], fill]);
         out.push(painted);
         break;
       }
     }
+  }
+  // The largest shades only: a bar chart fills hundreds of small rects, and
+  // each one is sampled from the bitmap.
+  if (meta?.shades?.length > 48) {
+    const area = (s) => (s[2] - s[0]) * (s[3] - s[1]);
+    meta.shades = meta.shades.sort((a, b) => area(b) - area(a)).slice(0, 48);
   }
   // By bottom edge, for artUnder's binary search: a plot-heavy page has tens
   // of thousands of boxes, and every candidate line is tested against them.

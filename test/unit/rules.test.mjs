@@ -10,7 +10,7 @@
 // (a thick dark band) never is.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanRules } from "../../extension/viewer/typography/rules.mjs";
+import { scanRules, shadeColors } from "../../extension/viewer/typography/rules.mjs";
 
 const W_PAGE = 400, H_PAGE = 300; // page px
 
@@ -67,4 +67,22 @@ for (const k of [1.29, 2, 2.41, 3]) {
 test("scanRules: a blank page has no rules", () => {
   const { data, W, H } = raster([], 2);
   assert.deepEqual(scanRules(data, W, H, 2, 2), []);
+});
+
+test("shadeColors: the colour a box shows is its most common pixel, paper is null (R55)", () => {
+  // A 100x60 bitmap: paper white, a grey box at [10, 5, 50, 25] with a dark
+  // "line of text" across it, and a translucent-looking pale box beside it.
+  const W = 100, H = 60;
+  const data = new Uint8ClampedArray(W * H * 4).fill(255);
+  const put = (x0, y0, x1, y1, r, g, b) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const i = (y * W + x) * 4; data[i] = r; data[i + 1] = g; data[i + 2] = b; }
+  };
+  put(10, 5, 50, 25, 230, 230, 230); // the grey box
+  put(12, 12, 48, 16, 20, 20, 20); // text ink on it: a minority of its pixels
+  put(52, 5, 58, 25, 250, 250, 250); // near-paper: not worth a colour
+  const got = shadeColors(data, W, H, [[10, 5, 50, 25], [52, 5, 58, 25], [0, 0, 100, 60], [0, 0, 3, 3]]);
+  assert.equal(got[0], "rgb(230, 230, 230)", "the box's fill, not the text on it");
+  assert.equal(got[1], null, "paper-coloured fills need no colour");
+  assert.equal(got[2], null, "the whole page is mostly paper");
+  assert.equal(got[3], null, "a box too small to sample inside its rim");
 });

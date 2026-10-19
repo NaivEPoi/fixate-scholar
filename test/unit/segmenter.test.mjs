@@ -9,6 +9,16 @@ import {
 
 const FRACTION = { emphasisMode: "fraction" };
 
+test("emphasizeParts leaves a list label and a statistic's variable plain (R55)", () => {
+  const parts = (text) => emphasizeParts(text, FRACTION, 0, null).parts;
+  const label = parts("(a) the vertices are adjacent");
+  assert.deepEqual(label.slice(0, 3).map((p) => [p.text, p.bold]), [["(", false], ["a", false], [")", false]], "the a of (a) is a label");
+  assert.ok(label.some((p) => p.bold), "the words after it are emphasised");
+  const stat = parts("located manually (n = 617) and df = 2, p < 0.001");
+  for (const v of ["n", "df", "p"]) assert.equal(stat.find((p) => p.text === v)?.bold, false, `${v} before a relation is a variable`);
+  assert.equal(parts("a value and an item").find((p) => p.text === "a")?.bold, true, "the article a is still a word");
+});
+
 test("segment covers input exactly", () => {
   const text = "The quick brown-fox, jumps (over) 12 dogs.";
   const joined = segment(text).map((s) => s.text).join("");
@@ -147,6 +157,21 @@ test("emphasizeParts saccade interval skips words across spans", () => {
     .filter((p) => p.bold)
     .map((p) => p.text);
   assert.deepEqual(boldWords, ["on", "thr"]); // words 0 and 2
+});
+
+test("emphasizeParts: an address whose underscore the text layer lost is left whole (R55)", () => {
+  // "ab_cd@example.org, efgh_ij@example.org" reached the segmenter as
+  // "ab cd@example.org, efgh ij@example.org" (the underscore drawn as a rule
+  // has no character), and "ab" and "efgh" were emphasised as words.
+  const line = "ab cd@example.org, efgh ij@example.org, klm@lab.example.org";
+  const { parts } = emphasizeParts(line, FRACTION);
+  assert.equal(parts.filter((p) => p.bold).length, 0, "nothing in a contact line is a word to emphasise");
+  assert.equal(parts.map((p) => p.text).join(""), line);
+  // One address in prose keeps the word before it: "write to" is prose.
+  const prose = "please write to bob@example.org today";
+  const bold = emphasizeParts(prose, FRACTION).parts.filter((p) => p.bold).map((p) => p.text);
+  assert.ok(bold.some((t) => "write".startsWith(t)), "the verb before a lone address is still emphasised");
+  assert.ok(!bold.some((t) => "bob@example.org".startsWith(t)), "the address is not");
 });
 
 test("emphasizeParts leaves numbers unbolded", () => {

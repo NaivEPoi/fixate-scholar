@@ -67,7 +67,11 @@ function escapeForQuery(raw) {
     .replace(/\+/g, "%2B");
 }
 
-/** The only schemes the viewer will open a document from. */
+import { isLocalFileUrl } from "./settings-client.mjs";
+
+/** The only schemes the viewer will open a document from. A file: URL must
+ *  also be LOCAL (isLocalFileUrl): with a host it is a UNC path, an SMB
+ *  connection any web page could make the viewer open (R55). */
 const DOCUMENT_SCHEMES = ["http", "https", "file", "blob", "chrome-extension"];
 
 /** Remove the `file` parameter, leaving any other query intact. */
@@ -99,7 +103,9 @@ function hasDocumentScheme(value) {
   }
   const colon = decoded.indexOf(":");
   if (colon === -1) return false;
-  return DOCUMENT_SCHEMES.includes(decoded.slice(0, colon).toLowerCase().trim());
+  const scheme = decoded.slice(0, colon).toLowerCase().trim();
+  if (scheme === "file") return isLocalFileUrl(decoded);
+  return DOCUMENT_SCHEMES.includes(scheme);
 }
 
 /** Rewrite `?file=<raw url>` in place so PDF.js parses back the real URL. */
@@ -157,7 +163,7 @@ export function normalizeFileParam() {
  */
 export function currentFileUrl() {
   const url = new URLSearchParams(window.location.search).get("file");
-  return url && /^(https?|file):/.test(url) ? url : null;
+  return url && (/^https?:/.test(url) || isLocalFileUrl(url)) ? url : null;
 }
 
 // Frame busting / clickjacking defense: FixateScholar viewer is only intended to

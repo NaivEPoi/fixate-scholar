@@ -50,6 +50,14 @@ export const DEFAULTS = Object.freeze({
   // When editing a local PDF (file://), save changes directly back to the local
   // file rather than saving as a new download copy.
   saveLocalFile: true,
+  // The layout model (experimental, off): a small document-layout detector
+  // (PP-DocLayout-S through ONNX Runtime Web — WebGPU, the NPU through WebNN,
+  // or WebAssembly) run on each page's baseline render in the rules worker.
+  // Its regions — figure, table, caption, footnote, formula, header, footer,
+  // heading — keep text the rules would have processed; they never un-keep.
+  // Needs the runtime and the model under extension/vendor/layout (`npm run
+  // fetch-layout`); without them the option does nothing.
+  layoutModel: false,
 });
 
 const hasStorage = typeof chrome !== "undefined" && chrome.storage?.sync;
@@ -87,18 +95,39 @@ export function fitBypassUrls(urls, key = "bypassUrls", limit = SYNC_ITEM_BYTES)
   return urls.slice(start);
 }
 
+/**
+ * A file: URL the browser reads from THIS computer: no host, or localhost,
+ * and no UNC path. "file://host/share/x.pdf" is \\host\share\x.pdf on
+ * Windows — an SMB connection to that host, made with the user's
+ * credentials, and viewer.html is web-accessible to every page (R55
+ * security review). Every place a file: URL is accepted asks this.
+ */
+export function isLocalFileUrl(url) {
+  try {
+    const u = new URL(String(url).trim());
+    if (u.protocol !== "file:") return false;
+    const host = u.hostname.toLowerCase();
+    return (host === "" || host === "localhost") && !u.pathname.startsWith("//");
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeBypassUrl(url) {
   if (!url || typeof url !== "string") return "";
   try {
     const u = new URL(url.trim());
-    if (u.protocol !== "http:" && u.protocol !== "https:" && u.protocol !== "file:") {
+    if (u.protocol !== "http:" && u.protocol !== "https:" && !isLocalFileUrl(u.href)) {
       return "";
     }
     u.hash = "";
     return u.href;
   } catch {
+    // Not a URL the parser accepts: an http(s) string is kept as typed; a
+    // file: one that does not parse cannot be checked for its host, so it
+    // is not kept.
     const trimmed = url.split("#")[0].trim();
-    if (!/^(https?|file):/i.test(trimmed)) return "";
+    if (!/^https?:/i.test(trimmed)) return "";
     return trimmed;
   }
 }

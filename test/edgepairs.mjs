@@ -287,7 +287,14 @@ try {
   if (unsettled.length) process.exitCode = 75;
   // Nothing captured is not a clean review: a document always has captions or
   // headings, so zero strips means the reasons were never recorded.
-  if (!rows.length) throw new Error("no edge strip found — nothing was captured");
+  if (!rows.length) {
+    // ...unless the document is a scan with an OCR layer (R55, `ocr-layer`):
+    // the engine keeps every span of it by design, so there is nothing to
+    // capture and nothing wrong.
+    const ocr = await ev(`document.querySelectorAll('.textLayer span[data-fx-why="ocr-layer"]').length`).catch(() => 0);
+    if (ocr > 0) console.log(`${LABEL}: scan — ${ocr} span(s) kept as an OCR layer, nothing to capture; PASS`);
+    else throw new Error("no edge strip found — nothing was captured");
+  }
 } catch (e) {
   // A capture that never happened must not read as success.
   console.error(`${LABEL} edgepairs error: ${e.message || e}`);

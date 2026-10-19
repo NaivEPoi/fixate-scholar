@@ -1,6 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULTS, getSettings, normalizeBypassUrl, urlsMatch, fitBypassUrls } from "../../extension/viewer/settings-client.mjs";
+import { DEFAULTS, getSettings, isLocalFileUrl, normalizeBypassUrl, urlsMatch, fitBypassUrls } from "../../extension/viewer/settings-client.mjs";
+
+test("a file: URL is local only without a host (or localhost) and never a UNC path (R55 security review)", () => {
+  // "file://host/share/x.pdf" is \\host\share\x.pdf on Windows: an SMB
+  // connection to that host with the user's credentials, which any web page
+  // could make the web-accessible viewer open.
+  for (const ok of ["file:///C:/papers/a.pdf", "file://localhost/C:/a.pdf", "file:///home/u/a.pdf", " file:///C:/a.pdf "]) assert.equal(isLocalFileUrl(ok), true, ok);
+  for (const bad of ["file://attacker.example/share/x.pdf", "file://10.0.0.1/s/x.pdf", "file:////server/share/x.pdf", "FILE://evil/x.pdf", "https://a.example/x.pdf", "javascript:1", "", null]) assert.equal(isLocalFileUrl(bad), false, String(bad));
+  // The bypass list keeps local file: URLs and drops the others, parsed or not.
+  assert.equal(normalizeBypassUrl("file:///C:/papers/a.pdf#page=2"), "file:///C:/papers/a.pdf");
+  assert.equal(normalizeBypassUrl("file://attacker.example/share/x.pdf"), "");
+  assert.equal(normalizeBypassUrl("file://10.0.0.1/s/x.pdf"), "");
+  assert.equal(normalizeBypassUrl("https://a.example/x.pdf#f"), "https://a.example/x.pdf");
+});
 
 test("DEFAULTS defines all required settings with correct types", () => {
   assert.equal(DEFAULTS.saveLocalFile, true, "saveLocalFile must default to true");

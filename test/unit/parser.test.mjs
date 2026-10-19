@@ -13,6 +13,8 @@ import {
   findInternalRefs,
   findInternalRefsAcrossBreaks,
   resolveCitation,
+  REF_LEADER_END,
+  REF_ITEM_START,
 } from "../../extension/viewer/references/parser.mjs";
 
 // Synthetic extractor output: single column, y decreasing down the page.
@@ -401,6 +403,19 @@ test("findCitations: numeric single and list", () => {
   assert.deepEqual(found[1].keys, ["2", "3"]);
 });
 
+test("findCitations: a space inside the bracket, a compressed year list, an accent set apart (R55)", () => {
+  const spaced = findCitations("Here are some references: [ 1, 2].");
+  assert.equal(spaced.length, 1);
+  assert.deepEqual(spaced[0].keys, ["1", "2"]);
+  // natbib's "(2021b,c)": the bare letter is the previous year's suffix.
+  const compressed = findCitations("Barrero et al. (2021b,c) document the shift.");
+  assert.equal(compressed.length, 1);
+  assert.deepEqual(compressed[0].keys, ["Barrero-2021b", "Barrero-2021c"]);
+  // A name whose ä the PDF composes from a spacing diaeresis and the letter.
+  const accented = findCitations("Prompt distillation (Kujanp¨a¨a et al., 2025) showed that it works.");
+  assert.equal(accented.length, 1);
+});
+
 test("findCitations: numeric range expansion", () => {
   const found = findCitations("Several works [1-3] explore this.");
   assert.deepEqual(found[0].keys, ["1", "2", "3"]);
@@ -570,6 +585,12 @@ test("resolveCitation splits keys on the LAST hyphen (hyphenated surnames)", () 
   assert.equal(resolveCitation(["Ben-Or-1994"], entries).length, 1);
 });
 
+test("resolveCitation matches a name whatever way its accents were composed (R55)", () => {
+  const entries = [{ number: null, surname: "Kujanpää", year: "2025", raw: "Kujanpää, A. (2025). Prompt distillation." }];
+  assert.equal(resolveCitation(["Kujanp¨a¨a-2025"], entries).length, 1, "spacing diaeresis before the letter");
+  assert.equal(resolveCitation(["Kujanpää-2025"], entries).length, 1, "combining diaeresis");
+});
+
 test("resolveCitation maps numeric keys to entries", () => {
   const entries = parseReferences(NUMERIC_DOC);
   const resolved = resolveCitation(["2"], entries);
@@ -589,6 +610,14 @@ test("findInternalRefs matches in-paper pointers, not prose", () => {
   const found = findInternalRefs(text).map(({ start, end }) => text.slice(start, end));
   assert.deepEqual(found, ["Figure 3", "Table 9", "Algorithm 2", "Section 5.1", "Appendix B"]);
   assert.equal(findInternalRefs("the figure shows a table of results").length, 0);
+});
+
+test("findInternalRefs: statement kinds, abbreviated leaders, REVTeX's lettered subsection (R55)", () => {
+  const pick = (t) => findInternalRefs(t).map(({ start, end }) => t.slice(start, end));
+  assert.deepEqual(pick("see Remark 2, Proposition 3.1 and Assumptions 7 and 14"), ["Remark 2", "Proposition 3.1", "Assumptions 7 and 14"]);
+  assert.deepEqual(pick("for example 3 of them; the remark 2 is"), [], "lowercase statement words are prose");
+  assert.deepEqual(pick("files fig1 and fig3.ps; see Fig. 3, fig 4 and Fig.5"), ["Fig. 3", "fig 4", "Fig.5"], "an abbreviation takes its period or a space");
+  assert.deepEqual(pick("outlined in Sec. II B. Section II A new method"), ["Sec. II B", "Section II"]);
 });
 
 test("findInternalRefs matches the section SYMBOL, not only the spelled-out word", () => {
@@ -614,6 +643,53 @@ test("findInternalRefs matches the section SYMBOL, not only the spelled-out word
 
   // The symbol without a number is punctuation, not a reference.
   assert.equal(findInternalRefs("a §-delimited list and the § itself").length, 0);
+});
+
+test("REF_LEADER_END matches a leader at a line's end (its backslashes were lost once, R55)", () => {
+  // Built from a string: "\\b" and "\\s" — a plain "\b" is a backspace
+  // character and "\s" an s, and the regex matched nothing, so no reference
+  // broken over a line end was coloured.
+  for (const t of ["as shown in Figure", "see Section", "Table ", "in §", "see Fig."]) assert.ok(REF_LEADER_END.test(t), t);
+  for (const t of ["consecutive", "the figure of merit", "Section 4"]) assert.ok(!REF_LEADER_END.test(t), t);
+  assert.ok(REF_ITEM_START.test("4.2 shows"));
+  assert.ok(REF_ITEM_START.test("4a"), "a lettered item, 'Figure 4a'");
+  assert.ok(!REF_ITEM_START.test("shows 4"));
+});
+
+test("findCitations scans a long run of capitals in linear time (R55 security review)", () => {
+  // A hostile PDF's one text operator of forty thousand capitals held the
+  // viewer's thread for six seconds: every capital was a start position for
+  // the narrative-citation name. With the word-start lookbehind it is a
+  // millisecond, and ordinary citations are unchanged.
+  const t0 = performance.now();
+  findCitations("A".repeat(40000));
+  findCitations("Table " + "I".repeat(40000));
+  assert.ok(performance.now() - t0 < 500, `took ${(performance.now() - t0).toFixed(0)} ms`);
+  const c = findCitations("as von Werra et al. (2020) and Smith and Jones (2019b) show; see Kujanpää (2021).");
+  assert.deepEqual(c.map((x) => x.keys?.[0] ?? x.text ?? x.start), c.map((x) => x.keys?.[0] ?? x.text ?? x.start));
+  assert.equal(c.length, 3);
+  assert.equal(findCitations("the xAbc (2020) code").length, 0, "a name does not start inside a word");
+  // An elided particle of one letter and an apostrophe is the one place a
+  // name legitimately follows a letter (R55 review).
+  for (const t of ["as d’Ascoli et al. (2021) show", "see d'Aspremont (2008)", "l’Ecuyer (1999) gives", "O'Neil (2016) too"]) {
+    assert.equal(findCitations(t).length, 1, t);
+  }
+  assert.equal(findCitations("the xd'Aspremont (2008) code").length, 0);
+});
+
+test("findInternalRefs: a section sign after a statute's name points into the law, not the paper", () => {
+  // "47 CFR § 15.407(k)" (R55, an IEEE paper citing the FCC rules) was coloured
+  // as an in-paper section. The title number and the source's abbreviation
+  // stand right before the sign — on the same line, or on the line above.
+  const pick = (t) => findInternalRefs(t).map(({ start, end }) => t.slice(start, end));
+  assert.deepEqual(pick("limits under 47 CFR § 15.407(k) [8] apply; see §4.2"), ["§4.2"]);
+  assert.deepEqual(pick("as 18 U.S.C. § 1030 forbids, and 15 U.S.C. §§ 41-58 too"), []);
+  assert.deepEqual(pick("under 47 C.F.R. § 15.407 and the Cal. Civ. Code § 1798.100"), []);
+  assert.deepEqual(pick("in 47 CFR\n§ 15.407 and Sec-\ntion 4"), []);
+  assert.deepEqual(findInternalRefsAcrossBreaks("in 47 CFR\n§ 15.407 and Sec-\ntion 4").map(({ start, end }) => "in 47 CFR\n§ 15.407 and Sec-\ntion 4".slice(start, end)), ["Sec-\ntion 4"]);
+  // The spelled-out leader is the paper's own: "Section 230" of a statute is
+  // not told apart, and a plain "§ 4" after a number that is not a title is.
+  assert.deepEqual(pick("in 2019 § 4 was revised"), ["§ 4"]);
 });
 
 test("findInternalRefs: a line-wrap with no space after the number is not swallowed", () => {
@@ -1140,4 +1216,80 @@ test("findInternalRefsAcrossBreaks: a reference hyphenated across a line break",
   // Unbroken text: identical to findInternalRefs.
   const t4 = "Section 3 and Tables 2-4 [5]";
   assert.deepEqual(findInternalRefsAcrossBreaks(t4), findInternalRefs(t4));
+});
+
+test("a bibliography without a heading (REVTeX) is found by its numbered run", () => {
+  const doc = lines([
+    "Body prose of the paper, which cites prior work [1] and [2, 3].",
+    "More body prose on the same subject, with nothing to do with lists.",
+    "Further body prose that fills the first half of the document.",
+    "And one more line of it, so the list below sits in the second half.",
+    "The method section, in prose, over several lines of text.",
+    "The evaluation section, in prose, over several lines of text.",
+    "The discussion section, in prose, over several lines of text.",
+    "The conclusion, in prose, and then the list.",
+    "[1] A. Vaswani, N. Shazeer, N. Parmar, et al. Attention is all you need. In Advances in",
+    { text: "Neural Information Processing Systems, pages 5998–6008, 2017." },
+    "[2] J. Devlin, M. Chang, K. Lee, and K. Toutanova. BERT: Pre-training of deep bidirectional",
+    { text: "transformers for language understanding. In NAACL, 2019." },
+    "[3] T. Brown, B. Mann, N. Ryder, et al. Language models are few-shot learners. In NeurIPS,",
+    { text: "2020." },
+  ]);
+  const { heading, body } = findReferencesBody(doc);
+  assert.equal(heading.synthetic, true);
+  assert.equal(heading.text, "");
+  assert.equal(body.length, 6);
+  assert.equal(parseReferences(doc).length, 3);
+});
+
+test("an enumerated list in the first half is not a bibliography", () => {
+  const doc = lines([
+    "[1] the first step of the method, described in prose.",
+    "[2] the second step, also in prose.",
+    "[3] the third step.",
+    "Body prose follows for the rest of the document, line after line.",
+    "More body prose.",
+    "More body prose.",
+    "More body prose.",
+    "More body prose.",
+  ]);
+  assert.deepEqual(parseReferences(doc), []);
+});
+
+test("non-English bibliography headings are recognised", () => {
+  for (const head of ["参考文献", "【参考文献】", "Literaturverzeichnis", "Références", "Referencias bibliográficas", "References and Notes"]) {
+    const doc = lines([
+      "Body prose citing [1] and [2].",
+      head,
+      "[1] A. Author. A title. In a venue, 2019.",
+      "[2] B. Author. Another title. In another venue, 2020.",
+    ]);
+    const { heading, body } = findReferencesBody(doc);
+    assert.equal(heading?.text, head, head);
+    assert.equal(body.length, 2, head);
+  }
+});
+
+test("a bibliography resumes after an acknowledgments block set between its columns", () => {
+  const doc = lines([
+    "Body prose of the paper, which cites prior work [1] and [2, 3].",
+    "More body prose on the same subject, with nothing to do with lists.",
+    "Further body prose that fills the first half of the document.",
+    "And one more line of it, so the list below sits in the second half.",
+    "The method section, in prose, over several lines of text.",
+    "The evaluation section, in prose, over several lines of text.",
+    "The conclusion, in prose, and then the list.",
+    "[1] A. Vaswani, N. Shazeer, N. Parmar, et al. Attention is all you need. In Advances in",
+    { text: "Neural Information Processing Systems, pages 5998–6008, 2017." },
+    "[2] J. Devlin, M. Chang, K. Lee, and K. Toutanova. BERT: Pre-training of deep bidirectional",
+    "Acknowledgments",
+    "This work was supported in part by a grant.",
+    { text: "transformers for language understanding. In NAACL, 2019." },
+    "[3] T. Brown, B. Mann, N. Ryder, et al. Language models are few-shot learners. In NeurIPS,",
+    { text: "2020." },
+  ]);
+  const { body } = findReferencesBody(doc);
+  assert.ok(body.some((l) => /^\[3\]/.test(l.text)), "the list continues past the block");
+  assert.ok(!body.some((l) => /supported in part/.test(l.text)), "the block's own lines are left out");
+  assert.equal(parseReferences(doc).length, 3);
 });

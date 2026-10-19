@@ -77,6 +77,24 @@ for (const [name, url] of CASES) {
   });
 }
 
+test("a file: URL with a host is dropped from ?file=, a local one kept (R55 security review)", async () => {
+  // viewer.html is web-accessible to every page, and "file://host/share/x.pdf"
+  // is a UNC path on Windows: the viewer, with file access on, would open an
+  // SMB connection to that host. The scheme gate reads the host too.
+  for (const bad of ["file://attacker.example/share/x.pdf", "file://10.0.0.1/s/x.pdf", "file:////server/share/x.pdf", "FILE://evil/x.pdf"]) {
+    const w = fakeWindow(`?file=${encodeURIComponent(bad)}`);
+    const { normalizeFileParam } = await load(w);
+    normalizeFileParam();
+    assert.equal(asPdfJsReadsIt(w.location.search), null, bad);
+  }
+  for (const ok of ["file:///C:/papers/a.pdf", "file://localhost/C:/a.pdf", "https://host.example/a.pdf"]) {
+    const w = fakeWindow(`?file=${encodeURIComponent(ok)}`);
+    const { normalizeFileParam } = await load(w);
+    normalizeFileParam();
+    assert.equal(asPdfJsReadsIt(w.location.search), ok, ok);
+  }
+});
+
 test("the fragment stays on location, where PDF.js reads the open parameters", async () => {
   const w = fakeWindow("?file=https://host.example/p.pdf?a=1&b=2", "#page=7");
   const { normalizeFileParam } = await load(w);
