@@ -171,3 +171,34 @@ papers of this project's own corpora the same engine leaves no span
 unreasoned; DocLayNet's scientific pages are a wider world (publisher
 PDFs, non-LaTeX journals, single pages without their document), which is
 exactly where a learned classifier adds to hand-written rules.
+
+## In the engine (2026-10-19)
+
+The model runs behind the `lineModel` option as keep-only evidence
+(engine `model-<class>` reasons). What it did on the project's own corpora
+(14 public, 35 private papers, through the release gate with `--line`)
+decided how much of it acts:
+
+- First policy, any kept class at 0.75 or better: the option gate passed
+  (49/49, 36.0 min); the skip-reason diff against the plain gate on the
+  same tree showed 44 pages changed, all of them new keeps (94 caption, 7
+  furniture, 3 heading, 3 table, 2 figure, 1 formula by reason), nothing
+  un-kept. Reading all 190 spans those keeps covered: about twenty real
+  gains (sub-figure captions, table cells, a small-caps table title, a
+  legend, a lettered sub-heading, table notes), about 170 losses — body
+  prose under or beside a figure, at the foot of a page, or a sentence
+  tail, named caption or furniture. A base-rate effect, not a contradiction
+  of the DocLayNet numbers: where the rules already catch nearly every
+  caption, the model's additional caption calls are almost all its errors.
+- Second policy (shipped): `LINE_MODEL_KEEP = { table: 0.75, heading: 0.9 }`.
+  The same 44 pages re-dumped: 8 keeps remain, all right (7 table cells /
+  a table title across three papers, one continuation line of a lettered
+  sub-heading), 0 losses. The lettered sub-headings scored 0.60–0.78 and a
+  prose line elsewhere 0.78, so no heading threshold separates them; 0.9
+  takes the certain one and leaves the rest to the rules. Option gate with
+  this policy: PASS, 49/49 in 34.7 min, no retries; the skip-reason diff against the plain gate on the same tree is exactly those four pages (773/773 pages compared), four new keeps — three table, one heading — and nothing else changed.
+- The useful edge the measurements found — the rules over-keeping prose as
+  `table-aligned` or `line-head` on publisher layouts — needs un-keeping,
+  which a keep-only integration cannot do. That is the follow-up, to be
+  judged on the extra corpus (`local/corpus-extra`), where those over-keeps
+  occur, rather than on the gate corpora, where they do not.

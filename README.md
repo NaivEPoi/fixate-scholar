@@ -286,12 +286,15 @@ formula, table row, figure label, header or footer. No pixels, no
 runtime: a few milliseconds a page on any CPU, in the engine's own thread.
 Trained on DocBank (500k arXiv pages, token labels from the LaTeX source)
 and DocLayNet's scientific pages, held out by paper. On 940 held-out
-DocLayNet pages it names lines correctly 94.9% of the time (keep-vs-process
-F1 0.947) where the stock layout detector reaches 89.5% (0.884), and it is
-far stronger on the lines the engine most often gets wrong: headings
-(0.95 vs 0.78 F1), table rows (0.93 vs 0.66) and headers and footers
-(0.93 vs 0.57). Like the layout model it is evidence only: a line it names
-a kept class keeps its text; it never un-keeps what the rules kept. The
+DocLayNet pages the shipped model names lines correctly 94.4% of the time
+(keep-vs-process F1 0.942) where the stock layout detector reaches 89.5%
+(0.884), and it is far stronger on the lines the engine most often gets
+wrong: headings (0.95 vs 0.78 F1), table rows (0.93 vs 0.66) and headers
+and footers (0.93 vs 0.57). Like the layout model it is evidence only, and
+deliberately narrow: only its table-row calls (at 0.75 or better) and its
+heading calls (at 0.9) keep a line's text, because on papers whose
+captions and footers the rules already catch, its extra caption and footer
+calls were mostly body prose; it never un-keeps what the rules kept. The
 model file (`extension/vendor/layout/line-model.json`) is produced by
 `ml/README.md`'s recipe and is not in the repository.
 

@@ -6152,8 +6152,40 @@ inline-math labels and is not shipped.
 ### In the engine
 
 Behind the `lineModel` option (off by default), as evidence like the
-layout model's regions: a line the model names a kept class at 0.75 or
-better keeps its candidates (`model-<class>`); nothing is un-kept.
-`allprobes` and the gate take `--line`, and the gate's output directory
-carries the option's name, so an option run is diffed against the plain
-run on the same tree. Details and the recipe: `ml/README.md`.
+layout model's regions: a line the model names a class in
+`LINE_MODEL_KEEP` at that class's confidence or better keeps its
+candidates (`model-<class>`); nothing is un-kept. `allprobes` and the gate
+take `--line`, and the gate's output directory carries the option's name,
+so an option run is diffed against the plain run on the same tree. Details
+and the recipe: `ml/README.md`.
+
+What the option did on this project's corpora decided the policy. The
+first integration kept any line the model named a kept class at 0.75 or
+better; the option gate passed (49/49, 36.0 min) and the skip-reason diff
+against the plain gate on the same tree showed 44 pages changed, every
+change a new keep (94 named caption, 7 header/footer, 3 heading, 3 table,
+2 figure, 1 formula), nothing un-kept. Reading every one of the 190 spans
+those keeps covered at the gate's zoom: about twenty were real gains the
+rules had missed — sub-figure captions, table cells, a small-caps table
+title, a legend, a lettered sub-heading, table notes — and about 170 were
+body prose: lines under or beside a figure, lines at the foot of a page,
+sentence tails, all named caption or furniture. The rules already catch
+nearly every caption and footer on LaTeX-set papers, so what the model
+adds on top of them in those classes is dominated by its own errors, however
+good its DocLayNet F1. Its table and heading calls were the opposite: the
+rules' weak classes, where every extra keep was right. The policy is now
+`LINE_MODEL_KEEP = { table: 0.75, heading: 0.9 }`. Re-dumping the 44 pages
+with it leaves 8 keeps — 7 table cells and a table title on three private
+papers, and the continuation line of a lettered sub-heading — and no
+loss. The heading threshold is high because the lettered sub-headings of
+one paper scored 0.60–0.78 while a prose line of another scored 0.78: no
+threshold separates them, so 0.9 keeps the one certain line and leaves the
+rest to the rules, emphasised as before. The option gate with this policy:
+PASS, 49/49 in 34.7 min, no retries; the skip-reason diff against the plain gate on the same tree is exactly those four pages (773/773 pages compared), four new keeps — three table, one heading — and nothing else changed.
+
+The lesson for the next step: the classifier's measured edge is where the
+rules over-keep (whole columns of prose sent to `table-aligned` or
+`line-head` on publisher layouts), and a keep-only integration cannot use
+it. Un-keeping — the model vetoing a weak rule reason at high confidence
+— is the follow-up, to be judged on the extra corpus where those
+over-keeps live, not on the gate corpora where they do not.
