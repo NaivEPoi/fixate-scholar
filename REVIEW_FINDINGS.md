@@ -6057,7 +6057,41 @@ on it unchanged.
   other the two dumps agree line for line, so the one-span difference is
   the run's, not the measure's. The USENIX paragraph read below was found
   in this diff.
-- Extra corpus (23 documents, not a gate corpus): EXTRA_RESULT.
+- The gate on the committed tree itself — d0d3e79, clean, the classifier's
+  option off — GATE PASS, 36.5 min, every stage 49/49: public allprobes
+  14/14 (8.8 min), public console 14/14 (2.4), public papers 1/1 (1.6),
+  private allprobes 35/35 (18.3), private console 35/35 (5.3). Its
+  skip-reason diff against the previous gate: 16 pages, one of which
+  changes its count — a public paper's table caption, restored by the
+  float-gap ceiling; the rest are the Title-Case rule naming lines the
+  figure rules named before.
+- The second agent: agy re-derived both gates' verdicts from the raw stage
+  logs (49/49 per stage, no contention) and the two skip-reason diffs
+  (16 pages / 1 count change; 1 page), reviewed the commits' diff (no
+  defect; versions consistent) and AGREED the tree is fit to tag. It
+  flagged two strings as possible private identifiers: a box title from
+  the extra corpus (public, a false positive) and three author e-mail
+  addresses in the segmenter test and its comments — those came from a
+  private paper's contact line and should never have been written; the
+  commit was rewritten before anything was pushed, so the addresses are in
+  no commit (e0348c4 is the scrubbed v1.4.0; the classifier's commit
+  rebased onto it as 59910fb, the same tree the gate ran on, since only
+  comments, a test fixture and these notes changed).
+- The gate with the layout option on (`--layout`), on the committed tree:
+  GATE PASS, 36.1 min, every stage 49/49, and its skip-reason diff against
+  the plain gate of the same engine moves ONE page of 773 — one span more
+  kept as a caption. On these corpora the detector's regions keep almost
+  nothing the rules had not already kept; the option is safe, and its value
+  lies on layouts the rules have not met.
+- Extra corpus (23 documents, not a gate corpus): 21/23 — ex05 UNVERIFIED by
+  nature (no Latin words), ex16 failing the tables probe on page 15's box
+  title until the Title-Case rule learned that a line more than a line and
+  a half under the previous one (a box's bottom edge, the blank between
+  boxes) needs no sentence end above it; both titles kept now.
+- The line classifier the next round was to build landed the same day
+  from a forked session (d0d3e79): a DocBank/DocLayNet-trained
+  gradient-boosted model over line features, as evidence behind its own
+  option, with `--line` on the gate; inert unless switched on.
 - Edge sheets of both corpora read in full by a sonnet reader (69
   documents, 298 flags, 57 at high confidence); every high flag
   captured at the word before anything changed. 21 were stale sheets
