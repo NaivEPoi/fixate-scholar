@@ -232,6 +232,18 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
   // bundled reading face applies), but nothing is emphasized.
   const noEmphasis = opts.emphasisMode === "none";
   const links = linkRanges(text);
+  // An author block's addresses with their underscores lost: the text layer
+  // carries no character for an underscore drawn as a rule, so "ab_cd@…"
+  // reads "ab cd@…" and the orphaned local part was emphasised as a word
+  // (R55, a private paper's contact line). With two or more addresses in
+  // the span, a plain lowercase word right before an address is its lost
+  // local part — in prose, "write to bob@x.org" has one address.
+  if (links.length >= 2) {
+    for (const r of links) {
+      const m = /(?:^|[\s,;])([a-z0-9][a-z0-9.-]*) $/.exec(text.slice(0, r[0]));
+      if (m) r[0] -= m[1].length + 1;
+    }
+  }
   const parts = [];
   let wordIndex = startWordIndex;
   let offset = 0;
@@ -251,12 +263,21 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
     // are labels, not prose: a bolded prefix reads as noise, so they keep
     // their uniform weight.
     const inLink = links.some(([a, b]) => start < b && offset > a);
+    // A letter that is a LABEL or a VARIABLE, not a word (R55): the "a" of a
+    // list's "(a)", and the "n", "p", "df" of a statistic ("(n = 617)",
+    // "p < 0.001", "df = 2") — one or two letters with a relation sign right
+    // after them. Bold on the first letter of such a thing reads as noise.
+    const prevText = segs[segIndex - 1]?.text ?? "";
+    const after = segs.slice(segIndex + 1, segIndex + 3).map((x) => x.text).join("");
+    const enumerator = seg.text.length === 1 && prevText.endsWith("(") && after.startsWith(")");
+    const variable = seg.text.length <= 2 && /^\s*[=<>≤≥≠]/.test(after);
     if (
       noEmphasis ||
       !seg.isWord ||
       inLink ||
       !PLAIN_WORD.test(seg.text) ||
-      /^[A-ZÀ-Þ]{2,}$/.test(seg.text)
+      /^[A-ZÀ-Þ]{2,}$/.test(seg.text) ||
+      enumerator || variable
     ) {
       parts.push({ text: seg.text, bold: false });
       continue;

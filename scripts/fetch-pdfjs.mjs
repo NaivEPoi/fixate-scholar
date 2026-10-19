@@ -80,12 +80,22 @@ export function extract() {
 // Reading-friendly free fonts (all SIL OFL) offered as alternatives to the
 // document's embedded fonts. Vendored from the @fontsource npm packages via
 // jsDelivr; the exact resolved version is logged for traceability.
+// Pinned: an exact version and the SHA-256 of each file, checked before it
+// is written. A floating "@5" range with no hash let the CDN, or a
+// compromised package release, put any bytes into the build the release
+// workflow ships (R55 security review). Bumping a font means fetching the
+// new file, reading its hash here, and committing both together.
 export const FONTS = [
-  { pkg: "@fontsource/atkinson-hyperlegible", file: "atkinson-hyperlegible-latin-{w}-normal.woff2", out: "atkinson-{w}.woff2" },
-  { pkg: "@fontsource/inter", file: "inter-latin-{w}-normal.woff2", out: "inter-{w}.woff2" },
-  { pkg: "@fontsource/literata", file: "literata-latin-{w}-normal.woff2", out: "literata-{w}.woff2" },
-  { pkg: "@fontsource/lexend", file: "lexend-latin-{w}-normal.woff2", out: "lexend-{w}.woff2" },
-  { pkg: "@fontsource/source-serif-4", file: "source-serif-4-latin-{w}-normal.woff2", out: "source-serif-4-{w}.woff2" },
+  { pkg: "@fontsource/atkinson-hyperlegible", version: "5.3.0", file: "atkinson-hyperlegible-latin-{w}-normal.woff2", out: "atkinson-{w}.woff2",
+    sha256: { 400: "d64ba838ef5472bba248620ec4fd8b5aa7cf0db2908e0bb230600caf279ba7bc", 700: "140e2bd25a7315c8a062508391426b0d8c3297400c947b8d847be28f73a199f0" } },
+  { pkg: "@fontsource/inter", version: "5.3.0", file: "inter-latin-{w}-normal.woff2", out: "inter-{w}.woff2",
+    sha256: { 400: "8909904ab6c872eb994093482a88a28eca2cd95912d7b6fecd72103b0dc07edc", 700: "6f56409fd3d64bb85f7d070bce20749db2d66b6d63cec586cc22d1c761be2491" } },
+  { pkg: "@fontsource/literata", version: "5.3.0", file: "literata-latin-{w}-normal.woff2", out: "literata-{w}.woff2",
+    sha256: { 400: "a60c193b55766b68b922e2327e15c2d8c145532f283a27c3411b9c47a8583d18", 700: "1f2985e0fc368aac76f95b847cd05ef6ec4bac2733a648098c62edf990756cf5" } },
+  { pkg: "@fontsource/lexend", version: "5.3.0", file: "lexend-latin-{w}-normal.woff2", out: "lexend-{w}.woff2",
+    sha256: { 400: "0601e0a909219a542cdd581e3f8f1ff8fb208978cbc9bca1c90df02fd8062bb1", 700: "52dcdaa127bac4a5ea4c39ee17a3f454ceacc18d9f2a45cc453eeab68d378588" } },
+  { pkg: "@fontsource/source-serif-4", version: "5.3.1", file: "source-serif-4-latin-{w}-normal.woff2", out: "source-serif-4-{w}.woff2",
+    sha256: { 400: "02194deb92d3975dd30e11a3824a1f1db32b48c93654e60560cb81ce8e7b5f95", 700: "7691c51bc286a9014db0048277d2c3f2ad0a90b533dc8adfb16cb22a95390d39" } },
 ];
 export const FONT_WEIGHTS = ["400", "700"];
 
@@ -157,13 +167,17 @@ export async function fetchFonts() {
   const fontsDir = join(root, "extension", "vendor", "fonts");
   mkdirSync(fontsDir, { recursive: true });
   for (const font of FONTS) {
-    const pkgMeta = await (await fetch(`https://cdn.jsdelivr.net/npm/${font.pkg}@5/package.json`)).json();
-    console.log(`${font.pkg}@${pkgMeta.version}`);
+    console.log(`${font.pkg}@${font.version}`);
     for (const w of FONT_WEIGHTS) {
-      const url = `https://cdn.jsdelivr.net/npm/${font.pkg}@${pkgMeta.version}/files/${font.file.replace("{w}", w)}`;
+      const url = `https://cdn.jsdelivr.net/npm/${font.pkg}@${font.version}/files/${font.file.replace("{w}", w)}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`Font download failed (${res.status}): ${url}`);
-      writeFileSync(join(fontsDir, font.out.replace("{w}", w)), Buffer.from(await res.arrayBuffer()));
+      const bytes = Buffer.from(await res.arrayBuffer());
+      const hash = createHash("sha256").update(bytes).digest("hex");
+      const expected = font.sha256?.[w];
+      if (!expected) throw new Error(`${font.pkg} ${w}: no pinned sha256 in FONTS — add it`);
+      if (hash !== expected) throw new Error(`${font.pkg}@${font.version} ${w}: sha256 ${hash} is not the pinned ${expected} — nothing written`);
+      writeFileSync(join(fontsDir, font.out.replace("{w}", w)), bytes);
     }
   }
   console.log(`Fonts vendored to ${fontsDir}`);

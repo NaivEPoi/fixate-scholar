@@ -136,6 +136,17 @@
     <p class="hint">1 = every word. Higher values create a sparser rhythm.</p>
   </label>
 
+  <label>
+    <input type="checkbox" id="layoutModel"> Use the layout model (experimental)
+    <p class="hint">A small document-layout detector (PP-DocLayout-S, 4.8 MB) looks
+    at each page once and tells the typography engine where the figures, tables,
+    captions, footnotes, formulas, headers and footers are, so prose inside them
+    is left alone where the engine's own rules would have missed it. Runs on the
+    GPU or NPU where the browser has one, on the CPU otherwise; about 20 to 400
+    ms a page, off the main thread. Needs the runtime and model installed under
+    the extension (see README); without them the option does nothing.</p>
+  </label>
+
   <h2>Copying text</h2>
   <label>
     <input type="checkbox" id="flowCopy"> Copy paragraphs as flowing text

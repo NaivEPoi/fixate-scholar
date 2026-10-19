@@ -246,6 +246,36 @@ and rewrites each word as `<b>prefix</b>rest`, re-calibrating the span scaling s
 and search keep working. Pages are processed lazily as PDF.js renders them, in idle-time
 chunks. See `extension/viewer/typography/`.
 
+### Layout model (experimental, off by default)
+
+What the engine leaves alone — figures, tables, captions, footnotes, formulas,
+headers, footers, headings — it decides by rules over the page's text items and
+the lines it finds on the canvas. Settings offers a second source of evidence:
+a small document-layout detector, PP-DocLayout-S from PaddleOCR (Apache-2.0,
+4.8 MB, 23 region classes), run once per page on the engine's own fixed-
+resolution render, in the same worker that scans the canvas for rules. Its
+regions keep text the rules would have processed; they never un-keep anything,
+so a model miss leaves the rules' decision in place. It runs through ONNX
+Runtime Web on the GPU (WebGPU) or the NPU (WebNN) where the browser has one,
+and on the CPU (WebAssembly) otherwise — tens of milliseconds a page on a GPU,
+a few hundred on a CPU, all off the main thread. Nothing leaves the computer.
+
+The runtime and the model are not in the extension by default. From a source
+checkout, `npm run fetch-layout` fetches ONNX Runtime Web 1.30.0 from npm
+(MIT) and the model — PP-DocLayout-S exported to ONNX with paddle2onnx, the
+export published beside the original on Hugging Face, checked against the
+SHA-256 its model card states — into `extension/vendor/layout/`
+(git-ignored), with both licences and a note of the model's provenance. With
+the files absent the option does nothing. The providers are tried in order:
+the NPU and GPU through WebNN where the browser offers them, WebGPU, then
+WebAssembly; a provider that opens a session but cannot run this graph
+(WebGPU fails inside one kernel on this export) is left for the next, once.
+Measured on a headless CPU, WebAssembly single-threaded: 130–230 ms a page,
+off the main thread, after the page's own render. `node test/diag-layout.mjs
+--url=<pdf> [--provider=wasm]` prints, per page, the model's time, the
+provider it ran on and the regions it found; the release gate takes
+`--layout` to run the probes with the option on.
+
 ## Naming and legal
 
 This project deliberately does **not** use the trademarked two-word brand name commonly

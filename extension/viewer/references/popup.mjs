@@ -124,6 +124,20 @@ export class CitationPopup {
     this.#timer = setTimeout(() => this.hide(), HIDE_DELAY);
   }
 
+  /** A preview of an in-paper reference's target (preview.mjs): the node
+   *  built there, shown as a hover card that auto-hides like an entry's.
+   *  Never over a pinned card. */
+  showPreview(node, anchor) {
+    if (this.#pinned) return;
+    clearTimeout(this.#timer);
+    const el = this.#ensure();
+    this.#entries = [];
+    this.#anchor = anchor;
+    el.replaceChildren(node);
+    el.hidden = false;
+    this.#position();
+  }
+
   hide() {
     if (this.#el) this.#el.hidden = true;
     this.#pinned = false;

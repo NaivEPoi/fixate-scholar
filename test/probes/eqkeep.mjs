@@ -117,6 +117,11 @@ export const probe = (page) => `(() => {
       const text = seg.map((x) => x.s.textContent).join(" ").trim();
       // A trailing equation number, hard against the column's right edge.
       if (!/\\(\\s*(?:[A-Z]\\s*[.-]\\s*)?\\d+(?:\\.\\d+)*\\s*\\)\\s*$/.test(text)) continue;
+      // "…contributions to Eq. (39)" ending a line is a REFERENCE to an
+      // equation, not an equation's number — the leader right before the
+      // parenthesis says so, whether set as one word or, in a math face, as
+      // one span a letter (R55, a REVTeX paper).
+      if (/(?:Eqs?\\.?|Equations?)$/i.test(text.slice(0, text.lastIndexOf("(")).replace(/\\s+/g, ""))) continue;
       const last = seg[seg.length - 1];
       if (last.r.right < edges[side] - 40) continue;
       // The number is SET APART, as a displayed equation's number is: it opens

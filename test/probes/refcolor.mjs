@@ -23,8 +23,8 @@ export const probe = (p) => `(() => {
   const div = pv?.textLayer?.div;
   if (!div) return { error: "no layer" };
 
-  const REF_LEADER = "(?:[Ff]igures?|[Ff]igs?\\\\.?|[Tt]ables?|[Tt]abs?\\\\.?|[Aa]lgorithms?|[Aa]lgs?\\\\.?|[Ll]istings?|[Ss]ections?|[Ss]ecs?\\\\.?|§{1,2}|[Aa]ppendices|[Aa]ppendix|[Aa]pps?\\\\.?|[Ee]quations?|[Ee]qs?\\\\.?|[Cc]hapters?|[Tt]heorems?|[Ll]emmas?|[Dd]efinitions?|[Cc]laims?)";
-  const REF_ROMAN = "(?:(?<=[a-zA-Z~])|\\\\b)(?=[IVXLCDM])M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{1,3})(?:-[A-Za-z\\\\d]+)?\\\\b";
+  const REF_LEADER = "(?:[Ff]igures?|[Ff]igs?(?:\\\\.|(?=\\\\s))|[Tt]ables?|[Tt]abs?(?:\\\\.|(?=\\\\s))|[Aa]lgorithms?|[Aa]lgs?(?:\\\\.|(?=\\\\s))|[Ll]istings?|[Ss]ections?|[Ss]ecs?(?:\\\\.|(?=\\\\s))|§{1,2}|[Aa]ppendices|[Aa]ppendix|[Aa]pps?(?:\\\\.|(?=\\\\s))|[Ee]quations?|[Ee]qs?(?:\\\\.|(?=\\\\s))|[Cc]hapters?|[Tt]heorems?|[Ll]emmas?|[Dd]efinitions?|[Cc]laims?|Remarks?|Propositions?|Corollar(?:y|ies)|Examples?|Assumptions?|Conjectures?|Observations?|Facts?|Exercises?|Hypothes[ie]s|Propert(?:y|ies)|Notations?|Reductions?|Steps?)";
+  const REF_ROMAN = "(?:(?<=[a-zA-Z~])|\\\\b)[IVXLCDM]{1,8}(?:-[A-Za-z\\\\d]+)?\\\\b(?:\\\\s[A-H](?=[.,;:)]|\\\\s*$))?";
   const REF_NUM = "\\\\d+(?:\\\\.\\\\d+)*(?:-[A-Za-z\\\\d]+)?(?:\\\\([a-z\\\\d]+\\\\)|[a-z](?![a-zA-Z]))?";
   const REF_PAREN_NUM = "\\\\(\\\\d+(?:\\\\.\\\\d+)*[a-z]?\\\\)";
   const REF_ALPHA = "(?:(?<=[a-zA-Z~])|\\\\b)[A-Z]\\\\b(?:\\\\.\\\\d+)?";
@@ -41,13 +41,23 @@ export const probe = (p) => `(() => {
   // reference split over two spans ("Figure" / "3" in another face, or "Fig-"
   // / "ure 6" hyphenated at a line end) was invisible to a per-span match, so
   // a split reference left uncoloured could not fail this check.
+  // EVERY span, kept ones included (R55): joining the processed ones alone
+  // dropped a kept math span from between a line's "…proof of Theorem" and
+  // the next processed text "2, for every", and the probe read "Theorem 2" —
+  // a reference the page does not print (its reference is "Theorem 3", the 3
+  // in the math face). A reference running through a kept span is set
+  // aside, not counted: the product colours a reference whole or not at all,
+  // and a number set on the canvas is the known limitation of R53.
   let joined = "";
-  const nodes = []; // { node, span, start, end }
-  for (const s of div.querySelectorAll("span[data-fx-done]")) {
+  const nodes = []; // { node, span, start, end, kept }
+  for (const s of div.querySelectorAll("span")) {
+    if (s.closest(".fx-cite-c, .fx-ref-c, .fx-sp")) continue;
+    if (s.querySelector("span:not(.fx-cite-c):not(.fx-ref-c):not(.fx-sp)")) continue;
     if (s.dataset.fxRefs) continue;
+    const kept = !s.dataset.fxDone;
     const walker = document.createTreeWalker(s, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      nodes.push({ node, span: s, start: joined.length, end: joined.length + node.data.length });
+      nodes.push({ node, span: s, start: joined.length, end: joined.length + node.data.length, kept });
       joined += node.data;
     }
     joined += "\\n";
@@ -61,15 +71,23 @@ export const probe = (p) => `(() => {
     at.push(i);
     flat += joined[i];
   }
-  let total = 0, colored = 0, nested = 0;
+  let total = 0, colored = 0, nested = 0, throughKept = 0;
   const misses = [];
   for (const m of flat.matchAll(INTERNAL_REF)) {
+    // parser.mjs LEGAL_BEFORE: a section sign after a statute's name ("47 CFR
+    // § 15.407(k)", "18 U.S.C. § 1030") points into the law, not the paper.
+    if (m[0].startsWith("§") && /(?:\\d\\s*(?:C\\.?\\s?F\\.?\\s?R\\.?|U\\.?\\s?S\\.?\\s?C\\.?)|\\bCode)\\s*$/.test(flat.slice(Math.max(0, m.index - 24), m.index))) continue;
     const a = at[m.index], b = at[m.index + m[0].length - 1] + 1;
+    if (nodes.some((n) => n.kept && n.start < b && n.end > a && n.node.data.trim())) { throughKept++; continue; }
     total++;
     // Coloured means coloured in EVERY span the reference runs through.
     const spans = new Map(); // span -> { hit, cite }
     for (const x of nodes) {
       if (x.end <= a || x.start >= b) continue;
+      // A whitespace-only span between the leader and the number (an OCR
+      // layer's or a Word export's space item) carries no colour and never
+      // will: it is not a span the reference "runs through" (R55).
+      if (!x.node.data.trim()) continue;
       const st = spans.get(x.span) ?? { hit: false, cite: false };
       if (x.node.parentElement.closest(".fx-cite-c")) st.cite = true;
       if (x.node.parentElement.closest(".fx-ref-c")) st.hit = true;
@@ -79,9 +97,9 @@ export const probe = (p) => `(() => {
     const cite = all.some((v) => v.cite), hit = all.length > 0 && all.every((v) => v.hit);
     if (cite) { total--; if (all.some((v) => v.hit)) nested++; continue; }
     if (hit) colored++;
-    else if (misses.length < 6) misses.push({ m: m[0].replace(/\\n/g, " "), ctx: flat.slice(Math.max(0, m.index - 20), m.index + m[0].length + 6).replace(/\\n/g, " ") });
+    else if (misses.length < 6) misses.push({ m: m[0].replace(/\\n/g, " "), ctx: flat.slice(Math.max(0, m.index - 20), m.index + m[0].length + 6).replace(/\\n/g, " "), spans: [...spans.keys()].map((s) => (s.dataset.fxDone ? "done:" : "kept:") + s.textContent.slice(0, 36)), prodJoin: (() => { const j = (globalThis.__fxJoined || {})[pv.id] || ""; const first = [...spans.keys()][0]?.textContent || ""; const k = first ? j.indexOf(first) : -1; return k < 0 ? null : j.slice(Math.max(0, k - 24), k + 60); })() });
   }
-  return { total, colored, nested, misses };
+  return { total, colored, nested, misses, throughKept };
 })()`;
 
 export const create = () => ({ T: 0, C: 0, N: 0, pages: 0, unmeasured: [] });
@@ -93,8 +111,8 @@ export function add(state, p, r) {
   state.T += r.total; state.C += r.colored; state.N += r.nested ?? 0;
   const tag = (r.total > r.colored ? "  <<< UNCOLORED" : "") +
     (r.nested ? `  nested=${r.nested} <<< REFERENCE COLOUR INSIDE A CITATION` : "");
-  const out = [`p${p}: refs=${r.total} colored=${r.colored}${tag}`];
-  for (const m of r.misses ?? []) out.push(`   miss: ${m.m} in "${m.ctx}"`);
+  const out = [`p${p}: refs=${r.total} colored=${r.colored}${tag}${r.throughKept ? ` kept=${r.throughKept}` : ""}`];
+  for (const m of r.misses ?? []) out.push(`   miss: ${m.m} in "${m.ctx}"${m.spans ? " spans=" + JSON.stringify(m.spans) : ""}${m.prodJoin != null ? " join=" + JSON.stringify(m.prodJoin) : ""}`);
   return { out, err: [] };
 }
 

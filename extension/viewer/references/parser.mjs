@@ -1,7 +1,12 @@
 // Pure heuristics that turn extracted lines into a reference list and map
 // in-text citation keys onto entries. No DOM, no Chrome APIs (unit-testable).
 
-const HEADING = /^(?:[ivxlcdm]+[.\s]+|\d+[.\s]+|[A-Z][.\s]+)?(references|bibliography|works cited|literature cited)\s*$/i;
+// The bibliography's heading, as the templates set it: English in its
+// variants, and the headings of German, French, Spanish, Portuguese, Italian,
+// Japanese and Chinese papers (R55: a Japanese journal's 参考文献 parsed
+// nothing, and its citations stayed black). Optional section label before it,
+// an optional colon or Japanese bracket pair around it.
+const HEADING = /^(?:[ivxlcdm]+[.\s]+|\d+[.\s]+|[A-Z][.\s]+)?【?(references|references and notes|notes and references|references cited|reference list|list of references|bibliography|works cited|literature cited|cited literature|literature|literatur|literaturverzeichnis|quellen|quellenverzeichnis|schrifttum|r[ée]f[ée]rences|r[ée]f[ée]rences bibliographiques|bibliographie|referencias|referencias bibliogr[áa]ficas|bibliograf[íi]a|refer[êe]ncias|riferimenti bibliografici|riferimenti|参考文献|引用文献|参照文献|參考文獻|参考资料|文献)】?\s*:?\s*$/i;
 const SECTION_AFTER = /^(?:[A-Z\d]+[.\s]+)?(appendix|acknowledg|supplementary|author contributions|funding|conflicts? of interest)/i;
 const NUMERIC_MARKER = /^\[(\d{1,3})\]\s*/;
 const DOTTED_MARKER = /^(\d{1,3})\.\s+(?=\D)/;
@@ -10,7 +15,10 @@ const DOTTED_MARKER = /^(\d{1,3})\.\s+(?=\D)/;
 // "[SRC07]", "[GHI+21]", "[Bla09a]". Must start with a capital (so a genuine
 // numeric marker like "[7]" or a plain word in brackets doesn't match) and
 // end in exactly two digits (so it can't swallow an ordinary bracketed word).
-const ALPHA_MARKER = /^\[([A-Z][A-Za-z]{0,6}\+?\d{2}[a-z]?)\]\s*/;
+// ...or no year at all: amsalpha-style initials ("[P]", "[RY]", "[BCD]") label
+// a bibliography too (R55, a mathematics paper), and its citations stayed
+// black. Three such lines make a list; one bracketed word does not.
+const ALPHA_MARKER = /^\[([A-Z][A-Za-z]{0,6}\+?(?:\d{2}[a-z]?)?)\]\s*/;
 const YEAR = /\b(19|20)\d{2}[a-z]?\b/;
 
 /**
@@ -285,7 +293,48 @@ export function findReferenceSections(lines) {
     // cross-reference in prose ("see the references"), not a section.
     if (body.length >= 2) sections.push({ heading: lines[start], body });
   }
+  // No heading anywhere: REVTeX (Physical Review) sets its bibliography under
+  // a rule with no title, as "[1] …" straight after the text, and two such
+  // papers had every citation unresolved (R55). The list is found by its own
+  // shape instead, and its first line stands in for the heading: the same
+  // page and position, so the region and the running-head logic above it
+  // work unchanged, with no text of its own.
+  if (!sections.length) {
+    const first = numberedRunStart(lines);
+    if (first >= 0) {
+      const heading = { ...lines[first], text: "", synthetic: true };
+      const body = sectionBody(lines, first - 1, heading, first);
+      if (body.length >= 2) sections.push({ heading, body });
+    }
+  }
   return sections;
+}
+
+/**
+ * The first line of a bibliography set WITHOUT a heading: a "[1]" line in the
+ * document's second half followed, within a few lines each, by "[2]" and
+ * "[3]" at the same size. An enumerated list in the body is excluded by the
+ * position; a list of figures or a numbered proof by the markers' order and
+ * closeness; a single bracketed number in prose by needing three. -1 if none.
+ */
+function numberedRunStart(lines) {
+  const n = lines.length;
+  for (let i = Math.floor(n / 2); i < n; i++) {
+    const m = NUMERIC_MARKER.exec(lines[i].text);
+    if (!m || m[1] !== "1") continue;
+    const h = lines[i].h;
+    let want = 2;
+    let last = i;
+    for (let j = i + 1; j < n && j <= last + 8 && want <= 3; j++) {
+      const mm = NUMERIC_MARKER.exec(lines[j].text);
+      if (!mm) continue;
+      if (Number(mm[1]) !== want || Math.abs(lines[j].h - h) > h * 0.15) break;
+      want++;
+      last = j;
+    }
+    if (want > 3) return i;
+  }
+  return -1;
 }
 
 /**
@@ -303,9 +352,9 @@ export function findReferencesBody(lines) {
   return best;
 }
 
-/** Body lines of the section whose heading is at `start`. */
-function sectionBody(lines, start) {
-  const heading = lines[start];
+/** Body lines of the section whose heading is at `start` — or, for a list
+ *  without one, under `heading` from line `first` on. */
+function sectionBody(lines, start, heading = lines[start], first = start + 1) {
   const edges = pageEdges(lines);
   const heads = runningHeadTexts(lines, edges);
   const isFurniture = (l) => {
@@ -317,7 +366,7 @@ function sectionBody(lines, start) {
   // "B Title" appendix headings), so also stop at any heading-sized line: at
   // least as large as the References heading itself and clearly larger than
   // the entries.
-  const entryH = lines[start + 1]?.h ?? heading.h;
+  const entryH = lines[first]?.h ?? heading.h;
   // …and heading-sized is not a boundary either when the bibliography plainly
   // RESUMES after it. A two-column reference list is routinely interrupted by
   // a float: a figure or table pinned to the top of the next column carries a
@@ -342,12 +391,43 @@ function sectionBody(lines, start) {
     return false;
   };
   const body = [];
-  for (let i = start + 1; i < lines.length; i++) {
+  // A section heading inside the list is an interruption when the entries
+  // resume right after it: REVTeX balances its last page so the text's final
+  // lines and the acknowledgments sit at the top of the right column, above
+  // the bibliography's continuation, and the extractor's column order puts
+  // them between "[22]" and "[23]" (R55). The lines up to the next entry
+  // marker are left out; what stays is the list.
+  // ...and only when the numbering carries on: "[23]" after "[22]". An
+  // appendix that opens with a bracketed number of its own ends the list as
+  // it always did.
+  const numberOf = (t) => { const m = NUMERIC_MARKER.exec(t) || DOTTED_MARKER.exec(t); return m ? Number(m[1]) : null; };
+  const continuesAfter = (i, lastNum) => {
+    if (lastNum === null) return false;
+    for (let j = i + 1; j < Math.min(lines.length, i + 16); j++) {
+      const l = lines[j];
+      if (SECTION_AFTER.test(l.text) || HEADING.test(l.text)) return false;
+      const num = numberOf(l.text);
+      if (num !== null) return num === lastNum + 1 && Math.abs(l.h - entryH) <= entryH * 0.15;
+    }
+    return false;
+  };
+  let toMarker = false;
+  let lastNum = null;
+  for (let i = first; i < lines.length; i++) {
     const line = lines[i];
     // Furniture is neither a section boundary nor bibliography content: step
     // over it so a page break inside the reference list does not end the body.
     if (isFurniture(line)) continue;
-    if (SECTION_AFTER.test(line.text) || HEADING.test(line.text)) break;
+    if (SECTION_AFTER.test(line.text) || HEADING.test(line.text)) {
+      if (continuesAfter(i, lastNum)) { toMarker = true; continue; }
+      break;
+    }
+    if (toMarker) {
+      if (numberOf(line.text) === lastNum + 1) toMarker = false;
+      else continue;
+    }
+    const num = numberOf(line.text);
+    if (num !== null) lastNum = num;
     // Heading-SIZED alone is not enough: a stray oversized glyph (a lone
     // quotation mark split onto its own line by the font-size line rule)
     // must not end the bibliography — a real section heading carries at
@@ -697,8 +777,15 @@ export function bibAuthors(authors) {
 // `[a-z]?` swallowed the next word's first letter as a fake suffix ("2p"),
 // leaving that single letter colored as part of the reference and the rest
 // of the word an abrupt, oddly-colored orphan.
+// An abbreviated leader takes its period or a space ("Fig. 3", "fig 3"), not
+// a number straight after it: "fig1", "fig3.ps" are file names (R55, a
+// Word-template paper's instructions). The statement kinds a paper numbers
+// (Remark, Proposition, Corollary, Example, Assumption, …) are leaders like
+// Theorem and Lemma (R55: "Remark 2", "Proposition 3.1", "Assumptions 7 and
+// 14" stayed black beside red theorems); capitalised only, since "for
+// example 3" and "the remark" are prose.
 const REF_LEADER =
-  "(?:[Ff]igures?|[Ff]igs?\\.?|[Tt]ables?|[Tt]abs?\\.?|[Aa]lgorithms?|[Aa]lgs?\\.?|[Ll]istings?|[Ss]ections?|[Ss]ecs?\\.?|§{1,2}|[Aa]ppendices|[Aa]ppendix|[Aa]pps?\\.?|[Ee]quations?|[Ee]qs?\\.?|[Cc]hapters?|[Tt]heorems?|[Ll]emmas?|[Dd]efinitions?|[Cc]laims?)";
+  "(?:[Ff]igures?|[Ff]igs?(?:\\.|(?=\\s))|[Tt]ables?|[Tt]abs?(?:\\.|(?=\\s))|[Aa]lgorithms?|[Aa]lgs?(?:\\.|(?=\\s))|[Ll]istings?|[Ss]ections?|[Ss]ecs?(?:\\.|(?=\\s))|§{1,2}|[Aa]ppendices|[Aa]ppendix|[Aa]pps?(?:\\.|(?=\\s))|[Ee]quations?|[Ee]qs?(?:\\.|(?=\\s))|[Cc]hapters?|[Tt]heorems?|[Ll]emmas?|[Dd]efinitions?|[Cc]laims?|Remarks?|Propositions?|Corollar(?:y|ies)|Examples?|Assumptions?|Conjectures?|Observations?|Facts?|Exercises?|Hypothes[ie]s|Propert(?:y|ies)|Notations?|Reductions?|Steps?)";
 // A run of Roman-numeral letters, not a canonical Roman numeral. The canonical
 // form (M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{1,3})) ended in a group
 // that REQUIRED an "I", so every numeral without one — V, X, XV, XX, XXV, XL —
@@ -708,7 +795,10 @@ const REF_LEADER =
 // empty string, which after a leader would colour a bare "Table ". A bounded
 // run cannot do either, and the mandatory leader in front is what keeps it from
 // claiming ordinary capitalised words.
-const REF_ROMAN = "(?:(?<=[a-zA-Z~])|\\b)[IVXLCDM]{1,8}(?:-[A-Za-z\\d]+)?\\b";
+// REVTeX names a subsection by its section's numeral and a letter apart
+// ("Sec. II B"): the letter rides with the numeral when a period, comma or
+// the line's end follows it; "Section II A new method" keeps its "A" (R55).
+const REF_ROMAN = "(?:(?<=[a-zA-Z~])|\\b)[IVXLCDM]{1,8}(?:-[A-Za-z\\d]+)?\\b(?:\\s[A-H](?=[.,;:)]|\\s*$))?";
 // The right-hand side of a range is a number in its own right: without the
 // trailing `(?:\.\d+)*` the match of "Section 3.1-3.4" stopped at "3.1-3",
 // colouring the reference up to the middle of its own second number and
@@ -718,6 +808,14 @@ const REF_NUM =
 const REF_PAREN_NUM = "\\(\\d+(?:\\.\\d+)*[a-z]?\\)";
 const REF_ALPHA = "(?:(?<=[a-zA-Z~])|\\b)[A-Z]\\b(?:\\.\\d+)?";
 const REF_ITEM = "(?:" + REF_PAREN_NUM + "|" + REF_NUM + "|" + REF_ROMAN + "|" + REF_ALPHA + ")";
+/** A line ending in a reference's leader word — "…as we saw in the proof of
+ *  Theorem" — whose number begins the next line. The engine keeps a bare
+ *  number on the canvas (it has no letter), and the colour rule, which paints
+ *  a reference whole or not at all, then left the leader black too (R53's
+ *  "Listing / 2"); a number right after such a line is body text (R55). */
+export const REF_LEADER_END = new RegExp("(?:\\b|(?<=[a-z])(?=[A-Z])|(?=§))" + REF_LEADER + "\\s*$");
+/** The number (or letter) that may begin a line continuing such a leader. */
+export const REF_ITEM_START = new RegExp("^" + REF_ITEM + "(?![A-Za-z])");
 const REF_SEP = "(?:\\s*(?:[–—\\u2212\\u2015-]|--|to)\\s*|\\s*,\\s*(?:and\\s+|&\\s*)?|\\s+and\\s+|\\s*&\\s*)";
 
 // The leader must start at a word boundary, so "Section 4" is a reference and
@@ -736,10 +834,18 @@ const INTERNAL_REF = new RegExp(
   "g"
 );
 
+// A section sign after a statute or code name points into the LAW, not the
+// paper: "47 CFR § 15.407(k)", "18 U.S.C. § 1030", "Cal. Civ. Code § 1798"
+// were coloured as in-paper references (R55, an IEEE paper citing the FCC
+// rules). The title number and the source's abbreviation stand right before
+// the sign, on the same line or the one above.
+const LEGAL_BEFORE = /(?:\d\s*(?:C\.?\s?F\.?\s?R\.?|U\.?\s?S\.?\s?C\.?)|\bCode)\s*$/;
+
 /** Character ranges of in-paper references in a text string. */
 export function findInternalRefs(text) {
   const out = [];
   for (const m of text.matchAll(INTERNAL_REF)) {
+    if (m[0].startsWith("§") && LEGAL_BEFORE.test(text.slice(Math.max(0, m.index - 24), m.index))) continue;
     out.push({ start: m.index, end: m.index + m[0].length });
   }
   return out;
@@ -774,8 +880,10 @@ export function findInternalRefsAcrossBreaks(text) {
 // captured (group 1) for resolution; the locator is consumed so the whole
 // bracket becomes one clickable/colored citation. The locator must begin with
 // §/¶/p./pp. or a capital word so ordinary prose "[9, and ...]" is not swept up.
+// `\[\s*`: a paper sets "[ 1, 2]" with a space inside the bracket (R55, a
+// physics instrumentation paper); the number list is still the citation.
 const NUMERIC_CITE =
-  /\[(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)(?:\s*,\s*(?:§|¶|pp?\.|[A-Z])[^\]]{0,55})?\]/g;
+  /\[\s*(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)(?:\s*,\s*(?:§|¶|pp?\.|[A-Z])[^\]]{0,55})?\]/g;
 // A numeric citation range written across separate brackets: "[6]-[11]",
 // "[6]–[11]", "[6] - [11]", "[6]--[11]".
 const NUMERIC_BRACKET_RANGE =
@@ -851,11 +959,30 @@ const AUTHOR_YEAR_CITE = /\(([^()]{2,160})\)/g;
 // particles ("van Emde Boas"), "et al." and "and" — but nothing else, so
 // ordinary prose cannot grow into it: a lowercase word ends the run, and the
 // year bracket must follow immediately.
-const CITE_NAME = "\\p{Lu}[\\p{L}'’-]*\\.?";
+// A name may carry its accents as separate marks — "Kujanp¨a¨a" when the PDF
+// composes ä from a spacing diaeresis and the letter (R55): marks and the
+// spacing accents are letters of the name.
+const CITE_NAME = "\\p{Lu}[\\p{L}\\p{M}¨´ˆ˜'’-]*\\.?";
+// A name compared without its accents, however the PDF composed them — a
+// spacing diaeresis before the letter ("Kujanp¨a¨a"), a combining mark,
+// or the precomposed letter in the bibliography (R55).
+const foldName = (s) => (s || "").normalize("NFD").replace(/[\p{M}¨´ˆ˜]/gu, "");
 const CITE_PARTICLE = "(?:van|von|de[nrl]?|del|della|di|da|ter|ten)";
-const CITE_YEARS = "(?:19|20)\\d{2}[a-z]?(?:\\s*[,;]\\s*(?:19|20)\\d{2}[a-z]?)*";
+// natbib compresses one author's years to "(2021b,c)": a bare letter after
+// the comma is the previous year with that suffix (R55).
+const CITE_YEARS = "(?:19|20)\\d{2}[a-z]?(?:\\s*[,;]\\s*(?:(?:19|20)\\d{2}[a-z]?|[a-z]))*";
+// The name starts at a WORD start (the lookbehind): without it every
+// capital in a run was a start position and the greedy name class ran to
+// the run's end before the year failed, O(n²) — a span of forty thousand
+// capitals, one text operator in a hostile PDF, held the viewer's thread
+// for six seconds, and a few hundred thousand held it for minutes (R55
+// security review). With it the same input scans in a millisecond.
+// ...or right after an elided particle of one letter and an apostrophe
+// ("d’Ascoli et al. (2021)", "l’Ecuyer (1999)"), itself at a word start:
+// the only start such a name has, and the word-start rule alone lost it
+// (R55 review). "xd'Aspremont (2008)" still matches nothing.
 const NARRATIVE_CITE = new RegExp(
-  `((?:${CITE_PARTICLE}\\s+)?${CITE_NAME}(?:\\s+(?:et\\s+al\\.?|and|&|${CITE_PARTICLE}|${CITE_NAME}))*)\\s*[[(](${CITE_YEARS})[\\])]`,
+  `(?:(?<![\\p{L}\\p{M}¨´ˆ˜'’-])|(?<=(?<![\\p{L}\\p{M}])[dDlL]['’]))((?:${CITE_PARTICLE}\\s+)?${CITE_NAME}(?:\\s+(?:et\\s+al\\.?|and|&|${CITE_PARTICLE}|${CITE_NAME}))*)\\s*[[(](${CITE_YEARS})[\\])]`,
   "gu",
 );
 // Words that look like a surname but introduce a NUMBER, not an author.
@@ -888,9 +1015,11 @@ const CITE_PREFIX = /^(?:See|Cf|Compare|Also|But|And|In|E\.g|I\.e|Viz|Following|
 // entry labels — "[WL92]", "[SRC07, SRK10]", "[GHI+21]". Ends in exactly two
 // digits (an optional disambiguator letter after) so it can't swallow an
 // ordinary bracketed word or a numeric list (NUMERIC_CITE already owns those).
-const ALPHA_CITE_KEY = "[A-Z][A-Za-z]{0,6}\\+?\\d{2}[a-z]?";
+// ...and, since R55, a label with no year ("[P]", "[RY]"), matching the
+// year-less ALPHA_MARKER; such a key colours only when an entry carries it.
+const ALPHA_CITE_KEY = "[A-Z][A-Za-z]{0,6}\\+?(?:\\d{2}[a-z]?)?";
 const ALPHA_CITE = new RegExp(
-  `\\[(${ALPHA_CITE_KEY}(?:\\s*,\\s*${ALPHA_CITE_KEY})*)\\]`,
+  `\\[(${ALPHA_CITE_KEY}(?:\\s*,\\s*${ALPHA_CITE_KEY})*)(?:\\s*,\\s*(?:§|¶|pp?\\.|Section|Theorem|Lemma|Chapter|Prop)[^\\]]{0,55})?\\]`,
   "g",
 );
 
@@ -1062,7 +1191,7 @@ export function findCitations(text, options = {}) {
       // nothing. Initials still belong to the citation's run — they just never
       // name it.
       const isInitial = /^\p{Lu}$/u.test(bare);
-      const isName = /^\p{Lu}[\p{L}'’-]*$/u.test(bare) && !NOT_A_SURNAME.test(bare);
+      const isName = /^\p{Lu}[\p{L}\p{M}¨´ˆ˜'’-]*$/u.test(bare) && !NOT_A_SURNAME.test(bare); // marks and spacing accents: a name's own (R55)
       if (isName && !CITE_PREFIX.test(bare)) {
         if (!cur) {
           cur = { at: pos, end: pos + word.length, year: null, surname: isInitial ? null : bare };
@@ -1113,11 +1242,15 @@ export function findCitations(text, options = {}) {
     const keys = [];
     const spans = [];
     let at = m.index + m[0].lastIndexOf(m[2]);
+    let lastYear = "";
     for (const part of m[2].split(/[,;]/)) {
       const partStart = at;
       at += part.length + 1;
-      const y = part.trim();
+      let y = part.trim();
       if (!y) continue;
+      // "2021b, c": the bare suffix is that year's.
+      if (/^[a-z]$/.test(y) && lastYear) y = lastYear + y;
+      lastYear = y.slice(0, 4);
       const key = `${surname}-${y}`;
       keys.push(key);
       const yAt = partStart + part.indexOf(y);
@@ -1201,9 +1334,9 @@ export function resolveCitation(keys, entries) {
       const surname = key.slice(0, cut);
       const year = key.slice(cut + 1);
       const e =
-        entries.find((x) => x.surname === surname && x.year === year) ||
+        entries.find((x) => foldName(x.surname) === foldName(surname) && x.year === year) ||
         entries.find(
-          (x) => x.year === year && x.raw.slice(0, 80).includes(surname),
+          (x) => x.year === year && foldName(x.raw.slice(0, 80)).includes(foldName(surname)),
         );
       if (e) found.push(e);
     }

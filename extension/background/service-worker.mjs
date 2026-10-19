@@ -5,7 +5,7 @@
 
 import { BUILD } from "../build.mjs";
 import { clearCached } from "../viewer/references/lookup-cache.mjs";
-import { normalizeBypassUrl, urlsMatch } from "../viewer/settings-client.mjs";
+import { isLocalFileUrl, normalizeBypassUrl, urlsMatch } from "../viewer/settings-client.mjs";
 
 const VIEWER = chrome.runtime.getURL("vendor/pdfjs/web/viewer.html");
 
@@ -203,7 +203,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "fx-open-link" && info.linkUrl) {
-    if (!/^(https?|file):/i.test(info.linkUrl)) return;
+    if (!/^https?:/i.test(info.linkUrl) && !isLocalFileUrl(info.linkUrl)) return; // a file: link with a host is a UNC path (R55)
     await removeBypassUrl(info.linkUrl);
     chrome.tabs.create({
       url: `${VIEWER}?file=${encodeURIComponent(info.linkUrl)}`,
@@ -216,7 +216,7 @@ export { normalizeBypassUrl, urlsMatch };
 
 export async function removeBypassUrl(url) {
   const clean = normalizeBypassUrl(url);
-  if (!clean || !/^(https?|file):/i.test(clean)) return;
+  if (!clean || !(/^https?:/i.test(clean) || isLocalFileUrl(clean))) return;
   const { bypassUrls = [] } = await chrome.storage.sync.get("bypassUrls");
   const next = bypassUrls.filter((u) => !urlsMatch(u, clean));
   if (next.length !== bypassUrls.length) {
@@ -243,7 +243,7 @@ async function isBypassedUrl(url, tabId) {
 chrome.webNavigation.onBeforeNavigate.addListener(
   async (details) => {
     if (details.frameId !== 0) return;
-    if (!/^file:.*\.pdf$/i.test(details.url)) return;
+    if (!/^file:.*\.pdf$/i.test(details.url) || !isLocalFileUrl(details.url)) return;
     // "Open in native viewer" re-navigates to the same file: URL — the DNR
     // allow rule cannot suppress this listener, so it checks the bypass here.
     if (await isBypassedUrl(details.url, details.tabId)) return;
@@ -292,7 +292,7 @@ async function allowOnce(tabId) {
 const FILE_BEHIND_KEY = "fileBehind"; // { [tabId]: { url, behind } }
 
 function nextFileBehind(entry, details) {
-  if (/^file:/i.test(details.url)) return { url: details.url, behind: false };
+  if (/^file:/i.test(details.url)) return isLocalFileUrl(details.url) ? { url: details.url, behind: false } : null;
   if (!entry || !details.url.startsWith(VIEWER)) return null;
   if ((details.transitionQualifiers || []).includes("forward_back")) return null;
   let file = null;

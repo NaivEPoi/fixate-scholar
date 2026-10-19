@@ -16,7 +16,17 @@
 // Failures come back as { id, error }. Every bitmap is closed here. The pages
 // are opaque, so no alpha is lost to premultiplication: the pixels, and so the
 // rules, are the ones a main-thread readback would give.
-import { scanRules } from "./rules.mjs";
+//   { id, kind: "rules", bitmap, kx, ky, layout: true } -> { id, rules, regions }
+//       the same, plus the layout model's regions (layout-model.mjs) in page
+//       px, when the option is on; `regions` is null when the model is not
+//       available, and the rules come back regardless.
+//   { id, kind: "rules", bitmap, kx, ky, shades: [[x0, y0, x1, y1, fill], ...] } -> { id, rules, shades }
+//       the same, with the page's coloured fills (vector-art.mjs meta.shades,
+//       bitmap px) sampled for the colour each really shows (rules.mjs
+//       shadeColors): `shades` is [{ x0, y0, x1, y1, color }] in page px,
+//       `color` null for paper. The engine paints a mask on one in its colour.
+import { scanRules, shadeColors } from "./rules.mjs";
+import { detectLayout, layoutError } from "./layout-model.mjs";
 
 function pixelsOf(bitmap) {
   const W = bitmap.width, H = bitmap.height;
@@ -28,9 +38,15 @@ function pixelsOf(bitmap) {
   return { W, H, data };
 }
 
-self.onmessage = ({ data: msg }) => {
+self.onmessage = async ({ data: msg }) => {
   const { id } = msg;
   try {
+    // The layout model reads the bitmap first (it draws it, scaled, into
+    // its own canvas); pixelsOf closes it after.
+    let layout = null, layoutFail = null;
+    if (msg.kind === "rules" && msg.layout) {
+      try { layout = await detectLayout(msg.bitmap, msg.kx, msg.ky, typeof msg.layoutProvider === "string" ? msg.layoutProvider : null); } catch (e) { layout = null; layoutFail = `detect: ${String(e?.message || e).slice(0, 200)}`; }
+    }
     const { W, H, data } = pixelsOf(msg.bitmap);
     if (msg.kind === "pixels") {
       self.postMessage({ id, W, H, buffer: data.buffer }, [data.buffer]);
@@ -38,7 +54,13 @@ self.onmessage = ({ data: msg }) => {
     }
     const { kx, ky } = msg;
     const rules = scanRules(data, W, H, kx, ky).map((b) => [b.x0 / kx, b.y0 / ky, b.x1 / kx, b.y1 / ky]);
-    self.postMessage({ id, rules });
+    const shades = msg.shades?.length
+      ? shadeColors(data, W, H, msg.shades).map((color, i) => {
+          const b = msg.shades[i];
+          return { x0: b[0] / kx, y0: b[1] / ky, x1: b[2] / kx, y1: b[3] / ky, color };
+        })
+      : null;
+    self.postMessage({ id, rules, shades, regions: layout?.regions ?? null, layoutMs: layout?.ms ?? null, layoutProvider: layout?.provider ?? null, layoutError: msg.layout && !layout ? layoutFail ?? layoutError() : null });
   } catch (e) {
     try { msg.bitmap?.close(); } catch { /* already closed */ }
     self.postMessage({ id, error: String(e?.message || e) });

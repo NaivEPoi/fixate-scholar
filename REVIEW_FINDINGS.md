@@ -5361,3 +5361,708 @@ check of the document this round was for did.
   original had processed as the tail of the paragraph above it; the two
   regressions of the intermediate versions (prose above a figure absorbed;
   the table processed) are gone, those pages back to the original's output.
+
+## R55 — performance on the real display, a calibration lost for a month, and papers of other layouts
+
+### Performance
+
+Measured with `test/diag-perf.mjs --cold --pages=8` on the real display (a 2x
+screen; `--headful`, since headless hides the GPU) over a two-column paper,
+before and after, the same scroll:
+
+| | before | after |
+|---|---|---|
+| main-thread task time | 5237 ms | 3757 ms |
+| longest task | 495 ms | 173 ms (page 1), 43–65 ms on every other page |
+| `createImageBitmap` self time | 1247 ms | not in the profile |
+| per page: longest chunk | 135–167 ms (one chunk held the page) | 43–65 ms |
+
+- The canvas hand-over to the worker (`#prefetchPixels`) asked
+  `createImageBitmap` for `premultiplyAlpha: "none"`, which forces the copy
+  through the CPU: 21–34 ms a canvas at 8.6 Mpx, measured, against 0.0 ms
+  with the default — a texture share. The page canvases are opaque (PDF.js
+  makes them with `alpha: false`), so premultiplying changes no byte: the
+  engine's own parity check (`worker pixels vs direct readback`) reads 0
+  differing after the change as before. `colorSpaceConversion: "none"` is
+  kept; it is free.
+- One idle callback did a page's whole first stage (obstacles, rules, the ink
+  checks, the overlap resolver) AND its first batch of 150 spans: the
+  140–170 ms task a reader felt as a skipped frame on every page. The pass
+  now yields once between the stage and the batches when the callback's
+  budget is spent, and a batch is 60 spans (`CHUNK`): a couple more layouts
+  a page, tasks under ~60 ms. Page 1's first stage alone is still 173 ms.
+- Two of the profile's top entries were the harness's own: under `__fxDebug`
+  the engine scans the rules on the main thread too (`scanRules`, 500–600
+  ms) and reads every canvas back directly to prove the worker's pixels
+  (`getImageData`, 330 ms). `--phases` turns that on; a production profile is
+  taken without it, and then our own code is under 300 ms of a 12 s scroll.
+
+### Found and fixed
+
+- `canvasInkTop` was used at the baseline calibration's one sample line and
+  declared nowhere: commit 1cff7e0 (2026-09-18) deleted the declaration and
+  left the use. In a module the use threw on the first sample of every page,
+  inside the `try`, so no family was ever calibrated and the metric fallback
+  did all the baseline re-seating since. Restored, and applied only where the
+  rendered face changes (a bundled reading font); with the same face PDF.js's
+  own placement is right, so the default mode is untouched. Measured on the
+  real display in Literata, one line with a kept monospace word beside
+  processed words, 4x clips: with the calibration the processed words sit on
+  the row of the kept word; with the fallback they sit a few device pixels
+  higher. The calibration needs the full-resolution canvas (`csy > 0.85 dpr`),
+  which headless rendering does not give it; that is why no harness saw the
+  loss.
+- A bibliography with no heading. REVTeX (Physical Review) sets its reference
+  list under a rule with no title, and two such papers had every one of their
+  246 citations unresolved: the parser found a bibliography only by its
+  heading. When no heading matches, the list is found by its shape: a "[1]"
+  line in the document's second half followed, within a few lines each, by
+  "[2]" and "[3]" at the same size; its first line stands in for the heading.
+  An enumerated list in the first half, and one bracketed number in prose,
+  do not qualify.
+- REVTeX balances its last page so the text's closing lines and the
+  acknowledgments sit at the top of the right column, above the list's
+  continuation; in column order they fall between "[22]" and "[23]", and the
+  acknowledgments heading ended the list at 22 of 69 entries. A heading
+  inside the list is now an interruption, not an end, when the numbering
+  carries on right after it ("[23]" after "[22]"); the interruption's own
+  lines are left out. An appendix opening with a bracketed number of its own
+  still ends the list (its number does not follow). 147/147 citations now
+  resolve on the one paper, 98/99 on the other.
+- The heading vocabulary was English only ("References", "Bibliography",
+  "Works Cited", "Literature Cited"). It now covers the English variants
+  ("References and Notes", "Reference List", …) and the headings of German,
+  French, Spanish, Portuguese, Italian, Japanese and Chinese papers
+  (Literaturverzeichnis, Références, Referencias, Bibliografia, 参考文献, …),
+  with an optional colon or Japanese bracket pair.
+- Appendix headings were body text. "A.2 Hint Retrieval Prompt" — a letter
+  with dotted numbers — matched none of the heading lead's shapes (a number,
+  "A.", a roman numeral, "(a)"), and on a line-numbered submission set in
+  Times every appendix heading was processed; the paper's small caps are
+  FAKED — a full-height capital, then the word's remaining letters as
+  reduced capitals in spans of their own ("H" "INT", "R" "ETRIEVAL") — so
+  the fragments came out bold mid-word ("**ET**RIEVAL"). The lead now takes
+  the appendix shape, and the candidate filter rejects a faked small-caps
+  tail wherever it appears (`smallcaps-tail`: all capitals, under 0.9 of
+  body height, starting where a full-height item ending in a capital ends on
+  the same baseline), since in running text ("O" "CTOPUS") the heading rule
+  would not reach it. A real small-caps face is already kept by its name.
+
+- A section sign after a statute's name. "47 CFR § 15.407(k)" was coloured
+  as an in-paper reference — the `§` leader — on an IEEE paper citing the
+  FCC rules; it points into the law, and the blue "[8]" beside it is the
+  citation. The title number and the source's abbreviation stand right
+  before the sign (CFR, C.F.R., U.S.C., "… Code"), on the same line or the
+  one above, and a `§` reference so preceded is left alone (parser
+  `LEGAL_BEFORE`, mirrored in the refcolor probe). A spelled-out "Section
+  230" of a statute is not told apart — the paper's own sections look the
+  same — and stays coloured.
+- A white mask on a shaded box. Every mask was paper white, so on a grey
+  callout — "Key Finding" boxes, a prompt box inside a figure; two private
+  papers, nine sheet rows — each processed line sat on a white band, the
+  mask's edge plain against the shading. `vector-art.mjs` now collects the
+  page's coloured fills wide and tall enough to carry a line of text
+  (`meta.shades`, the largest 48), the rules worker samples the colour each
+  really shows on the baseline render — the most common pixel inside it, so
+  a translucent fill or a pattern reads as the page shows it (`rules.mjs
+  shadeColors`) — and a span whose centre lies on one gets its mask in that
+  colour where it overlaps the fill, paper white beyond its edge (its
+  padding reaching past the box). Without the worker the fill as written
+  stands in. Emphasis inside the box is kept; the alternative, leaving such
+  text on the canvas, would have lost it on exactly the sentences a
+  callout exists to be read. Verified on both papers' boxes after the
+  change: the lines sit on the box's own grey, no band.
+- Rotated text redrawn upright and huge. The words of a NeurIPS attention
+  visualisation are set rotated by ninety degrees; processed, each was laid
+  out upright at the span's advance for its height — several times its
+  size, stretched across the figure and over the section heading above
+  it. Prose is never rotated on the page the reader sees, so a span with
+  any rotation in the viewport's frame (the page's own rotation cancelled,
+  as PDF.js lays the span out) stays on the canvas (`rotated`). Verified
+  on the three figure pages: the words are small and upright again.
+- A caption's second line emphasised. Two captions lost their continuation
+  to the body. In a REVTeX table caption a superscript's own row stood
+  between the lines, and the walk that absorbs a caption's lines took it
+  for a size change and stopped: a sub-height row between a caption's
+  lines is now skipped, neither ending the caption nor moving its pitch.
+  Under a REVTeX figure, the plot's axis label ("P_T (GeV/c)") had fallen
+  onto the caption's first row, so the row's text no longer ended in the
+  dangling "The" that says a caption runs on, and its leading (1.36) then
+  read as a paragraph break. A short item in another face set well inside
+  the caption's measure is foreign to it: left out of every test that
+  reads a line's text and shape, still marked with the line it lies on;
+  the caption's height is its own, not its row's; and after a line that
+  ran on, a pitch up to 1.5 is still the caption's leading. Both captions
+  are kept whole now.
+- A framed box's title emphasised. "Prompt for Hint Retrieval in ALFWorld"
+  heads a prompt listing in an ICLR submission: the body's own face and
+  weight, no number, no anchor, so no heading rule reached it, and it
+  carried bold prefixes above a box whose monospace lines are kept (the
+  tables probe reported it as processed text inside a ruled zone). A
+  Title-Case line with no label to vouch for it is a heading when every
+  test holds: two to eight words, each capitalised but the small
+  connectives, no sentence punctuation, the body's face, no wide gaps
+  (a table's row), alone on its row and short of the measure by a
+  quarter, under a line that ended a sentence (or a short one, or none),
+  and not continued by a lowercase line — a paragraph's last line ends in
+  a period, and a sentence broken before a lowercase word fails the last
+  test. Kept now; an affiliation line ("Imperial College London") is
+  kept by the same rule, which costs nothing.
+- The column's measure set by one stray item. The measure a column's full
+  lines reach was the widest item end in the column; under a REVTeX figure
+  one plot label reached 63 units past every caption and body line, so the
+  caption's first line fell "short" of the measure and was taken for its
+  last. Justified text makes the full lines' ends equal, so the measure is
+  now the widest end that a second line shares, the widest alone only when
+  no two agree. Every rule that asks whether a line is full or short reads
+  this (headings, captions, run-in leads); the gate's skip-reason diff is
+  the measurement of what else it moved.
+- A paragraph kept as a caption under a wrapped "Figure 4." Found in the
+  skip-reason diff of the final gate, on a USENIX paper, and older than
+  this round: "… using (S¹, γ¹) and (S¹, γ²), / Figure 4. To resolve ψ₁,
+  we …" wraps a sentence so that "Figure 4." opens a line, the caption
+  lead's shape. The guard that reads the line above as prose counts its
+  lowercase words, and math left that line with two; its trailing comma
+  is the stronger evidence. A line above that ends in a comma or a
+  dangling word, in the same face at normal pitch, is prose, and no
+  caption opens under it. That alone did not reach the line: the guard
+  took "the line above" as the previous line group on the page, and
+  line groups run across both columns, so on a two-column page it was
+  often the other column's line with nothing in this band — and here
+  the subscripts of the math line ("in out in out"), grouped as a row
+  of their own in another face. The line above is now the nearest group
+  with a full-height item in this column. Four body lines are emphasised
+  again (traced with `PROBE='Figure 4.'`). Finding the real line above
+  undid a lucky miss elsewhere: in a private paper a table sits
+  mid-paragraph in the right column, under a line ending "into" — the
+  group above had been the other column's, with nothing in the band, so
+  the guard never ran; now it ran, the line above dangled, and "no caption
+  opens under an unfinished sentence" emphasised the table's caption and
+  notes (23 spans, found in the gate-to-gate skip-reason diff). A gap
+  wider than the page's own leading by a third is a float's, however the
+  line above ends: the page's leading is the median baseline pitch of its
+  consecutive prose rows, and both continuation tests sit under that
+  ceiling. The double-spaced manuscript's 1.73 is its own leading and
+  still passes; the pitch is taken between the baselines of full-height
+  items, since a math line's superscripts had moved its group a half line
+  up.
+- A symbol's right loop cut off. A CM "∞" laid out in the fallback face
+  is narrower in the text layer than the glyph the canvas drew, and the
+  next word's mask, clamped to the box, cut its right loop to "∝" — three
+  times on one page of an amsart paper. A kept one- or two-glyph symbol's
+  obstacle is now its INK: the canvas beside its box is probed for the
+  ink that continues it, up to 0.4 of the line's height and never into a
+  processed neighbour's own box, whose canvas copy the mask must cover.
+  Verified: the sign is whole.
+- An address with its underscore lost. The text layer carries no character
+  for an underscore drawn as a rule, so "ab_cd@…" read "ab cd@…" and the
+  orphaned local part was emphasised as a word in a private paper's
+  contact line. With two or more addresses in the span, a plain lowercase
+  word right before an address is its lost local part (one address in
+  prose keeps the word before it). Verified: nothing emphasised on the
+  line.
+- Two kana whited out on a mojibake page. The Japanese paper whose text
+  layer is garbage (the font has no usable ToUnicode map) keeps its lines
+  by the per-span mojibake test — three scripts in one span, or marks on a
+  tenth of its characters — but a two-character span of ONE script passes
+  it: "ȃ!" (Latin Extended-B) stood over "せて", was redrawn as nothing,
+  and its mask whited the kana out. On a page with two or more mojibake
+  lines, every span with a letter outside Latin, or a Latin letter from
+  the Extended-B and IPA blocks no paper's prose uses, is the same wreck
+  and stays on the canvas. Verified: the line reads whole.
+
+### A reference across a line break, and what it points at
+
+- "…as we saw in the proof of Theorem" / "2, for every n": the page's text
+  is joined for the citation pass in the text layer's own order, which is the
+  content stream's, and on a mathematics paper that order put the line's end
+  ahead of a line two below ("3, ∆(…"): the grammar read "Theorem 3", into a
+  kept span, and coloured nothing, while the real number sat elsewhere in
+  the sequence. The join is now in READING order — rows by baseline, a
+  two-column page's left column before its right (the gutter found as the
+  equation probe finds it) — and the break between two spans is one a
+  reference may cross only when the second continues the first: the same
+  line to the right, or the next line down the column. Any other break is a
+  character no grammar treats as space. `readingOrder` and `continuesLine`
+  are exported and unit-tested.
+- The first cut of that join wrote each span's separator AFTER the span,
+  from the gap before it — one span late. A line's last word was then cut
+  from the next line's first by the hard break meant for the column change
+  two spans on, and "(Section 4.4)" split over a line end on the public
+  USENIX paper lost its colour (83/84, where the old join had 84/84). The
+  separator is now written before each span, from the gap it describes;
+  84/84 again.
+- The `refcolor` probe joined only the PROCESSED spans' text, so a kept math
+  span between "…proof of Theorem" and "2, for every" vanished from its view
+  and it reported an uncoloured "Theorem 2" — a reference the page does not
+  print. It now joins every span, and a reference running through a kept
+  span (the number set in the math face — R53's limitation) is counted
+  apart (`kept=N` on the page's line) rather than as a miss or a hit.
+- The other half of R53's "Listing / 2": a bare number beginning a line is
+  kept on the canvas (it has no letter), and the colour rule, which paints a
+  reference whole or not at all, left the leader black with it. The
+  candidate filter now processes a line-starting number when the item before
+  it, on the baseline above, ends in a reference's leader word
+  (`REF_LEADER_END`, `REF_ITEM_START` in parser.mjs).
+- On hover, an in-paper reference now shows what it points at
+  (`references/preview.mjs`): a clip of the target page rendered small — a
+  figure or table reaching up from its caption, a theorem's statement or a
+  section's opening lines reading down from its heading, an equation about
+  its tag — with the target's first lines as text and its page number, in the
+  citation popup's card. The target is the PDF's own link destination where
+  the paper has one (hyperref's `figure.3`, `section.4.2`, an explicit
+  destination array, read off the annotation layer's href as PDF.js writes
+  it), else the document's lines searched for the label the target prints
+  ("Figure 3:", "Theorem 2.", "4.2 Title", a trailing "(5)"), from the
+  referring line forward. The hyperref'd reference sits under the PDF's link
+  element, so the handlers go on the annotation layer's links as well as on
+  the coloured wraps. Clips are cached per target; the pure parts
+  (`parseDestHash`, `targetByText`, `regionFor`, `columnAt`) are unit-tested,
+  and `test/refpreview.mjs` hovers a reference end to end — through the
+  text search by default, and with `--expect=link` through the PDF's own
+  link box, which hyperref draws over the number alone ("Figure 2": the
+  box is 10 px wide, over the "2"), so the harness looks for the link under
+  any wrap of the reference's run, not under the wrap holding "Fig".
+- The link path's first cards were wrong. A link's anchor is wherever the
+  paper's class put it, not where the target prints: a float's at its
+  caption (plain hyperref) or at its TOP (hypcap, which acmart loads), a
+  section's a skip above the heading with the page margin's x — so "up from
+  the anchor" clipped the two columns of text above Figure 2 with a body
+  sentence for a snippet, and Section 4.3's card showed both columns and
+  quoted the left one. The target's own line, found by its label on the
+  destination page, is now the fixed point for every kind — its column,
+  its top, its text — and a float whose anchor sits above its caption is
+  measured by it (the clip reaches the anchor; no guessed height). A
+  caption's snippet ends where the next line opens with a capital or a
+  number (the body or a heading after it), and an equation has no snippet:
+  its text layer is the symbols in stream order ("(HU)μνABQAφ σ UB + h.c.,
+  (1)"), which says nothing the clip does not.
+- The `eqkeep` probe read "…contributions to Eq. (39)" ending a line as a
+  numbered equation and the sentence's emphasis as a violation (a REVTeX
+  paper): the trailing parenthesis is a reference's, when the leader stands
+  right before it. The probe now says so.
+
+### Rules from the other layouts' edge sheets
+
+The extra corpus's edge sheets (18 documents, 147 agent reads and
+verifications, every claim checked against the page with `wordshot` and a
+DOM dump before any rule changed) sorted into these classes. Each fix is a
+rule about the layout, not about the paper it was found on:
+
+- **Caption labels the lead test did not read.** The label split over text
+  items ("Fig." | " " | "2" | " " | the text in another face — BMC/PLOS); set
+  in capitals ("FIG. 2:", "TABLE I" — REVTeX); an appendix float's letter
+  ("Table A.3.", "Figure B.1:"). The caption pass now tests the line's first
+  few items joined, and the lead regexes take the three shapes; every
+  caption of the biology paper had been emphasised as body.
+- **A body line taken for a caption.** "Figure 8. Thus, there appears …" is
+  a wrapped sentence's middle line; the continuation guard allowed only
+  single-spaced leading (1.45), and the manuscript is set at 1.73. The
+  guard now also accepts a wider pitch (to 2.0) when the line above ends
+  dangling ("… shown in Panel C of"): no caption opens under an unfinished
+  sentence.
+- **Headings in the body face.** An italic numbered subsection
+  ("2.1. Diffusion models for image restoration", elsarticle) exceeded the
+  three-lowercase-word cap; the italic-throughout tell now takes a numbered
+  label as well as IEEE's lettered one, and a numbered line stopping well
+  short of the measure with no sentence inside is a heading up to eight
+  lowercase words. An italic run-in heading ending in a PERIOD ("Gradient
+  Loss. The gradient …", "Benchmarks. We …" — elsarticle's \paragraph) had
+  no rule (the bold and roman ones did): a short Title-Case italic run with
+  the roman body resuming on its line is skipped like them. The outline's
+  heading anchor sits a skip above the heading, and landed on a
+  paragraph's last line ("ET-SDE yields more robust results with …", skipped
+  whole): a line of four or more lowercase words in the body face under the
+  anchor is prose.
+- **Footnotes without a marker.** The rule required a marker opening the
+  block; a footnote continued from the page before ("timekeeping, meaning …"
+  with footnote 13 after it, NBER) and an AMS paper's first-page notes ("Z.
+  Reichstein was partially supported …") have none. Small prose at the
+  bottom of its column, body prose above it and none below, is a footnote;
+  an appendix set small throughout has no body block over it. The marker
+  class takes U+2217, the asterisk TeX sets for \thanks.
+- **A figure under its caption.** The figure-body sweep assumed the figure
+  ABOVE the caption; economics working papers put the caption over the
+  figure, and the legend ("Sun-Abraham", "Borusyak et al.") and axis title
+  ("Chat Date") under it were body. With prose right over the caption, or
+  the caption heading its column, the sweep runs down instead: lines that
+  are not running prose, to the first prose line (the figure's "Notes: …")
+  or caption; a panel title ("A. Resolutions Per Hour") is figure content.
+  Writing it exposed a flaw the upward sweep had carried: a prose line was
+  one filling 72% of the COLUMN'S WIDTH, and on a single-column page that
+  width was the page's — the NeurIPS/ICLR measure is 65% of a letter page —
+  so no prose line ever bounded a sweep there (the first downward run took
+  a submission's body whole as a figure; the upward one had been running to
+  the page's top edge, hidden because those templates' figures head their
+  pages). Both sweeps now take the measure from the column's own lines.
+- **A word broken at a line end.** Its tail opened the next line as a fresh
+  word with its own bold prefix ("it" of "findabil-" / "ity") — on every
+  justified paper, a second fixation mark on a word already fixated. The
+  cross-span word join now joins a hyphen-ended line to the lowercase line
+  start under it in the same column: the tail gets no emphasis of its own,
+  the head's prefix is sized against the whole word. Such a join is for
+  the emphasis only: it does not carry a kept line's reason to the body
+  line under it.
+- **Faked small caps, the other half.** "-C" + "ONTROL" in a heading's
+  "LEAKAGE-CONTROL": the full-height capital with the hyphen riding on it
+  is two characters, a letter, processed — bold. The head of such a word
+  is rejected like its tail.
+- **A text layer that is not the page's text.** A Japanese paper's font has
+  no usable ToUnicode map: its lines reach the text layer as Greek,
+  Armenian and Latin Extended-B code points with combining marks among
+  them, and were masked and redrawn as that — kana stacked, characters
+  gone. Letters of three script families in one span, or marks on a tenth
+  of its characters, is text no paper sets: the span stays on the canvas.
+  The same paper's fullwidth parentheses came out as U+022A, a Latin letter
+  to the word-join, which made "Juliet" after one a continuation with no
+  emphasis: a one- or two-character head wholly in Latin Extended-B or IPA
+  joins nothing.
+- **Short prose beside a kept script.** "number of Γ" (eleven characters,
+  the subscript "reg" under the Γ) was expression-sized by length and left
+  plain with the words around it: two lowercase words say prose, whatever
+  the length.
+- **Kept italic letters under a neighbour's mask.** The italic J of a math
+  "J-regular" overhangs its text box to the right by a tenth of its height;
+  the next word's mask, padded 2 px at 100% zoom (more than the box's own
+  slack), took its top bar and upper stem — at 100% only, which is why no
+  close-up showed it. A kept one- or two-glyph run in an italic or math face
+  is cut out of the neighbouring masks as a symbol run already was.
+- **A full-measure equation.** "(Yield per A + A collision)" over "(Yield
+  per p + p collision)", the R_AA ratio: set to the full measure (no
+  centring signal), its rows unnumbered (the tag sits on the fraction
+  bar's row), with words. A block of a few rows with scarcely a sentence's
+  words whose row ends in a tag set apart at the region's right edge is an
+  equation; and the rows a half-pitch above and below a numbered row,
+  built like an equation (an operator, a relation, a math-face item) with
+  at most two words and no sentence's shape, belong to it.
+- **Citations.** "[ 1, 2]" with a space inside the bracket; natbib's
+  compressed "(2021b,c)" (the bare letter is the previous year's suffix);
+  a name whose ä the PDF composes from a spacing diaeresis and the letter
+  ("Kujanp¨a¨a" — matched to the entry with accents folded either way); and
+  "[512, 256, 1]", a list of layer sizes, every number of which was a stub
+  card and coloured as a citation in a paper whose bibliography has no
+  numbers — a numeric stub is made only where a numbered bibliography
+  could carry it.
+
+A second pass — the sheets re-captured on the engine above and re-read
+against the first read's claims (22 documents), then the release gate's
+skip-reason diff over both corpora (161 pages changed, every one read) —
+added:
+
+- **The join's reading order, again.** The column split used a vertical
+  band few rows cross; a wide figure's labels fill it, and the two body
+  columns' lines then interleaved by height — "(Fig. 8" lost its "and 9)"
+  to a line of the other column between them (a private paper). Columns are
+  now judged row by row at the page's centre (a row's items all on one
+  side, or both sides with a gap across the centre, or straddling it), the
+  left sequence first and the right after. Which a page is, the PROSE rows
+  say: a one-column page's prose lines all cross the centre, a two-column
+  page's never do — judged by the rows alone, a mathematics page's
+  displayed equations (short rows, left, right or two-sided) outnumbered
+  its prose lines and made two columns of one, cutting "Eq." from its
+  "(20)". Two columns must also be real: their lines start at a shared
+  edge and run a column's width, and the gutter is the band the two-sided
+  rows' MEDIAN edges leave (one formula overflowing into the gutter voided
+  a band forty-two rows agreed on). A page that is neither keeps the
+  document's own order. A spanning row's own items (a centred caption)
+  ride with the left sequence, but a line of each column on that baseline
+  still goes to its column. Rows are built from the items of body height
+  alone; a sub- or superscript joins the nearest row afterwards (built in
+  one pass by centre, a superscript was reached before its own line and
+  joined the row ABOVE, cutting "Sec." from "IV A"), and a tall item — a
+  rotated axis title, a big delimiter — likewise (seeding a row, it
+  swallowed every line within half its height, and "Fig-" went to the
+  other column's sequence). A numbered manuscript's margin line numbers
+  ("1217", digits alone, outside the lettered items' extent by the 5th and
+  95th percentiles, or more than a line height clear of the row at its
+  edge) go to the end of the order: between "Theorems 5.7" and "and 5.8"
+  one broke the reference, and IEEE's right-margin numbers, each on a
+  baseline of its own, broke "Proposition" from "1, showing".
+  The right column's first item continues the left column's last line: a
+  word broken there is one. A sub- or superscript (set small, its centre
+  half a height off its line's) belongs to its line's row — as a row of
+  its own it fell between "(Al-" and "gorithm 1), which" and broke the
+  hyphenated reference — and the next-line bound is 2.4 heights, since a
+  double-spaced manuscript sets its lines 1.7 to 2.2 apart. And a
+  whitespace-only span (an OCR layer's or a Word export's space item, often
+  with no height) joins as a space and never as a line of its own — "Table"
+  | " " | "4" was cut by a hard break; the colour probe, likewise, no longer
+  counts such a span as one a reference must run through, and names the
+  spans of each miss, with the product's own joined text around them.
+- **Leaders.** Remark, Proposition, Corollary, Example, Assumption,
+  Conjecture, Observation, Fact, Exercise, Hypothesis, Property, Notation,
+  Reduction and Step are reference leaders (capitalised only); an abbreviated
+  leader takes its period or a space, so "fig1" and "fig3.ps" (file names on
+  a template paper) are not references; REVTeX's "Sec. II B" takes its
+  letter. The probe's copy of the grammar moved in step.
+- **Citations.** An amsalpha label with no year ("[P]", "[RY]", with a
+  locator "[P, Section 6]") is a citation key; a stub card is made only for
+  a NUMERIC key, so a matrix "[A]" in prose stays plain.
+- **A label or a variable is not a word.** The "a" of a list's "(a)", and
+  the "n", "p", "df" of "(n = 617)", "p < 0.001" — one or two letters with a
+  relation sign after them — get no bold.
+- **The run-in rule's paragraph start.** The regular-weight run-in rule
+  meant to fire on an INDENTED paragraph start measured the indent from the
+  band's edge, which for the right column is the page's centre (and for the
+  left the page's edge): every line start was "indented", and a
+  mid-sentence "Sun-centered frame [4, 15, 19]. Cartesian …" (REVTeX) was
+  kept as a run-in heading — while the same accident is what let it catch
+  ACM's unindented run-in heads ("NAS security activation. However, …").
+  A paragraph start is now an indent from the column's own text edge, or a
+  line under one that stops short of the measure, a gap, or nothing; a
+  sentence's tail continues a full line.
+- **A scan with an OCR layer.** The operator walk now counts text drawn
+  invisibly (rendering mode 3 or 7) against text drawn visibly, and the
+  largest image's share of the page. A page whose text is all invisible
+  under a page-sized raster is a scan: its text layer says what the OCR
+  read ("ritimbtr" for "number", "GENUAL~Y" for "GENERAL THEORY"), and
+  redrawn over the scan it replaced the page's own glyphs with that. No
+  span of such a page is processed (`ocr-layer`). Two OCR'd papers of the
+  extra corpus had every line so. The first cut of the rule took a
+  born-digital page of a private paper for a scan: its figure sets mode 3
+  inside its own q…Q, and the walk kept the mode past the Q, so the body
+  text after the figure counted as hidden. The mode is graphics state, now
+  saved and restored with it; and the raster is required, since a
+  flattened page carries its selectable text invisibly too.
+- **Garbled text, the small spans.** A span of combining marks with no
+  letters to carry them drew nothing where kana stood; a span with as many
+  marks as letters is kept.
+- **A kept letter in another face.** The j of an optimisation paper's
+  "j-th" is in a face named neither italic nor math; the one-letter run was
+  not a symbol to the masks, and the next word's mask took its stem at 100%.
+  A one- or two-glyph run kept in a face other than the page's body face
+  (by characters set in it) is a symbol.
+- **Footnotes, bounded.** The marker-less footnote rule does not take the
+  bibliography's last entries (small, under the body, at the column's
+  foot — the shape exactly) nor a small table: those keep their own
+  reasons.
+
+Known and left (each named in the sheets, none a regression): the LaTeX
+logo's split spans (a bold "L", the lowered E flattened — two template
+papers); a run-in operator name set in the text face ("diag", "Sim");
+booktabs tables whose rules pair over more than 15% of the page height;
+a /Rotate 90 page's baseline re-seat; a URL's blue lost when its link
+annotation covers less than half of a prose span; a one-glyph fullwidth
+parenthesis whose box is narrower than its ink; Word's small caps, set as
+small-cap GLYPHS at capital codes in one text run ("TRANSACTIONS" redrawn
+in full capitals — the text layer cannot see the glyphs); a theorem of a cited paper ("Theorem
+2.2 from [12]") coloured as in-paper; a capitalised product name swept
+into an author run ("Uni-Mol Zhou et al. (2023)"); a paper's own missing
+space ("ENZYMEBairoch"); a reference whose number is the next line's first
+item under a hyperref box on one LNCS paper, still kept — not resolved
+this round.
+
+### The layout model, an option (experimental)
+
+The user asked whether a light computer-vision model could divide the page
+where the rules struggle, at the rules' speed on a GPU or NPU and still on
+a CPU, and chose to leave it as an option. It is one: `layoutModel` in
+Settings, off by default, with no file of it in the extension until
+fetched (`scripts/fetch-layout.mjs`, into the git-ignored vendor
+directory, like PDF.js).
+
+- The model is PP-DocLayout-S (PaddleOCR 3.x, Apache-2.0): PicoDet-S with a
+  GFL head, 4.8 MB, 480×480 input, 23 classes (paragraph_title, image, text,
+  number, abstract, content, figure_title, formula, table, table_title,
+  reference, doc_title, footnote, header, algorithm, footer, seal,
+  chart_title, chart, formula_number, header_image, footer_image,
+  aside_text), 70.9 mAP(0.5) on the publisher's benchmark, 18.5 ms a page
+  on a server CPU in their table. Its larger siblings (RT-DETR-L, 124 MB)
+  are out of the question for a CPU; the DocLayNet YOLO exports carry
+  Ultralytics' AGPL, which this Apache-2.0 extension cannot bundle.
+- It runs in the rules worker (`layout-model.mjs`), on the same baseline
+  bitmap the canvas rules are scanned from — one fixed-resolution render a
+  page, so its decisions do not move with the zoom either — through ONNX
+  Runtime Web (MIT): WebNN on the NPU where `navigator.ml` exists, WebGPU
+  where `navigator.gpu` does, WebAssembly otherwise, falling through in
+  that order. The pure parts (the tensor preparation, the output decoding
+  by shape, the class map) are unit-tested; the runtime path is exercised
+  by `test/diag-layout.mjs`, which refuses to pass when the model is
+  unavailable on every page.
+- Its regions are evidence, not verdicts: in a pass's first stage (where
+  vector art and a scan's OCR layer already keep candidates) a candidate
+  whose centre lies in a figure, table, caption, footnote, formula,
+  algorithm, header, footer, heading or aside region at 0.5 confidence or
+  better is kept with the region's class as its reason (`region-figure`
+  …); a "text", "abstract" or "reference" region changes nothing, and no
+  region un-keeps what the rules kept. A model miss therefore leaves
+  today's behaviour exactly in place, and the gate's skip-reason diff
+  between a run with `--layout` and one without is the measurement.
+- Fetched and run (2026-10-19). `npm run fetch-layout` takes ONNX Runtime
+  Web 1.30.0 from npm (seven dist files out of the 33 MB tarball, which
+  ships no licence file — the MIT text is written beside them) and the
+  model. The publisher's own files are Paddle 3's inference.json and
+  inference.pdiparams, and paddle2onnx has no wheel for Python 3.13 (its
+  onnx dependency fails to build), so the ONNX export published beside the
+  original on Hugging Face (two-input GFL graph, NMS inside, 4.92 MB,
+  Apache-2.0) is fetched and refused unless its SHA-256 is the one the
+  card states; MODEL-SOURCE.txt records the provenance and the I/O
+  contract.
+- Three traps between the files and a result, each now in the code or
+  the harness: a tab opened through DevTools' `/json/new` stays hidden
+  behind about:blank, and the overlay applies a settings change only once
+  the page is visible, so the harness's toggle never reached the engine
+  (`/json/activate`); a page's baseline, with the model's result, is
+  cached per page, so flipping the option drops the cache
+  (`updateSettings`) and the diagnostic arms the flag before the first
+  baseline; and WebGPU creates a session on this export but fails inside
+  a MatMul kernel ("shared dimension does not match") at run time, so a
+  provider that cannot run the graph is left for the next one, once, and
+  the diagnostics can force one (`--provider=`). The threaded WebAssembly
+  build spawns its workers from blob: URLs, which the extension's CSP
+  refuses; the single-threaded SIMD build is used.
+- Measured, headless, WebAssembly: 130–230 ms a page on the public NeurIPS
+  paper, off the main thread after the page's own render; the regions are
+  the ones a reader would draw (the arXiv stamp as aside text, the title,
+  the headings, a figure and its caption), and on those pages they keep
+  nothing the rules had not kept. The regions-on gate diff is the
+  measurement of the option's effect (`node local/gate.mjs --layout`).
+
+### Code review of the day's engine changes (2026-10-19)
+
+Four readers over the day's changes by area (masks, the candidate filter
+and symbol obstacles, the caption pass and the measure, the smaller
+rules), each finding handed to a skeptic. Eleven findings, nine confirmed,
+two refuted; all nine fixed:
+
+- The shade rectangles were recorded in the first stage in client
+  coordinates and never moved with the page between idle callbacks, unlike
+  the obstacles and zones beside them; a scroll mid-pass put the grey
+  masks one scroll away from the box. They move with the rest now.
+- A mask piece cut around a kept run can lie wholly off the shade; the
+  clamps, bounded by the shade alone, then painted a remainder past the
+  piece, over the band the cut had opened. A piece that misses the shade
+  is painted white, exactly the piece.
+- A white fill inside a coloured one — a white box in a grey panel — was
+  never recorded (paper inks nothing), so the panel's colour won under
+  the box's text. A white fill inside a recorded shade is a shade of its
+  own, and a paper-coloured innermost fill means a white mask.
+- The symbol ink probe never stopped: the ink check calls a rect under ten
+  canvas pixels wide "too small to judge" and answers ink, so every
+  one-pixel column beside a kept glyph read as ink and the obstacle grew
+  to its full reach each time (it still stopped at a neighbour's box, which
+  is why the "∞" came out whole). An exact probe now judges the column it
+  is given and never registers the low-resolution retry.
+- The page-level mojibake count took a math accent stored as a combining
+  mark on one letter for a mojibake line; two such accents on an ordinary
+  page would have kept every Greek letter and accented name. The count
+  uses the script and mark-density rules alone.
+- A caption's own text read as foreign when its label leads in a face of
+  its own (a bold "Fig. 2"): every token of its short last line met the
+  position test. The caption's text face — the widest item of its first
+  row — is its own too.
+- A left-column "TABLE I" alone on its row took the right column's
+  lowercase text after it, in the lead text joined across the row, and
+  read as an in-text reference. The lead text is its own column's.
+- The caption's height was the row's over both columns, and a max with
+  the lead's own height changed nothing (the row's is already the
+  maximum); it is now the tallest in-band item of the row.
+- The citation lookbehind refused a name after an apostrophe, and
+  "d’Ascoli et al. (2021)" has no other start; an elided particle of one
+  letter at a word start is allowed again, with the run time unchanged.
+
+Refuted: the Title-Case rule's "its row is its own" test is a tautology
+(the band is the row's in-band items) — true, and harmless; and its
+line-above guard on a two-column page with offset baselines, which the
+column filter already handles.
+
+### Security review (2026-10-19)
+
+Five readers over the extension by area (manifest and service worker, DOM
+output of PDF-derived text, settings and messaging, supply chain and
+run-time loading, the PDF.js patches), each finding handed to a skeptic
+asked to refute it from the code. Thirteen findings, six confirmed (two
+pairs reporting one issue), seven refuted. Fixed:
+
+- A `file:` URL with a host. Every gate on a file: URL was a scheme test —
+  the viewer's `?file=` gate, the bypass list's normaliser, the context
+  menu, the navigation fallback and the "native" button — and viewer.html
+  is web-accessible to every page. `file://host/share/x.pdf` is
+  `\\host\share\x.pdf` on Windows, an SMB connection to that host made with
+  the user's credentials once the user has turned on file access for the
+  extension; a web page cannot navigate to a file: URL itself, but it can
+  send the viewer there. One predicate, `isLocalFileUrl` (no host or
+  localhost, no UNC path), now stands at each of the six sites; the bypass
+  normaliser no longer keeps a file: string the URL parser rejects, since
+  its host cannot be checked. The SMB step itself was not exercised; the
+  missing check was plain in the code.
+- Two regexes quadratic on a hostile span. The narrative-citation pattern
+  started a name at every capital and ran its greedy class to the end of
+  the run before the year failed: forty thousand capitals in one text
+  operator held the viewer's thread for six seconds, a few hundred
+  thousand for minutes, on every render and zoom. A word-start lookbehind
+  makes it linear (a millisecond on the same input); a name no longer
+  starts inside a word, which no citation did. The line-join fragment
+  regex, anchored at the end only, had the same shape; its input is now
+  the last 64 characters, longer than any word fragment at a line end.
+  Both are a denial of service of the tab only.
+- Fonts fetched by a floating range. The build fetched the five reading
+  faces from the CDN at `@5` with no hash, and the release workflow
+  bundles them: the CDN or a compromised release could put any bytes into
+  a release. Each file is now pinned to an exact version and a SHA-256
+  (the vendored files' own, which the versions resolved today reproduce
+  byte for byte), checked before it is written.
+
+A refuted finding was a real defect of another kind: `REF_LEADER_END`,
+the pattern that says a line ends in a reference leader ("as shown in
+Figure" / "4"), was built from a string whose `\b` and `\s` had lost
+their backslashes — a backspace character and an `s` — so it matched
+nothing, and a reference broken at a line end before its number was never
+coloured. Repaired, with a test that reads the regex as the product does.
+The remaining refuted items were a query-parsing nuance PDF.js and the
+gate already read alike, the model and runtime fetches (now hash-checked
+and with their licences written, as above), and loopback requests the
+viewer could be made to issue, which carry no credentials and return
+nothing to the page.
+
+### Papers of other layouts (`local/corpus-extra`, 23 documents)
+
+Open-access papers of layouts neither corpus had, found by one scout per
+type and fetched (sources in `local/corpus-extra/SOURCES.md`; local/ is
+git-ignored): amsart mathematics, PLOS/BMC biology, Japanese journal
+articles (J-STAGE), NBER economics working papers, elsarticle preprints, law
+reviews (footnote-only), landscape-page physics instrumentation papers, ICLR
+submissions with line numbers, LNCS, REVTeX physics, a scanned OCR report, and
+two Word-template IEEE papers. A second scan with no text layer at all is set
+aside (`local/corpus-extra-aside`): every harness waits its full timeout on a
+document with nothing to process. The corpus is served like the private one
+(`servePrivate({ corpus: "extra" })`, aliases ex01..), so every harness runs
+on it unchanged.
+
+### Verification
+
+- Unit suite: 333 pass, 0 fail, naming guard passed (parser, citations,
+  preview, segmenter, vector-art, rules, layout-model, settings and
+  file-param tests added this round).
+- Combined gate on the final code — after the code review's nine fixes
+  and the security review's — GATE PASS, 37.7 min, every stage 49/49:
+  public allprobes 14/14 (8.5 min), public console 14/14 (2.5), public
+  papers 1/1 (1.5), private allprobes 35/35 (19.4), private console 35/35
+  (5.8). Two gates on this tree earlier in the day passed the same way
+  (36.4 and 36.1 min); four before them found the reading-order and
+  refcolor defects this round fixed.
+- Skip-reason diff against the committed baseline (07bed09): 240 of 773
+  pages reclassified, no page unreasoned. Against the gate before the
+  day's last fixes: 86 pages, of which 82 keep their count of kept spans
+  — the Title-Case heading rule now names lines the figure-body and
+  figure-label rules named before, and rotated labels are `rotated` where
+  they were `over-body` (an arXiv stamp on every page of one paper).
+  Four pages change their count: one caption line absorbed, one span
+  more under an overlap, and two pages one heading line fewer. Dumped
+  under both measures (`PRE='globalThis.__fxOldMeasure=1'`): on one, a
+  run-in heading's line ("G4. Post-suppression resilience. … constitutes
+  a …") was skipped whole under the old measure and only the heading run
+  is now, its sentence tail processed — the run-in rule needs the line to
+  fill the measure, which the stray-inflated one never let it; on the
+  other the two dumps agree line for line, so the one-span difference is
+  the run's, not the measure's. The USENIX paragraph read below was found
+  in this diff.
+- Extra corpus (23 documents, not a gate corpus): EXTRA_RESULT.
+- Edge sheets of both corpora read in full by a sonnet reader (69
+  documents, 298 flags, 57 at high confidence); every high flag
+  captured at the word before anything changed. 21 were stale sheets
+  of the scanned paper from before the scan rule (deleted); nine classes
+  were real and are the fixes above; the rest were false positives
+  (a wrapped citation that is coloured, a letter that is intact, a
+  reference inside a kept equation row — the known R53 limitation) or
+  the known small-caps limitation.

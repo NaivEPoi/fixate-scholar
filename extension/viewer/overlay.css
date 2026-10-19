@@ -725,3 +725,27 @@
   background: #52525e;
   border-color: #8ab4f8;
 }
+
+/* Hover preview of an in-paper reference's target (references/preview.mjs):
+   a clip of the target page, its first lines, the page number. */
+.fx-cite-popup .fx-preview {
+  max-width: 380px;
+}
+.fx-cite-popup .fx-preview-head {
+  font-weight: 600;
+  color: #f1f3f4;
+  margin-bottom: 6px;
+}
+.fx-cite-popup .fx-preview-thumb {
+  display: block;
+  max-width: 100%;
+  border: 1px solid #52525e;
+  border-radius: 3px;
+  background: #fff;
+}
+.fx-cite-popup .fx-preview-snippet {
+  margin-top: 6px;
+  color: #c9c9ce;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
