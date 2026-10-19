@@ -19,6 +19,8 @@ $("openSources").checked = settings.openSources;
 $("saveLocalFile").checked = settings.saveLocalFile !== false;
 $("layoutModel").checked = settings.layoutModel === true;
 $("layoutModel").addEventListener("change", (e) => setSettings({ layoutModel: e.target.checked }));
+$("lineModel").checked = settings.lineModel === true;
+$("lineModel").addEventListener("change", (e) => setSettings({ lineModel: e.target.checked }));
 $("annotationAuthor").value = settings.annotationAuthor;
 $("bypassOrigins").value = settings.bypassOrigins.join("\n");
 $("bypassUrls").value = (settings.bypassUrls || []).join("\n");

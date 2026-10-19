@@ -58,6 +58,10 @@ export const DEFAULTS = Object.freeze({
   // Needs the runtime and the model under extension/vendor/layout (`npm run
   // fetch-layout`); without them the option does nothing.
   layoutModel: false,
+  // The line classifier (line-model.mjs, trained in ml on DocBank and
+  // DocLayNet): each line's class from its geometry, faces and text shape;
+  // a keep class keeps its candidates. Off by default, like the layout model.
+  lineModel: false,
 });
 
 const hasStorage = typeof chrome !== "undefined" && chrome.storage?.sync;
