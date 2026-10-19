@@ -26,11 +26,23 @@ import { classify, loadLineModel } from "./line-model.mjs";
 
 // The line classifier (line-model.mjs; trained in ml on DocBank and
 // DocLayNet, exported by export_js.py), fetched once when the option is on;
-// null when the file is not there. A keep class at LINE_MODEL_MIN or better
-// keeps its candidates — evidence like the layout model's regions.
+// null when the file is not there. A class in LINE_MODEL_KEEP at its
+// confidence or better keeps its candidates — evidence like the layout
+// model's regions.
 let lineModelPromise = null;
 let lineModelLoaded = null; // the model once resolved, for the synchronous first stage
-const LINE_MODEL_MIN = 0.75;
+// The classes the model may keep a line for, and the confidence each needs.
+// Read against the rules on this project's 49 papers (ml/README.md, "In the
+// engine"): of 190 spans the model kept at 0.75 across all its classes,
+// the table rows and most headings were real gains the rules had missed
+// (cells of a sparse table, a small-caps table title, a lettered
+// sub-heading), while nearly every "caption", "furniture", "figure" and
+// "formula" keep was body prose — a sentence under a figure or naming one,
+// a page's last lines, a sentence's tail — so those classes stay with the
+// rules here. The model's edge on those classes is real on unfamiliar
+// layouts (DocLayNet), where the rules OVER-keep; a keep-only hook cannot
+// spend it, and un-keeping is the follow-up that could.
+const LINE_MODEL_KEEP = { table: 0.75, heading: 0.9 };
 function ensureLineModel() {
   if (lineModelPromise) return lineModelPromise;
   lineModelPromise = (async () => {
@@ -4245,9 +4257,9 @@ export class TypographyEngine {
         // The line classifier (line-model.mjs; ml): the page's items
         // become the lines and features of line-features.mjs — the same
         // numbers the model was trained on, which a fixture test holds the
-        // two extractors to — and a line named a heading, caption, formula,
-        // table row, figure label, header or footer at LINE_MODEL_MIN or
-        // better keeps its candidates (`model-<class>`). Evidence, like the
+        // two extractors to — and a line named a class in LINE_MODEL_KEEP
+        // (a table row, a heading) at that class's confidence or better
+        // keeps its candidates (`model-<class>`). Evidence, like the
         // layout model's regions: it never un-keeps. The model is fetched
         // once the option is on; a page processed before it arrives is
         // processed by the rules alone.
@@ -4270,7 +4282,8 @@ export class TypographyEngine {
               const li = lineOf.get(pairs[i].item);
               if (li === undefined) continue;
               const v = verdicts[li];
-              if (!v.keep || v.p < LINE_MODEL_MIN) continue;
+              const need = LINE_MODEL_KEEP[v.label];
+              if (need === undefined || v.p < need) continue;
               reject(pairs[i].div, "model-" + v.label);
               candidateDivs.delete(pairs[i].div);
               pairs.splice(i, 1);
