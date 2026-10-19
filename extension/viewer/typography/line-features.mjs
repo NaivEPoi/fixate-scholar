@@ -37,7 +37,8 @@ const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
 export function tokensOfItems(items, pageW, pageH, fontNameOf = (it) => it.fontName) {
   const out = [];
   const sx = 1000 / pageW, sy = 1000 / pageH;
-  for (const it of items) {
+  for (let idx = 0; idx < items.length; idx++) {
+    const it = items[idx];
     const text = (it.str || "").trim();
     if (!text || !(it.width > 0) || !(it.height > 0) || !it.transform) continue;
     const x = it.transform[4], yBase = it.transform[5], h = it.height, w = it.width;
@@ -48,7 +49,9 @@ export function tokensOfItems(items, pageW, pageH, fontNameOf = (it) => it.fontN
     const font = fontNameOf(it) || "default";
     for (const wd of words) {
       const ww = total ? w * (wd.length / total) : w;
-      out.push([wd, Math.round(cx * sx), Math.round(top * sy), Math.max(Math.round((cx + ww) * sx), Math.round(cx * sx) + 1), Math.max(Math.round(bottom * sy), Math.round(top * sy) + 1), 0, 0, 0, font]);
+      // slot 9: the source item's index, which the engine uses to map each
+      // item to the line it fell in (the Python side has no such slot)
+      out.push([wd, Math.round(cx * sx), Math.round(top * sy), Math.max(Math.round((cx + ww) * sx), Math.round(cx * sx) + 1), Math.max(Math.round(bottom * sy), Math.round(top * sy) + 1), 0, 0, 0, font, idx]);
       cx += ww + (total ? w / total : 0);
     }
   }
