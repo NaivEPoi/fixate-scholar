@@ -6100,3 +6100,59 @@ on it unchanged.
   (a wrapped citation that is coloured, a letter that is intact, a
   reference inside a kept equation row — the known R53 limitation) or
   the known small-caps limitation.
+
+## R56 — a line classifier trained on public layouts (2026-10-19)
+
+The user asked whether a model trained for this task would beat both the
+rules and the stock layout detector. It does, on held-out public pages, when
+the model is a LINE classifier over what the engine already knows rather
+than a box detector over pixels.
+
+### What was built (`ml/`, tracked; data and models ignored)
+
+- Features of a text line, computed identically by a Python extractor and a
+  JS mirror (`line-features.mjs`, held to the same numbers by a fixture
+  test): position against the column and the page, size against the body,
+  face flags from the font name, text shape (lowercase words, digits,
+  caption and numbered leads, list markers, dangling ends, Title Case),
+  two neighbours each side, and the line's block (its first line's lead,
+  its length, its position in it).
+- Data: DocBank (8,000 arXiv papers, 1.42M lines, token labels from the
+  LaTeX source) and DocLayNet's scientific pages (918 papers, 628k lines,
+  fetched without images by column-projected range reads of the parquet
+  files; the 65 test papers overlap none of them). Seven coarse classes
+  the engine acts on: text, heading, caption, formula, table, figure,
+  furniture.
+- A LightGBM model, 260 rounds of 23-leaf trees per class, exported to a
+  2.78 MB JSON that `line-model.mjs` walks in microseconds a line; no
+  runtime, no WebAssembly, any CPU. Held out by paper throughout.
+
+### Measured
+
+On 940 DocLayNet scientific test pages, per line (45,423 lines): the
+shipped model 0.944 accuracy / 0.942 keep-vs-process F1, the stock
+PP-DocLayout-S 0.895 / 0.884. On the same pages through the viewer, per
+span weighted by characters (204,016 spans, 1.89M characters), with the
+rules' decision being what the engine did: rules 0.808 / 0.611 / 0.497
+(accuracy / keep-process F1 / macro F1), classifier 0.965 / 0.884 /
+0.885, detector 0.958 / 0.863 / 0.755. The classifier leads on headings
+(0.92 vs 0.72 F1), table rows (0.90 vs 0.62) and headers and footers
+(0.85 vs 0.31); the detector keeps a small edge on captions, formulas and
+figure text. DocLayNet's conventions differ from the engine's design in
+places (bibliographies are text there; kept single glyphs count as
+misses), so the rules' row is a floor; the engine's genuine weaknesses on
+publisher PDFs and single pages are visible all the same. Two lessons on
+the way: a font flag that counted CMR as a math face fired on two thirds
+of all words; and the two extractors must share ASCII word boundaries.
+A heading-level head (title / section / subsection / run-in) reaches 0.89
+from geometry alone; a math-token head is weak against DocBank's noisy
+inline-math labels and is not shipped.
+
+### In the engine
+
+Behind the `lineModel` option (off by default), as evidence like the
+layout model's regions: a line the model names a kept class at 0.75 or
+better keeps its candidates (`model-<class>`); nothing is un-kept.
+`allprobes` and the gate take `--line`, and the gate's output directory
+carries the option's name, so an option run is diffed against the plain
+run on the same tree. Details and the recipe: `ml/README.md`.
