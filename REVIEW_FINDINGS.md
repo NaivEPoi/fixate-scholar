@@ -6083,11 +6083,12 @@ on it unchanged.
   kept as a caption. On these corpora the detector's regions keep almost
   nothing the rules had not already kept; the option is safe, and its value
   lies on layouts the rules have not met.
-- Extra corpus (23 documents, not a gate corpus): 21/23 — ex05 UNVERIFIED by
-  nature (no Latin words), ex16 failing the tables probe on page 15's box
-  title until the Title-Case rule learned that a line more than a line and
-  a half under the previous one (a box's bottom edge, the blank between
-  boxes) needs no sentence end above it; both titles kept now.
+- Extra corpus (23 documents, not a gate corpus), on the committed tree:
+  22/23 — ex05 UNVERIFIED by nature (no Latin words, nothing to process).
+  ex16 had failed the tables probe on page 15's box title until the
+  Title-Case rule learned that a line more than a line and a half under
+  the previous one (a box's bottom edge, the blank between boxes) needs no
+  sentence end above it; both titles kept, the probe clean.
 - The line classifier the next round was to build landed the same day
   from a forked session (d0d3e79): a DocBank/DocLayNet-trained
   gradient-boosted model over line features, as evidence behind its own
