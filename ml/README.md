@@ -132,6 +132,42 @@ Heads: heading level from geometry alone (title / section / subsection /
 run-in) 0.89 accuracy on held-out papers; the math-token head is weak
 (recall 0.12 against DocBank's noisy inline-math labels) and is not shipped.
 
-The rules comparison on the same spans needs the viewer dump with the
-engine's debug flag armed before the first page processes (a dump taken
-without it holds no reasons) — see compare.md once the dump has run.
+### The three systems on the same spans
+
+The rules were run through the extension's own viewer on the 943 single-page
+PDFs (dump-reasons.mjs, one headless browser, four seconds a page, the
+engine's debug flag armed before the first page so each span's reason is
+recorded); every text-layer span whose centre lies in an annotated box is
+scored for all three systems, weighted by its characters (a one-glyph
+fragment counts as one character, a sentence as its length), the rules'
+keep decision being what the engine did to the span. 940 pages, 204,016
+spans, 1.89 million characters:
+
+| system | accuracy | keep-vs-process F1 | macro F1 |
+|---|---|---|---|
+| rules (the engine's reasons) | 0.808 | 0.611 | 0.497 |
+| line classifier (shipped) | **0.965** | **0.884** | **0.885** |
+| stock PP-DocLayout-S | 0.958 | 0.863 | 0.755 |
+
+Per class (F1, classifier / detector / rules): text 0.98 / 0.98 / 0.90;
+headings 0.92 / 0.72 / 0.29; captions 0.87 / 0.93 / 0.82; formulas 0.87 /
+0.90 / 0.49; table rows 0.90 / 0.62 / 0.14; figure text 0.82 / 0.83 /
+0.38; headers and footers 0.85 / 0.31 / 0.45. The classifier wins where
+the engine's own errors live — headings, table rows, headers and footers —
+and the detector keeps a small edge on captions, formulas and figure text,
+which argues for using both as evidence (the engine does: either may keep
+a line, neither un-keeps).
+
+Caveats, so the rules' row is read as a floor rather than a verdict:
+DocLayNet's conventions differ from the engine's design in places — it
+labels bibliography entries as text while the engine keeps a bibliography
+on purpose (`refs-region`), and the single glyphs the engine keeps for
+rendering reasons (`special-or-short`, 16k spans) count as misses on a
+"text" box even when nothing a reader would emphasise was lost. The
+engine's genuine weaknesses on these pages are plain all the same: on some
+journal layouts whole columns of prose went to `table-aligned` or
+`line-head`, and pages exist where it kept all of their text. On the 49
+papers of this project's own corpora the same engine leaves no span
+unreasoned; DocLayNet's scientific pages are a wider world (publisher
+PDFs, non-LaTeX journals, single pages without their document), which is
+exactly where a learned classifier adds to hand-written rules.
