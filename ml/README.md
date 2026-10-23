@@ -274,3 +274,10 @@ decided how much of it acts:
     five private papers), no loss on either; the numbered heading and a
     numbered list's line are vetoed by their row lead. Option gate: PASS, 50/50 (14 public, 36 private) in 36.0 min, one infra retry.
     Skip-reason diff against the plain gate on the same tree: 773/773 pages compared, 12 pages changed — the 8 releases, one line each, on two public and six private pages, and the four pages of the keep policy's model-table and model-heading keeps; nothing else.
+- Two of the over-keeps the release measured were the rules' own and are
+  fixed in the rules (REVIEW_FINDINGS.md R57): the aligned-run rule no
+  longer takes the margin before a page's body column for a cell boundary
+  (the PLOS front page), and the references extractor no longer drops a
+  heading set at the foot of a page as furniture (the proceedings paper's
+  bibliography). The classifier's line builder joining columns is a limit
+  of the features and is left as it is, noted there for the next model.

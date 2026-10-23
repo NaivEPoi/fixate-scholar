@@ -1094,6 +1094,39 @@ export class TypographyEngine {
     // body lines into the full-width region, the gutter seeded a 29-row run that
     // skipped both columns of prose (usenixsecurity24-tu p12: band [296,318] is
     // exactly the 296/318 column boundary, processed=0 for the whole page).
+    // The page's dominant line start — the x most BODY-SIZE items start
+    // at, over distinct baselines, the leftmost of any near-tie. A band
+    // whose right edge is that x, with nothing but SMALLER text to its
+    // left, is not a cell boundary but the margin before the main text
+    // column: on a page with a narrow side column beside a wide body (a
+    // publisher's front page with its editor, dates and data statement
+    // down the left, set a size under the body's), the gap between the side
+    // column's lines and the body's shares one x on row after row, exactly
+    // as a cell boundary does, and the page is not two-column, so the gutter
+    // guard below is off — a 7-row run took the abstract for a table (R57).
+    // Body size, because a table's description column outnumbers its label
+    // column wherever cells wrap, and the first version of this, counting
+    // every item, took a last page that is one such table for a side column
+    // and released its cells. The start needs a third of the body-size
+    // baselines; the document's body height when known, the page's else.
+    const bodyH = this.#bodyHeight || this.#dominantHeight(items);
+    const dominantStart = (() => {
+      if (!bodyH) return null;
+      const rowsAt = new Map(), rows = new Set();
+      for (const p of items) {
+        if (Math.abs((p.item.height || 0) - bodyH) > bodyH * 0.12) continue;
+        const y = Math.round(p.item.transform[5]), x = Math.round(p.item.transform[4]);
+        rows.add(y);
+        if (!rowsAt.has(x)) rowsAt.set(x, new Set());
+        rowsAt.get(x).add(y);
+      }
+      let max = 0;
+      for (const ys of rowsAt.values()) max = Math.max(max, ys.size);
+      if (!rows.size || max < rows.size / 3) return null;
+      let best = null;
+      for (const [x, ys] of rowsAt) if (ys.size >= max * 0.9 && (best == null || x < best)) best = x;
+      return best;
+    })();
     const skipAlignedTable = (rows, splitX = null, gutterX = splitX) => {
       if (rows.length < 3) return;
       const sorted = rows.slice().sort((a, b) => b.y - a.y); // top → bottom
@@ -1189,6 +1222,13 @@ export class TypographyEngine {
             if (straddlesBand || (!smallHit && !oneSide) || j - last > 2) break;
             ext = j;
           }
+          // The margin before the main column is no cell boundary (dominantStart):
+          // the band ends at the body's start and only smaller text sits left of
+          // it — or glyphs that are no word at all (a publisher's icon font sets
+          // its badges a point larger than the body).
+          if (dominantStart != null && Math.abs(band[1] - dominantStart) <= 2 &&
+              sorted.slice(i, ext + 1).every((r) => r.items.every((p) =>
+                p.item.transform[4] >= band[0] - 1 || (p.item.height || 0) <= bodyH * 0.92 || !/[A-Za-zÀ-ɏ]{2}/.test(p.item.str)))) continue;
           if (withGap >= 3 && ext > bestLast) { bestLast = ext; bestBand = band; }
         }
         if (bestLast >= 0) {
