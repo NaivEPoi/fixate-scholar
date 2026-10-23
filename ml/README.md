@@ -202,3 +202,75 @@ decided how much of it acts:
   which a keep-only integration cannot do. That is the follow-up, to be
   judged on the extra corpus (`local/corpus-extra`), where those over-keeps
   occur, rather than on the gate corpora, where they do not.
+- The release (2026-10-22): the un-keeping the previous point asked for,
+  measured first on the extra corpus and then on the gate corpora, and
+  narrowed by both readings. Shipped: `LINE_MODEL_RELEASE = { "line-head":
+  { p: 0.95, lower: 4, long: 8 } }` — a span the block pass kept as
+  `line-head` goes back to processing when the model names its line
+  `text` at 0.95 or better AND the span has the shape of prose
+  (`releasesKeep`, line-model.mjs; `textShape`, line-features.mjs): no
+  number or list marker at the head of its line, of itself, or of its row
+  (the first item on its baseline, since a run-in heading's "8.1.2" and a
+  reference's "2." are spans of their own); four lowercase words or more
+  of its own; and either eight of them (a line inside a paragraph) or a
+  sentence's end (a paragraph's last line). The release lifts only the
+  block pass's veto, before the candidate filter, so every other check
+  still applies (the margin band, the refs region, a region, the art, the
+  mask pass) and a rendering reason is never released. A released span
+  that is emphasised carries `model-text-over-line-head`; one another
+  check kept after all keeps its block reason, so the skip-reason diff
+  lists behaviour changes only (the first version re-reasoned every
+  bibliography page). `__fxLineModel[page]` carries every line's verdict,
+  every candidate with its shape and row lead, and every release with the
+  check that kept it after all.
+- How the readings narrowed it. Extra corpus (23 papers; allprobes with and
+  without `--line`, the skip-reason diff, every changed page dumped with
+  the option on, every released span read):
+  - The verdict alone (`text` at 0.95, over `table-aligned` and
+    `line-head`) changed 48 pages, 22 of them in what was emphasised: 31
+    lines of body prose released — a PLOS abstract and introduction whose
+    `table-aligned` band was the gutter between the side column and the
+    body (18), lines of prose between inline formulas kept as `line-head`
+    (6), paragraphs' last lines under outline anchors (7) — against 68
+    lines that were not prose: author and affiliation lines of five front
+    pages (19), the numbered entries of a bibliography the rules had not
+    found as a refs region (38), cells and stub labels of two tables (7),
+    box, panel and sub-heading titles (4). The model names every one of
+    these text at 0.95–0.999 (DocLayNet labels bibliographies and
+    affiliations as text), so no threshold separates them from prose. The
+    line's shape does — and it has to be read off the span: the model's
+    line builder (`buildLines`, DocBank's clustering) joins a page's
+    columns wherever the gutter is narrower than two line heights, so a
+    table row joined to its side note, or an affiliation joined to a
+    footnote, reads as prose at the line level. A "prose beside it"
+    test (a text verdict on a neighbouring line) and a fills-the-measure
+    test were tried and dropped: the first caught nothing and cost a
+    gain, the second fails on ragged-right and two-column pages.
+  - With the shape test, both reasons: 23 releases, all body prose (the
+    18 PLOS lines, one line of prose between formulas, four paragraph
+    tails), no loss; 8 of the 31 given up (fragments of a prose line
+    between formulas — "as a", "and" — and two-word tails such as "10% for
+    testing."). Option sweep 22/23 PASS as the plain one (ex05 is
+    UNVERIFIED either way).
+  - Gate corpora with the same policy (option gate PASS, 50/50 — the
+    private directory had gained a paper, so the positional aliases after
+    it were realigned for the diff; 773/773 pages compared, 23 changed):
+    `line-head` released 10 lines, 9 of them prose (paragraph tails,
+    a line of prose between formulas, a definition's description) and one
+    an italic numbered run-in heading whose number was a span of its own,
+    hidden from the line test by the column join — hence the row-lead
+    test. `table-aligned` released 8 lines of prose (two lines beside
+    tables; the list lines of a line-numbered page) against 37 emphasised
+    cells of three private papers' tables whose cells are sentences — a
+    label column beside a column of one-sentence descriptions — and 17
+    more such cells that the
+    mask pass's rule-bounded zones then kept. A sentence-shaped cell IS a
+    sentence to the model and to any shape test, so `table-aligned` is not
+    released; the PLOS case stays what it is, a gutter the aligned-run
+    rule took for a column boundary.
+  - Final policy (`line-head` alone, with the row lead): extra corpus 3
+    releases (a line of prose between formulas, two paragraph tails), gate
+    corpora 8 (paragraph tails and mid-sentence lines on two public and
+    five private papers), no loss on either; the numbered heading and a
+    numbered list's line are vetoed by their row lead. Option gate: PASS, 50/50 (14 public, 36 private) in 36.0 min, one infra retry.
+    Skip-reason diff against the plain gate on the same tree: 773/773 pages compared, 12 pages changed — the 8 releases, one line each, on two public and six private pages, and the four pages of the keep policy's model-table and model-heading keeps; nothing else.

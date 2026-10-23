@@ -6189,3 +6189,33 @@ rules over-keep (whole columns of prose sent to `table-aligned` or
 it. Un-keeping — the model vetoing a weak rule reason at high confidence
 — is the follow-up, to be judged on the extra corpus where those
 over-keeps live, not on the gate corpora where they do not.
+
+The release (2026-10-22). Behind the same option, a span the block pass
+kept as `line-head` goes back to processing when the model names its line
+text at 0.95 or better and the span has the shape of prose — no number or
+list marker at the head of its line, of itself, or of its row (the first
+item on its baseline), four lowercase words of its own, and eight of them
+or a sentence's end (`releasesKeep` in line-model.mjs, `textShape` in
+line-features.mjs, `LINE_MODEL_RELEASE` in the engine). It lifts only the
+block pass's veto, before the candidate filter, so every other check still
+applies and no rendering reason is ever released; a released span that is
+emphasised carries `model-text-over-line-head` for the whyskip probe, one
+another check kept after all keeps its block reason.
+
+Both readings narrowed it. On the extra corpus the model's verdict alone
+released 31 lines of body prose and 68 lines that were not — affiliations,
+the entries of a bibliography the rules had not found, table stubs, box
+titles — all named text at 0.95 or better (DocLayNet labels bibliographies
+and affiliations as text), so no threshold separates them; the shape of
+the span does, and it must be the span's because the model's line builder
+joins a page's columns. With the shape test: 23 releases, all prose, no
+loss, 8 of the 31 given up. On the gate corpora with that policy, the
+`line-head` releases were 9 lines of prose and one numbered run-in heading
+whose number was a span of its own (hence the row-lead test), but the
+`table-aligned` releases were 8 lines of prose against 37 emphasised cells
+of three private papers' description tables — cells that are sentences,
+which the model names text and no shape test can tell from a sentence — so
+`table-aligned` is not released. Final policy: extra corpus 3 releases,
+gate corpora 8, all paragraph tails or mid-sentence lines, no loss on
+either. Option gate: PASS, 50/50 (14 public, 36 private) in 36.0 min, one infra retry; skip-reason diff against the plain gate on the
+same tree: 773/773 pages compared, 12 pages changed — the 8 releases, one line each, on two public and six private pages, and the four pages of the keep policy's model-table and model-heading keeps; nothing else. Details and the recipe: `ml/README.md`.

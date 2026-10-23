@@ -142,6 +142,22 @@ function lineRecord(L, st) {
   return r;
 }
 
+/** The shape of ONE span's text, by the tests the line record applies to
+ *  a whole line: lowercase words, a number or list marker at its head, and
+ *  whether it ends a sentence. The engine's release (line-model.mjs
+ *  releasesKeep) reads these off the span rather than its line, because
+ *  buildLines joins a page's columns into one line wherever the gutter is
+ *  narrower than two line heights — a table row with its side note, an
+ *  affiliation with a footnote — and a joined line reads as prose. */
+export function textShape(text) {
+  const t = (text || "").trim();
+  return {
+    n_lower: (t.match(LOWER_WORD) || []).length,
+    num_lead: +NUM_LEAD.test(t), list_mark: +LIST_MARK.test(t),
+    ends_sentence: +/[.!?]["'\u201d\u2019)\]]*$/.test(t),
+  };
+}
+
 /** Feature records for every line of a page, in reading order. */
 export function pageFeatures(lines) {
   if (!lines.length) return [];
