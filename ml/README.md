@@ -269,8 +269,9 @@ decided how much of it acts:
     released; the PLOS case stays what it is, a gutter the aligned-run
     rule took for a column boundary.
   - Final policy (`line-head` alone, with the row lead): extra corpus 3
-    releases (a line of prose between formulas, two paragraph tails), gate
-    corpora 8 (paragraph tails and mid-sentence lines on two public and
+    releases (a line of prose between formulas, two paragraph tails; the
+    skip-reason diff shows 5 pages, the other two being the keep policy's
+    model-table keeps), gate corpora 8 (paragraph tails and mid-sentence lines on two public and
     five private papers), no loss on either; the numbered heading and a
     numbered list's line are vetoed by their row lead. Option gate: PASS, 50/50 (14 public, 36 private) in 36.0 min, one infra retry.
     Skip-reason diff against the plain gate on the same tree: 773/773 pages compared, 12 pages changed — the 8 releases, one line each, on two public and six private pages, and the four pages of the keep policy's model-table and model-heading keeps; nothing else.

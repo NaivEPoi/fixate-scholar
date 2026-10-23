@@ -117,17 +117,20 @@ export async function extractLines(pdfDocument) {
     // real bibliography entry whose first line lands in the band on a dense
     // page is a full column line and must survive.
     // ...and so must a short line with a full line BEYOND it, further into
-    // the band: furniture is the outermost line of its band, never above
-    // content. A proceedings paper whose "REFERENCES" heading sat at the
-    // foot of its last text page, its first entry below it, lost the
-    // heading here and got no bibliography at all (R57).
+    // the band and overlapping it in x (its own column — a long entry
+    // dipping into the band in one column must not vouch for the other
+    // column's page number): furniture is the outermost line of its band,
+    // never above content. A proceedings paper whose "REFERENCES" heading
+    // sat at the foot of its last text page, its first entry below it, lost
+    // the heading here and got no bibliography at all (R57).
     const pageH = page.view[3] - page.view[1];
     const relOf = (l) => (l.y - page.view[1]) / pageH;
     const long = (l) => l.text.trim().length >= 45;
+    const beside = (o, l) => o.x < l.endX && o.endX > l.x;
     const filtered = lines.filter((l) => {
       const rel = relOf(l);
       if ((rel > 0.06 && rel < 0.94) || long(l)) return true;
-      return rel <= 0.06 ? lines.some((o) => long(o) && o.y < l.y) : lines.some((o) => long(o) && o.y > l.y);
+      return rel <= 0.06 ? lines.some((o) => long(o) && o.y < l.y && beside(o, l)) : lines.some((o) => long(o) && o.y > l.y && beside(o, l));
     });
     lines.length = 0;
     lines.push(...filtered);
