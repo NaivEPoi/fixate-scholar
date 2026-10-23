@@ -6219,3 +6219,94 @@ which the model names text and no shape test can tell from a sentence — so
 gate corpora 8, all paragraph tails or mid-sentence lines, no loss on
 either. Option gate: PASS, 50/50 (14 public, 36 private) in 36.0 min, one infra retry; skip-reason diff against the plain gate on the
 same tree: 773/773 pages compared, 12 pages changed — the 8 releases, one line each, on two public and six private pages, and the four pages of the keep policy's model-table and model-heading keeps; nothing else. Details and the recipe: `ml/README.md`.
+
+## R57 — the two over-keeps the classifier found, fixed in the rules (2026-10-22)
+
+The line classifier's release (R56, the commit before this one) measured
+where the rules over-keep prose, and two of its findings were the rules'
+own to fix, not the model's. Both are fixed here, judged the same way: the
+extra corpus swept with and without the change, every changed page read,
+then the release gate on both corpora.
+
+### A side column's gutter is not a cell boundary (`skipAlignedTable`)
+
+On a publisher's front page with a narrow side column beside a wide body
+(PLOS: citation, editor, dates and the data statement down the left), the
+aligned-run rule took the abstract for a table: the gap between the side
+column's lines and the body's shares one x on row after row, exactly as a
+cell boundary does, and the page is not two-column, so the page-centre
+gutter guard was off. A 7-row run swept 18 lines of the abstract and
+introduction into `table-aligned`, and only the classifier's release got
+them back (R56). The rule now knows the page's dominant line start — the x
+most body-size baselines' first item starts at, the leftmost of any
+near-tie, needing a third of them — and a band whose right edge is that x,
+with nothing but smaller text (or glyphs that are no word: a publisher's
+icon font sets its badges a point larger than the body) to its left, is no
+cell boundary: it is the margin before the main text column. Two things in
+that definition came from counterexamples. Body-size baselines only,
+because a table's description column outnumbers its label column wherever
+cells wrap: the first version counted every item, took the last page of a
+public paper — one wide table of wrapped description cells, set small — for
+a side column, and released the table (the gate's papers stage caught it:
+appendix check, nothing processed and nothing tabled). Smaller text to the
+left, because a body-size table with wrapped cells (a results table with a
+"reasons" column on a private paper) has the same shape, and its label
+column is body size where a side column is not.
+Extra corpus swept plain before and after (22/23 PASS both ways, ex05
+UNVERIFIED either way): one page changed for this rule, that front page,
+31 `table-aligned` spans fewer and 27 more spans emphasised — the abstract
+and the introduction's first lines, and the side column's own notes (the
+citation, editor, dates, copyright, data statement and funding lines, set
+smaller than the body but not small enough for the figure-text cut). Those
+notes are prose and read as such; they were kept before only by the same
+accident that kept the abstract.
+
+### A heading at the foot of a page is not furniture (`extractLines`)
+
+The references extractor drops short lines in the page's outer 6% bands as
+running heads, feet and page numbers, keeping only full column lines there.
+A proceedings paper set its "REFERENCES" heading at the foot of its last
+text page with the first entry below it: the heading was ten characters in
+the bottom band and went, the entry survived on length, and the parser
+never saw a bibliography — six of twenty-four citations resolved (through
+a template's example list the document carries in front of the paper), the
+twenty entries on the last page were left to the `line-head` rule, and the
+classifier's release then proposed emphasising them (R56). Furniture is the
+outermost line of its band, never above content: a short band line with a
+full line beyond it, further into the band, is now kept. Offline parse of
+that paper afterwards: 24 of 24 citations resolve. The template's own
+example list in front of the paper remains a second reference section whose
+body runs on into the template's instruction prose; that is the document,
+not the parser, and is left as it is.
+In the same sweep the paper's last page changed and nothing else did: its
+twenty entries are now the bibliography region, and the nine fragments of
+them the engine had been emphasising (a journal name, a volume, a year)
+are left as set.
+
+### Not changed: the classifier's line builder joins columns
+
+`buildLines` (line-features.mjs) clusters tokens into lines the way the
+DocBank extractor does, splitting a baseline only at gaps wider than two
+line heights; on a two-column page or beside a side column the gutter is
+often narrower, so one "line" holds words of both columns, and any
+line-level reading of it — a lead number, a word count, a verdict's
+neighbours — is unreliable there. The release (R56) reads the span and the
+row instead. The builder itself is held to the Python extractor's numbers
+by a fixture test and to the shipped model by training: changing it means
+re-extracting DocBank and DocLayNet, retraining, and re-reading both
+corpora, and the keep side (`LINE_MODEL_KEEP`) has been right on the gate
+corpora with it as it is. Left as a known limit of the features, recorded
+here so the next model is trained on column-split lines.
+
+### Gate
+
+Release gate on the final tree: PASS, 50/50 (14 public, 36 private) in
+35.4 min, no retries. The skip-reason diff against the plain reference gate
+(d0d3e79, the private corpus realigned for the paper added since): 773/773
+pages compared, 0 pages changed — neither layout occurs on the gate corpora,
+and the first version of the guard, which did change a page there, was
+caught by the papers stage before it got this far. Extra corpus, plain,
+before and after: 22/23 PASS both ways, the two pages above changed and no
+other (457/457 pages compared). npm test: 338 pass. This gate's directory
+(`fc739db-20261023-0402-combined`) is the plain reference for the private
+corpus of 36 from here on.
