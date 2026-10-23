@@ -21,8 +21,8 @@ import { scanRules } from "./rules.mjs";
 import { artUnder, barsNear, vectorArt } from "./vector-art.mjs";
 import { colourRuns, inkColour, wrapInk } from "./ink-runs.mjs";
 import { anchorNear } from "./pdfhints.mjs";
-import { buildLines, pageFeatures, tokensOfItems } from "./line-features.mjs";
-import { classify, loadLineModel } from "./line-model.mjs";
+import { buildLines, pageFeatures, textShape, tokensOfItems } from "./line-features.mjs";
+import { classify, loadLineModel, releasesKeep } from "./line-model.mjs";
 
 // The line classifier (line-model.mjs; trained in ml on DocBank and
 // DocLayNet, exported by export_js.py), fetched once when the option is on;
@@ -40,9 +40,33 @@ let lineModelLoaded = null; // the model once resolved, for the synchronous firs
 // "formula" keep was body prose — a sentence under a figure or naming one,
 // a page's last lines, a sentence's tail — so those classes stay with the
 // rules here. The model's edge on those classes is real on unfamiliar
-// layouts (DocLayNet), where the rules OVER-keep; a keep-only hook cannot
-// spend it, and un-keeping is the follow-up that could.
+// layouts (DocLayNet), where the rules OVER-keep; the release below is
+// how it is spent.
 const LINE_MODEL_KEEP = { table: 0.75, heading: 0.9 };
+// The release: a span the block pass kept for a WEAK reason — `line-head`,
+// a line read as a heading — goes back to processing when the model names
+// its line `text` at the confidence given AND the span has the shape of
+// prose (releasesKeep: no number or list marker at the head of its line,
+// of itself, or beside it on its baseline; `lower` lowercase words of its
+// own; and `long` of them or a sentence's end). The rule fires on body
+// prose on layouts it was not written for — a paragraph's last line under
+// an outline anchor, a line of prose between inline formulas — and its
+// own prose tests were already applied. The shape test is there because
+// the model's confidence alone does not tell that prose from the
+// affiliations, numbered reference entries, table stubs and box titles it
+// names text just as confidently (the extra corpus: 32 gains against 68
+// losses without it), and it reads the span rather than the model's line
+// because that line joins a page's columns. `table-aligned` is not in the
+// policy: read on the gate corpora, its releases were cells of tables whose
+// cells are sentences — a label column beside a column of one-sentence
+// descriptions — 8 lines of prose against 37 emphasised cells
+// (ml/README.md, "In the engine"); the
+// model names a sentence-shaped cell text, and no shape test tells it from
+// a sentence. Rendering reasons (special-or-short, vector-art, rotated,
+// mojibake, ocr-layer, refs-region, region-*) are not block reasons and
+// are never released: the release lifts only the block pass's veto, and
+// every other filter still applies to the span afterwards.
+const LINE_MODEL_RELEASE = { "line-head": { p: 0.95, lower: 4, long: 8 } };
 function ensureLineModel() {
   if (lineModelPromise) return lineModelPromise;
   lineModelPromise = (async () => {
@@ -54,6 +78,29 @@ function ensureLineModel() {
     } catch { return null; }
   })();
   return lineModelPromise;
+}
+// The page's lines, their features and the model's verdicts: the page's
+// items become the lines and features of line-features.mjs — the same
+// numbers the model was trained on, which a fixture test holds the two
+// extractors to. `lineOf` maps each item to its line. Null when the page
+// has no view, or when anything in the computation fails: the rules alone.
+function lineVerdicts(pageView, allPairs) {
+  try {
+    const view = pageView.pdfPage?.view;
+    if (!view) return null;
+    const pageW = view[2] - view[0], pageH = view[3] - view[1];
+    const fontNameOf = (it) => { try { return pageView.pdfPage.commonObjs.get(it.fontName)?.name ?? it.fontName; } catch { return it.fontName; } };
+    const items = allPairs.map((p) => p.item).filter((it) => it?.transform && it.str);
+    const shifted = items.map((it) => ({ ...it, transform: [it.transform[0], it.transform[1], it.transform[2], it.transform[3], it.transform[4] - view[0], it.transform[5] - view[1]] }));
+    const tokens = tokensOfItems(shifted, pageW, pageH, fontNameOf);
+    // each token remembers its item (tokensOfItems keeps the source index in slot 9)
+    const lines = buildLines(tokens);
+    const feats = pageFeatures(lines);
+    const lineOf = new Map();
+    lines.forEach((L, li) => { for (const t of L) lineOf.set(items[t[9]], li); });
+    const verdicts = feats.map((f) => classify(lineModelLoaded, f));
+    return { lines, feats, verdicts, lineOf };
+  } catch { return null; }
 }
 
 // Spans rewritten per idle callback. Each batch reads its rects, rewrites
@@ -833,6 +880,7 @@ export class TypographyEngine {
     // displayed formula's box frame): masks of neighbouring lines must clamp a
     // margin away from these, not just off their glyphs.
     const protect = new Set();
+    const blockWhy = new Map(); // div -> the reason it was skipped for (see dbg below)
     let items = allPairs.filter((p) => p.item?.transform && p.item.str.trim());
     // Review-template LINE-NUMBER GUTTERS: submission drafts number every
     // line down the outer margins (a column of tiny pure-digit items on
@@ -884,7 +932,7 @@ export class TypographyEngine {
       if (gutterDivs.size) items = items.filter((p) => !gutterDivs.has(p.div));
     }
     const lines = this.#lineGroups(items);
-    if (!lines.length) return { skip, protect };
+    if (!lines.length) return { skip, protect, why: blockWhy };
 
     const centerX = vx0 + pageW * 0.5;
     const LOWER_WORD = /^[a-zà-ÿ]{2,}$/;
@@ -1334,7 +1382,11 @@ export class TypographyEngine {
       });
     };
 
-    const dbg = (div, why) => { if (globalThis.__fxDebug) div.dataset.fxWhy = why; };
+    // Every reason is also kept in `why` (the last one written wins, as the
+    // debug attribute does), option or not: the line classifier's release
+    // (#processPage, LINE_MODEL_RELEASE) reads a span's reason from it, and
+    // a decision must not depend on the debug flag.
+    const dbg = (div, why) => { if (globalThis.__fxDebug) div.dataset.fxWhy = why; blockWhy.set(div, why); };
     const skipBlock = (b, why) => { for (const p of b.items) { skip.add(p.div); dbg(p.div, why || "block"); } };
     // A run-in heading that opens a body block ("Minimizing duplicate states.
     // We also …" / "A1: … reuse. To address …"): skip the leading bold/glyph
@@ -2968,7 +3020,7 @@ export class TypographyEngine {
         }
       }
     }
-    return { skip, protect };
+    return { skip, protect, why: blockWhy };
   }
 
   /** Dominant body-text height (weighted by character count). */
@@ -3742,8 +3794,68 @@ export class TypographyEngine {
       );
     };
     if (globalThis.__fxDebug) globalThis.__fxCurPage = pageNumber;
-    const { skip: skipSet, protect: protectSet } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath, pageNumber);
-    for (const d of skipSet) d.dataset.fxTable = "1"; // debug/test marker
+    const { skip: skipSet, protect: protectSet, why: blockWhy } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath, pageNumber);
+    // The line classifier (the option; line-model.mjs): its verdicts for the
+    // page are taken here, before the candidate filter, because the filter
+    // is where the release happens. `released` is the block pass's keeps
+    // that the model gives back (LINE_MODEL_RELEASE): the filter no longer
+    // rejects them for the block, and a word's other pieces no longer count
+    // them as kept — every other check still applies to them. The keeps
+    // (LINE_MODEL_KEEP) are applied in the first stage below, from these
+    // same verdicts. A page processed before the model arrives is processed
+    // by the rules alone.
+    const lineModel = this.#settings?.lineModel === true && lineModelLoaded ? lineVerdicts(pageView, allPairs) : null;
+    const released = new Set();
+    const releaseTrace = globalThis.__fxDebug && lineModel ? [] : null; // every weak keep the model named text, and the decision
+    if (lineModel) {
+      // The first item of a span's row, on its own baseline: a numbered
+      // run-in heading's number ("8.1.2") and a reference entry's number
+      // ("2.") are spans of their own, with PDF.js's blank space items
+      // between, and on a two-column page the model's line begins with the
+      // other column's words, so its lead says nothing about them. The
+      // chain of items to the left on the same baseline, each within two
+      // line heights of the next (a column gutter is wider), ends at the
+      // lead the rules saw. A lead in
+      // a math face is a formula's, not a list's, and does not count.
+      const rowLead = (pair) => {
+        const it = pair.item, y = it.transform[5], h = it.height || 1;
+        const row = allPairs.filter((q) => q.item?.transform && /\S/.test(q.item.str || "") && Math.abs(q.item.transform[5] - y) <= h * 0.3)
+          .sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+        let lead = pair;
+        for (let i = row.indexOf(pair) - 1; i >= 0; i--) {
+          const o = row[i].item;
+          if (lead.item.transform[4] - (o.transform[4] + (o.width ?? 0)) > h * 2) break;
+          lead = row[i];
+        }
+        return lead === pair || isMath(lead) || isSpecial(lead) ? null : lead;
+      };
+      for (const p of allPairs) {
+        if (!p.div || !skipSet.has(p.div) || !p.item?.transform) continue;
+        const li = lineModel.lineOf.get(p.item);
+        if (li === undefined) continue;
+        const { verdicts, feats, lines } = lineModel;
+        const why = blockWhy.get(p.div), v = verdicts[li], f = feats[li];
+        if (!LINE_MODEL_RELEASE[why] || v.label !== "text") continue;
+        const shape = textShape(p.item.str);
+        const before = rowLead(p);
+        const lead = before ? textShape(before.item.str) : { num_lead: 0, list_mark: 0 };
+        const line = { num_lead: f.num_lead || lead.num_lead, list_mark: f.list_mark || lead.list_mark };
+        const ok = releasesKeep(why, v, LINE_MODEL_RELEASE, line, shape);
+        if (ok) released.add(p.div);
+        if (releaseTrace) {
+          releaseTrace.push({ text: (p.item?.str || "").slice(0, 60), line: lines[li].map((t) => t[0]).join(" ").slice(0, 80), over: why, p: +v.p.toFixed(3),
+            line_num_lead: f.num_lead, line_list_mark: f.list_mark, lead: before ? before.item.str.slice(0, 20) : null, ...shape, released: ok });
+        }
+      }
+    }
+    // A released span that another check keeps after all (the refs region,
+    // the margin band, a region, the art) keeps its block reason in the DOM
+    // — nothing changed for it, and the skip-reason diff between an option
+    // run and a plain one stays a list of behaviour changes (a reason-only
+    // change on every bibliography page drowned the real ones). The check
+    // that kept it is recorded here instead, for the trace.
+    const releaseVeto = new Map();
+    for (const d of skipSet) if (!released.has(d)) d.dataset.fxTable = "1"; // debug/test marker
     // Tag bibliography-region spans so the references feature can skip annotating
     // the reference list's own "[N]" entry markers with citation cards (F1).
     for (const p of allPairs) if (p.div && inRefsBox(p.item)) p.div.dataset.fxRefs = "1";
@@ -3841,6 +3953,7 @@ export class TypographyEngine {
     // block-pass reason — that one is more specific.
     const reject = (div, why) => {
       if (globalThis.__fxDebug && div && !div.dataset.fxWhy) div.dataset.fxWhy = why;
+      if (released.has(div) && !releaseVeto.has(div)) releaseVeto.set(div, why);
       return false;
     };
     // WORDS SPLIT ACROSS SPANS. PDF.js opens a new span at every font change,
@@ -3874,7 +3987,7 @@ export class TypographyEngine {
           // the line above was kept for (a formula ending "x-", a caption)
           // says nothing about the body line under it.
           if (!e || e[dir === "next" ? "wrapNext" : "wrapPrev"] || !(d = e[dir])) break;
-          if (skipSet.has(d)) return true;
+          if (skipSet.has(d) && !released.has(d)) return true;
         }
       }
       return false;
@@ -4021,7 +4134,7 @@ export class TypographyEngine {
       // Block classification (#classifyBlocks) owns content-type: anything not
       // body text — headings, captions, tables, figures, equations — is here.
       // #classifyBlocks already recorded its own, more specific reason here.
-      if (skipSet.has(div)) return reject(div, "block");
+      if (skipSet.has(div) && !released.has(div)) return reject(div, "block");
       if (keptWord(div)) return reject(div, "split-word");
       // Backup net for an over-sized heading/title the block pass let through.
       // Only the LARGER-than-body cut remains: a smaller-than-body cut would
@@ -4254,41 +4367,24 @@ export class TypographyEngine {
             pairs.splice(i, 1);
           }
         }
-        // The line classifier (line-model.mjs; ml): the page's items
-        // become the lines and features of line-features.mjs — the same
-        // numbers the model was trained on, which a fixture test holds the
-        // two extractors to — and a line named a class in LINE_MODEL_KEEP
-        // (a table row, a heading) at that class's confidence or better
-        // keeps its candidates (`model-<class>`). Evidence, like the
-        // layout model's regions: it never un-keeps. The model is fetched
-        // once the option is on; a page processed before it arrives is
-        // processed by the rules alone.
-        if (this.#settings?.lineModel === true && lineModelLoaded && pairs.length && pageView.pdfPage?.view) {
-          try {
-            const view = pageView.pdfPage.view;
-            const pageW = view[2] - view[0], pageH = view[3] - view[1];
-            const fontNameOf = (it) => { try { return pageView.pdfPage.commonObjs.get(it.fontName)?.name ?? it.fontName; } catch { return it.fontName; } };
-            const items = allPairs.map((p) => p.item).filter((it) => it?.transform && it.str);
-            const shifted = items.map((it) => ({ ...it, transform: [it.transform[0], it.transform[1], it.transform[2], it.transform[3], it.transform[4] - view[0], it.transform[5] - view[1]] }));
-            const tokens = tokensOfItems(shifted, pageW, pageH, fontNameOf);
-            // each token remembers its item (tokensOfItems keeps the source index in slot 9)
-            const lines = buildLines(tokens);
-            const feats = pageFeatures(lines);
-            const lineOf = new Map();
-            lines.forEach((L, li) => { for (const t of L) lineOf.set(items[t[9]], li); });
-            const verdicts = feats.map((f) => classify(lineModelLoaded, f));
-            if (globalThis.__fxDebug) (globalThis.__fxLineModel ??= {})[pageView.id] = lines.map((L, li) => ({ text: L.map((t) => t[0]).join(" ").slice(0, 60), label: verdicts[li].label, p: +verdicts[li].p.toFixed(3) }));
-            for (let i = pairs.length; i--; ) {
-              const li = lineOf.get(pairs[i].item);
-              if (li === undefined) continue;
-              const v = verdicts[li];
-              const need = LINE_MODEL_KEEP[v.label];
-              if (need === undefined || v.p < need) continue;
-              reject(pairs[i].div, "model-" + v.label);
-              candidateDivs.delete(pairs[i].div);
-              pairs.splice(i, 1);
-            }
-          } catch { /* the rules alone */ }
+        // The line classifier's keeps (lineVerdicts above; LINE_MODEL_KEEP):
+        // a line named a table row or a heading at that class's confidence
+        // or better keeps its candidates (`model-<class>`). Evidence, like
+        // the layout model's regions. Its releases (LINE_MODEL_RELEASE) were
+        // applied in the candidate filter and are recorded after the art
+        // keeps below.
+        if (lineModel) {
+          const { lines, verdicts, lineOf } = lineModel;
+          for (let i = pairs.length; i--; ) {
+            const li = lineOf.get(pairs[i].item);
+            if (li === undefined) continue;
+            const v = verdicts[li];
+            const need = LINE_MODEL_KEEP[v.label];
+            if (need === undefined || v.p < need) continue;
+            reject(pairs[i].div, "model-" + v.label);
+            candidateDivs.delete(pairs[i].div);
+            pairs.splice(i, 1);
+          }
         }
         const art = baseline?.art;
         for (let i = pairs.length; art?.length && i--; ) {
@@ -4303,6 +4399,31 @@ export class TypographyEngine {
           candidateDivs.delete(pairs[i].div);
           obstacleDivs.push(pairs[i].div);
           pairs.splice(i, 1);
+        }
+        // The line classifier's releases (LINE_MODEL_RELEASE, applied in the
+        // candidate filter) are recorded here, after the region and art
+        // keeps. A released span still a candidate is reasoned
+        // `model-text-over-<reason>`; the mask pass's vetoes never overwrite
+        // a reason already recorded, so the whyskip probe counts the
+        // releases that did not end in emphasis under that reason. A
+        // released span that another check kept after all keeps its block
+        // reason (releaseVeto). The trace (__fxLineModel) carries every
+        // line's verdict, every candidate with its shape, and every
+        // release, with the check that kept a released span after all.
+        if (lineModel && globalThis.__fxDebug) {
+          const { lines, verdicts, lineOf } = lineModel;
+          const trace = (globalThis.__fxLineModel ??= {})[pageView.id] = {
+            lines: lines.map((L, li) => ({ text: L.map((t) => t[0]).join(" ").slice(0, 60), label: verdicts[li].label, p: +verdicts[li].p.toFixed(3) })),
+            candidates: releaseTrace,
+            released: [],
+          };
+          for (const p of allPairs) {
+            if (!released.has(p.div)) continue;
+            const li = lineOf.get(p.item);
+            const still = candidateDivs.has(p.div);
+            if (still) p.div.dataset.fxWhy = "model-text-over-" + blockWhy.get(p.div);
+            trace.released.push({ text: (p.item?.str || "").slice(0, 60), over: blockWhy.get(p.div), p: +verdicts[li].p.toFixed(3), kept: still ? null : releaseVeto.get(p.div) || "(none)" });
+          }
         }
         // Thin bars within a mask's reach (vector-art.mjs barsNear) — a
         // strike-out, an underscore drawn as a rule, an underline, a stroke in

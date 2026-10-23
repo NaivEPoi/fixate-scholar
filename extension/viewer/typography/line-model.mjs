@@ -61,3 +61,31 @@ export function classify(model, obj) {
   const label = model.labels[best];
   return { label, p: p[best], keep: model.keep.has(label), probs: p };
 }
+
+/** The release decision (engine LINE_MODEL_RELEASE). A span the rules kept
+ *  for a WEAK reason — a block rule that, on a layout it was not written
+ *  for, sweeps body prose into a heading — goes back to processing when
+ *  the model names its line body text at the confidence the policy asks
+ *  for that reason, AND the span has the shape of prose: no number or
+ *  list marker at the head of its line (`line`: the model's line, and
+ *  the item before the span on its baseline) or of itself (a numbered
+ *  line is the rules' call: a numbered heading and a numbered reference
+ *  entry have the same shape), `lower` lowercase words or more of its
+ *  own, and either `long` of them (a line inside a paragraph) or a
+ *  sentence's end (a paragraph's last line). Read on the extra corpus and
+ *  the gate corpora (ml/README.md, "In the engine"): the model's
+ *  confidence alone does not separate the prose the rules over-keep from
+ *  the affiliations, reference entries, table stubs and box titles it
+ *  names text just as confidently; the shape does, and it is read off the
+ *  span because the model's line builder joins columns (line-features.mjs
+ *  textShape). Only the `text` class releases, only the reasons the
+ *  policy names, never without a verdict, a line record and a span shape,
+ *  and never a rendering reason (those are not in the policy). */
+export function releasesKeep(why, verdict, policy, line, span) {
+  const need = policy ? policy[why] : undefined;
+  if (!need || typeof need.p !== "number" || !verdict || verdict.label !== "text") return false;
+  if (!(typeof verdict.p === "number" && verdict.p >= need.p)) return false;
+  if (!line || line.num_lead || line.list_mark || !span || span.num_lead || span.list_mark) return false;
+  if (!(span.n_lower >= (need.lower ?? 4))) return false;
+  return span.n_lower >= (need.long ?? 8) || !!span.ends_sentence;
+}
