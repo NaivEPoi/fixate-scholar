@@ -54,7 +54,7 @@ const LINE_MODEL_KEEP = { table: 0.75, heading: 0.9 };
 // own prose tests were already applied. The shape test is there because
 // the model's confidence alone does not tell that prose from the
 // affiliations, numbered reference entries, table stubs and box titles it
-// names text just as confidently (the extra corpus: 32 gains against 68
+// names text just as confidently (the extra corpus: 31 gains against 68
 // losses without it), and it reads the span rather than the model's line
 // because that line joins a page's columns. `table-aligned` is not in the
 // policy: read on the gate corpora, its releases were cells of tables whose

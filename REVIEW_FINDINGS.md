@@ -6215,9 +6215,10 @@ whose number was a span of its own (hence the row-lead test), but the
 `table-aligned` releases were 8 lines of prose against 37 emphasised cells
 of three private papers' description tables — cells that are sentences,
 which the model names text and no shape test can tell from a sentence — so
-`table-aligned` is not released. Final policy: extra corpus 3 releases,
-gate corpora 8, all paragraph tails or mid-sentence lines, no loss on
-either. Option gate: PASS, 50/50 (14 public, 36 private) in 36.0 min, one infra retry; skip-reason diff against the plain gate on the
+`table-aligned` is not released. Final policy: extra corpus 3 releases
+(5 pages in the skip-reason diff, the other two the keep policy's
+model-table keeps), gate corpora 8, all paragraph tails or mid-sentence
+lines, no loss on either. Option gate: PASS, 50/50 (14 public, 36 private) in 36.0 min, one infra retry; skip-reason diff against the plain gate on the
 same tree: 773/773 pages compared, 12 pages changed — the 8 releases, one line each, on two public and six private pages, and the four pages of the keep policy's model-table and model-heading keeps; nothing else. Details and the recipe: `ml/README.md`.
 
 ## R57 — the two over-keeps the classifier found, fixed in the rules (2026-10-22)
