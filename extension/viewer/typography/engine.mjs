@@ -2879,8 +2879,8 @@ export class TypographyEngine {
           }
         }
       }
-      // A table's legend, set in brackets right under its last row ("[...
-      // Complete (tick), Partial (triangle), None (cross)]"), belongs to the
+      // A table's legend, set in brackets right under its last row (a
+      // bracketed key naming what each cell symbol means), belongs to the
       // table. The fill above does not reach it: it lies under rows the
       // cell and rule passes kept, past the region's foot, and centred under
       // a full-width table its centre is in neither half-region; its symbols

@@ -6438,5 +6438,11 @@ both ways, 6 pages changed, one in what is emphasised (an age cell of a
 transcript table, now kept). Two gates fell on the way: the first version
 of the bound measure changed 46 pages, the slice test alone kept short
 prose lines on four pages; each was read and corrected before this one.
-npm test: 338 pass. This gate's directory (`bcbcd0f-20261023-2337-combined`)
-is the plain reference from here on.
+npm test: 338 pass. The legend rule landed after this gate, and the gate
+ran once more on the final tree (`ed2eddc-20261024-0313-combined`): PASS,
+50/50 in 56.6 min, the console stage's first seven private documents
+retried once each for the harness watchdog (infra, every one PASS on the
+retry), not contended. Against the gate before it, 791/791 pages compared
+and one page changed, the legend's (one more `table-region` span); against
+the plain reference, the same 27 pages. That directory is the plain
+reference from here on.
