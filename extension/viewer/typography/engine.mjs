@@ -2879,6 +2879,43 @@ export class TypographyEngine {
           }
         }
       }
+      // A table's legend, set in brackets right under its last row ("[...
+      // Complete (tick), Partial (triangle), None (cross)]"), belongs to the
+      // table. The fill above does not reach it: it lies under rows the
+      // cell and rule passes kept, past the region's foot, and centred under
+      // a full-width table its centre is in neither half-region; its symbols
+      // split it into several spans, so it is read as a line, as the slice
+      // beside the other column's prose on the same baseline. A bracketed
+      // line whose nearest line above, within a line and a half and
+      // overlapping it, is kept whole is absorbed (R58).
+      const byY = lines.slice().sort((a, b) => b.y - a.y); // top first
+      for (let i = 0; i < byY.length; i++) {
+        const ln = byY[i];
+        // The bracketed run of the line, from the item opening "[" to the item
+        // closing "]": the other column's prose shares the baseline.
+        const row = ln.items.filter((p) => !skip.has(p.div)).sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+        const a = row.findIndex((p) => p.item.str.trim().startsWith("["));
+        if (a < 0) continue;
+        let b = -1;
+        for (let k = a; k < row.length; k++) if (row[k].item.str.trim().endsWith("]")) { b = k; break; }
+        if (b < 0) continue;
+        const its = row.slice(a, b + 1);
+        const t = its.map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim();
+        if (!/^\[.*\]$/.test(t) || t.length < 8 || its.length === row.length && lowerWords(its) >= 6) continue;
+        const x0 = Math.min(...its.map((p) => p.item.transform[4]));
+        const x1 = Math.max(...its.map((p) => p.item.transform[4] + (p.item.width ?? 0)));
+        const h = Math.max(ln.h || 0, its[0].item.height || 0, 8);
+        let above = null;
+        for (let k = i - 1; k >= 0; k--) {
+          const o = byY[k].items.filter((q) => q.item.transform[4] + (q.item.width ?? 0) > x0 && q.item.transform[4] < x1);
+          if (!o.length) continue;
+          if (byY[k].y - ln.y > h * 1.6) break;
+          above = o;
+          break;
+        }
+        if (!above || !above.every((q) => skip.has(q.div))) continue;
+        for (const p of its) { skip.add(p.div); dbg(p.div, "table-region"); }
+      }
     }
 
     // Caption pass (independent of block grouping). A "Figure N" / "Table N" /
