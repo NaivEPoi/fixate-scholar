@@ -191,6 +191,16 @@ test("ALL-CAPS words (acronyms) are never emphasized", () => {
   assert.ok(cap.parts.some((p) => p.bold));
 });
 
+test("an acronym with a possessive or plural ending is the same label (R59)", () => {
+  const { parts } = emphasizeParts("the API’s design on GPUs and the CPU's cache");
+  const bolded = parts.filter((p) => p.bold).map((p) => p.text);
+  assert.ok(!bolded.some((t) => /^[A-Z]{2,}/.test(t)), JSON.stringify(bolded));
+  assert.ok(bolded.includes("des")); // "design" still emphasized
+  // a plain word that merely starts with capitals, or a one-letter word with an s, is not an acronym
+  const mixed = emphasizeParts("As the DNS-based path");
+  assert.ok(mixed.parts.some((p) => p.bold && p.text === "A"));
+});
+
 test('emphasisMode "none" bolds nothing but keeps the text intact', () => {
   const text = "reading with a swapped font only";
   const { parts } = emphasizeParts(text, { emphasisMode: "none" });

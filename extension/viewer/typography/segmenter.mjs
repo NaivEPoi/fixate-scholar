@@ -261,7 +261,8 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
     // identifiers with digits, URLs/emails, etc. are kept exactly as the
     // author set them. ALL-CAPS words (acronyms — "NAS", "AMF", "USENIX")
     // are labels, not prose: a bolded prefix reads as noise, so they keep
-    // their uniform weight.
+    // their uniform weight — with a possessive or plural ending too ("API's",
+    // "GPUs"), which is the same label with a suffix, not a word (R59).
     const inLink = links.some(([a, b]) => start < b && offset > a);
     // A letter that is a LABEL or a VARIABLE, not a word (R55): the "a" of a
     // list's "(a)", and the "n", "p", "df" of a statistic ("(n = 617)",
@@ -276,7 +277,7 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
       !seg.isWord ||
       inLink ||
       !PLAIN_WORD.test(seg.text) ||
-      /^[A-ZÀ-Þ]{2,}$/.test(seg.text) ||
+      /^[A-ZÀ-Þ]{2,}(?:['’]?s)?$/.test(seg.text) ||
       enumerator || variable
     ) {
       parts.push({ text: seg.text, bold: false });

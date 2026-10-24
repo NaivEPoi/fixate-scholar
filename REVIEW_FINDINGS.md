@@ -6446,3 +6446,33 @@ retry), not contended. Against the gate before it, 791/791 pages compared
 and one page changed, the legend's (one more `table-region` span); against
 the plain reference, the same 27 pages. That directory is the plain
 reference from here on.
+
+## R59 — an acronym keeps its weight with a possessive or plural ending (2026-10-24)
+
+Found in the v1.4.1 review and present under v1.4.0: on a private paper,
+a system's name set in capitals is left at its uniform weight everywhere
+in the prose, as an acronym is, except where it carries a possessive —
+there its first four letters were bold. The segmenter's acronym test
+(`segmenter.mjs`) asked for a segment of nothing but capitals, and the
+segment holds the apostrophe and the s, since both belong to a word. The
+test now allows a possessive or plural ending after the capitals ("API's",
+"GPUs"): the label is the same label with a suffix, and a bolded prefix on
+it reads as noise exactly as on the bare acronym. A one-letter word with
+an s ("As") is not an acronym and keeps its emphasis; a hyphenated
+compound on an acronym ("DNS-based") is unchanged. Such a segment also no
+longer counts as a word for the saccade, as the bare acronym never did, so
+the emphasised words after it on the line can shift by one.
+
+Unit: a case on the possessive, the plural and the one-letter word.
+Wordshot on the paper, two pages: the name's letters are no longer among
+the emphasised prefixes, the words around it still are.
+
+### Gate
+
+Release gate on the fix (`86640b8-20261024-0733-combined`, the working
+tree on the v1.4.1 commit): PASS, 50/50 in 35.1 min, one console retry
+(infra), not contended. Skip-reason diff against the v1.4.1 gate: 791/791
+pages, none changed, as a change inside a processed span must leave the
+skip set alone; the fix is proven by the unit case and the wordshot, not
+by whyskip. Extra corpus, plain: 22/23 PASS (ex05 UNVERIFIED as always),
+457/457 pages, none changed. npm test: 339 pass.
