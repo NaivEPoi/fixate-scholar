@@ -6311,3 +6311,123 @@ before and after: 22/23 PASS both ways, the two pages above changed and no
 other (457/457 pages compared). npm test: 338 pass. This gate's directory
 (`fc739db-20261023-0402-combined`) is the plain reference for the private
 corpus of 36 from here on.
+
+## R58 — four defects from the release review's sheets (2026-10-23)
+
+The v1.4.1 review captured edge sheets of every document on both corpora
+and had the second reviewer read all of them; of its flags, four held up
+under wordshot and are fixed here. None came from the release's own
+changes: the plain gate before them changed no page against the October
+19 reference, and each reproduces under v1.4.0. The first is a face the
+name test cannot know; the other three are rules reading a page-wide line
+or a column's edge where they should read a region's slice or the text's
+own margin.
+
+### A small-caps face known by measure, not by name
+
+Found in the release review's edge sheets (the second reviewer's one true
+flag among many false ones), confirmed with wordshot, and present under
+v1.4.0 too: on a private paper, the sentence after a proof's small-caps
+lead ("Proof." and its first words, one span, one face) was emphasised and
+came back on the overlay in small capitals throughout, while the canvas
+under it read lowercase.
+
+The mechanism is PDF.js's, not the paper's. The face is the body text face
+with its small-caps glyphs in the same subset: the PDF draws the lead with
+the small-cap glyphs and the sentence with the lowercase ones, and the
+canvas, which draws by glyph, is right. The overlay draws by code point
+through the web face PDF.js builds from the subset, where both glyphs of a
+letter map to the same code point and one survives — the small capital —
+so every lowercase letter the overlay sets in that face is a small capital.
+The engine's face test (`SPECIAL_FONT`) goes by the font's name, and the
+name is the text face's.
+
+`smallCapsByMeasure` (engine.mjs) now measures a loaded face once, by the
+shape a small capital cannot have: a lowercase p, q, y, g or j reaches
+below the baseline and a b, d, h, k or l reaches the capitals' height, and
+a small capital at those code points does neither. A face with any such
+letter flat or short is special, like a small-caps face by name, and its
+spans stay on the canvas. Height alone would not do — the first version
+compared x-height to cap height and flagged every face on three pages,
+because an x-height stands at 0.65 to 0.73 of the capitals on ordinary text
+faces and small capitals only a little higher. A letter the subset lacks
+falls back to the text layer's sans-serif, with its descenders and
+ascenders, and never counts; a face not yet loaded is unknown and is
+measured on the page's next pass, which the font-settle refresh runs. The
+measure is recorded under `__fxFaceProbe` with the debug flag.
+
+On the paper that showed it, the proof face measures flat "p y g" and short
+"b d h l", the span is kept as special-or-short, and the line reads as the
+canvas has it; PDF.js numbers the faces by load order, so the same face
+carries a different `g_d0_fN` from one session to the next. The measure
+found a second case on a public paper (ACM-full): a Libertine subset the
+template uses for identifiers set in small capitals inside prose, whose
+text-layer family PDF.js gives as sans-serif. Every release so far redrew
+those identifiers in lowercase sans-serif over the canvas's small capitals;
+they now stay on the canvas, as a small-caps face known by name would, and
+the paper's whyskip counts rise by those spans (13, 11, 10 and 17 on four
+pages).
+
+### A table region judges the line's slice inside it
+
+A full-width table is split at the gutter into one region per column, and
+the region fill leaves a running-prose line alone by a page-wide test: a
+line with three lowercase words or five words is prose. The page-wide line
+joined a cell of the left region with a cell of the right — the lone
+second line of a two-line label cell with a three-word cell across the
+gutter — and four words, three of them lowercase, made the label prose, so
+it was emphasised inside its table (a private paper's threat table; the
+tables probe did not see it, the label sitting outside the rule-bounded
+zone). The test now reads the line's slice inside the region when the
+rest of the line lies in other regions — when the line joins cells across
+the gutter — and the page-wide line otherwise. The first version judged
+every line on its slice, and took short prose lines beside an equation
+block for cells (four words, one of them hyphenated, on two extra-corpus
+papers); a line whose rest is free text keeps the page-wide verdict.
+
+### A line that starts inside the column is no prose bound
+
+The caption rule looks up from a figure's caption for the nearest prose
+line — four lowercase words, seventy-two percent of the measure — and
+keeps what lies between as the figure. A chart's title set over its plot
+(nine words, nearly the column's width) passed both tests, became the bound, and stayed emphasised
+over its figure. A paragraph's lines start at the column's text edge, its
+first line an indent in; the title started four ems in. The bound now also
+has to start within two ems of the column's left measure — the most common
+start of the lines that fill it, among lines that start inside the column
+— or to sit in a paragraph, with a prose line beside it within the leading
+(the caption does not count). Two versions fell before this one: the
+measure taken as the minimum start let an item crossing the gutter put a
+right column's edge a column too far left, and whole columns were swept
+as figures (46 gate pages changed); and without the paragraph test an
+indented abstract on a title page, every line of it two ems in, was figure
+text and the title block went with it. The title is then swept as figure
+body with the axis numbers and the legend under it.
+
+### A span holding a control character is mojibake
+
+A review letter's reference list, set in Windows-1252 and read as UTF-8,
+carries its closing quotation marks as "â€" plus U+FFFF. The overlay's
+face draws nothing for the last of those while the canvas drew the PDF's
+own glyph, and the span, stretched back to its measured width, closed the
+space after the quote onto the next word. A span holding a C1 control
+(U+0080–U+009F), U+FFFD or U+FFFF is now mojibake, like the script wrecks
+of R55, and stays on the canvas; no paper's prose holds such a character.
+
+### Gate
+
+Release gate on the final tree: PASS, 50/50 (14 public, 36 private) in
+34.9 min, no retries. Skip-reason diff against the plain reference gate
+(fc739db-20261023-0402, the same 36 private papers): 791/791 pages
+compared, 27 pages changed, every one read at the gate's zoom — the
+small-caps identifiers and proof leads now kept on two papers (a public
+one and a private one), the table label, the chart title, and relabels of
+figure and table spans that were kept before under another reason; the
+mojibake span's line holds one lowercase word and whyskip does not count
+it. Extra corpus, plain, against the sweep before these fixes: 22/23 PASS
+both ways, 6 pages changed, one in what is emphasised (an age cell of a
+transcript table, now kept). Two gates fell on the way: the first version
+of the bound measure changed 46 pages, the slice test alone kept short
+prose lines on four pages; each was read and corrected before this one.
+npm test: 338 pass. This gate's directory (`bcbcd0f-20261023-2337-combined`)
+is the plain reference from here on.
