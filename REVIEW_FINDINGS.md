@@ -6384,7 +6384,13 @@ rest of the line lies in other regions — when the line joins cells across
 the gutter — and the page-wide line otherwise. The first version judged
 every line on its slice, and took short prose lines beside an equation
 block for cells (four words, one of them hyphenated, on two extra-corpus
-papers); a line whose rest is free text keeps the page-wide verdict.
+papers); a line whose rest is free text keeps the page-wide verdict. The
+same table's legend, a bracketed line under its last row, had stayed
+emphasised for a third reason: it lies under rows the cell and rule passes
+kept, past the region's foot, and its symbols split it into several spans
+beside the other column's prose on the same baseline. A bracketed run of
+a line whose nearest line above, overlapping it within a line and a half,
+is kept whole is now the table's too.
 
 ### A line that starts inside the column is no prose bound
 
