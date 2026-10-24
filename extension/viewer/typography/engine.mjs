@@ -135,9 +135,17 @@ function smallCapsByMeasure(family) {
     ctx.font = `${spec}, sans-serif`;
     const asc = (t) => ctx.measureText(t).actualBoundingBoxAscent || 0;
     const desc = (t) => ctx.measureText(t).actualBoundingBoxDescent || 0;
+    const wid = (t) => ctx.measureText(t).width || 0;
     const cap = Math.max(asc("H"), asc("X"), asc("E"));
+    // A letter the face lacks is drawn by the fallback and measures exactly
+    // as the fallback does; such a letter says nothing about the face.
+    const fb = {};
+    ctx.font = "100px sans-serif";
+    for (const t of ["p", "q", "y", "g", "j", "b", "d", "h", "k", "l"]) fb[t] = [asc(t), desc(t), wid(t)];
+    ctx.font = `${spec}, sans-serif`;
+    const own = (t) => { const f = fb[t]; return Math.abs(asc(t) - f[0]) > 0.5 || Math.abs(desc(t) - f[1]) > 0.5 || Math.abs(wid(t) - f[2]) > 0.5; };
     if (cap > 0) {
-      const drawn = (t) => asc(t) > cap * 0.4;
+      const drawn = (t) => asc(t) > cap * 0.4 && own(t);
       const flat = ["p", "q", "y", "g", "j"].filter((t) => drawn(t) && desc(t) < cap * 0.05);
       const low = ["b", "d", "h", "k", "l"].filter((t) => drawn(t) && asc(t) < cap * 0.85);
       verdict = flat.length > 0 || low.length > 0;
@@ -496,6 +504,7 @@ export class TypographyEngine {
   /** Reset document-specific state and font metric caches when a new document loads. */
   onDocumentLoaded() {
     this.#refsBoxes = null;
+    faceProbeMemo.clear(); // a new document's faces are measured afresh (smallCapsByMeasure)
     // Reset here as well as in setRefsRegion: that setter only runs when a
     // document HAS a bibliography, so without this a document that has none,
     // opened in a tab that previously held one, would leave the harnesses
@@ -2838,7 +2847,11 @@ export class TypographyEngine {
         if (!ln) return false;
         const slice = ln.items.filter((q) => inRegX(reg, q));
         const rest = ln.items.filter((q) => !inRegX(reg, q));
-        const joinsCells = rest.length > 0 && rest.every((q) => regions.some((r2) => r2 !== reg && r2.n >= 2 && inRegX(r2, q)));
+        const inRegY = (r2, q) => {
+          const y = q.item.transform[5];
+          return y <= r2.yTop + r2.h * 0.5 && y >= r2.yBot - Math.min(3, r2.h * 0.3);
+        };
+        const joinsCells = rest.length > 0 && rest.every((q) => regions.some((r2) => r2 !== reg && r2.n >= 2 && inRegX(r2, q) && inRegY(r2, q)));
         return proseItems(joinsCells ? slice : ln.items);
       };
       for (const reg of regions) {
@@ -4285,7 +4298,7 @@ export class TypographyEngine {
       // the span, stretched back to its measured width, closed the space
       // after the quote onto the next word (R58). No paper's prose holds
       // such a character.
-      if (/[-�￿]/.test(trimmed)) return reject(div, "mojibake");
+      if (/[\u0080-\u009F\uFFFD\uFFFF]/.test(trimmed)) return reject(div, "mojibake");
       // ...a letter outside Latin, or a Latin letter from the Extended-B and
       // IPA blocks no paper's prose uses ("ȃ!" was the span over "せて").
       if (pageMojibake && /[ƀ-ʯ]|(?!\p{Script=Latin})\p{L}/u.test(trimmed)) return reject(div, "mojibake");

@@ -6365,8 +6365,9 @@ template uses for identifiers set in small capitals inside prose, whose
 text-layer family PDF.js gives as sans-serif. Every release so far redrew
 those identifiers in lowercase sans-serif over the canvas's small capitals;
 they now stay on the canvas, as a small-caps face known by name would, and
-the paper's whyskip counts rise by those spans (13, 11, 10 and 17 on four
-pages).
+the paper's whyskip counts rise by those spans on eight pages (59 in all;
+13, 11, 10 and 17 on the four largest). On the private paper the proof
+face holds twelve such spans on three pages.
 
 ### A table region judges the line's slice inside it
 
@@ -6419,12 +6420,14 @@ of R55, and stays on the canvas; no paper's prose holds such a character.
 Release gate on the final tree: PASS, 50/50 (14 public, 36 private) in
 34.9 min, no retries. Skip-reason diff against the plain reference gate
 (fc739db-20261023-0402, the same 36 private papers): 791/791 pages
-compared, 27 pages changed, every one read at the gate's zoom — the
-small-caps identifiers and proof leads now kept on two papers (a public
-one and a private one), the table label, the chart title, and relabels of
-figure and table spans that were kept before under another reason; the
-mojibake span's line holds one lowercase word and whyskip does not count
-it. Extra corpus, plain, against the sweep before these fixes: 22/23 PASS
+compared, 27 pages changed, every one read at the gate's zoom. Sixteen
+change what is emphasised: the small-caps identifiers and proof leads now
+kept on two papers (a public one, eight pages, and a private one, three),
+the table label, the chart title, two more table cell lines on two private
+papers, and four subcaption and axis lines of one figure; the other eleven
+are relabels of figure and table spans that were kept before under another
+reason. The mojibake span's line holds one lowercase word and whyskip does
+not count it. Extra corpus, plain, against the sweep before these fixes: 22/23 PASS
 both ways, 6 pages changed, one in what is emphasised (an age cell of a
 transcript table, now kept). Two gates fell on the way: the first version
 of the bound measure changed 46 pages, the slice test alone kept short
