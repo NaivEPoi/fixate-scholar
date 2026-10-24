@@ -103,6 +103,51 @@ function lineVerdicts(pageView, allPairs) {
   } catch { return null; }
 }
 
+// A face whose LOWERCASE glyphs are small capitals, by measure (R58). A
+// subset font that holds a word's small-cap glyphs and its lowercase ones
+// maps both to the same code points — a proof's "Proof." set in small caps
+// and the sentence after it in the same face. The canvas draws by glyph
+// and is right; the overlay draws by code point through the face PDF.js
+// built, where one glyph per code point survives, and the sentence came
+// back in small capitals throughout, emphasised. Its name is the text
+// face's, so SPECIAL_FONT cannot know it. Measured once the face is loaded
+// (a face not yet loaded is unknown, and the page is processed again when
+// it arrives) by the shape a small capital cannot have: a lowercase p, q,
+// y, g or j reaches below the baseline and a b, d, h, k or l reaches the
+// capitals' height, where a small capital at those code points does
+// neither. Height alone would not do — an x-height stands at 0.65 to 0.73
+// of the capitals on ordinary text faces, small capitals only a little
+// higher. A letter the subset lacks falls back to the sans-serif the text
+// layer names, which has its descenders and ascenders, so it never counts;
+// a glyph that drew nothing (no ascent) never counts either. `fontName` is
+// the loaded family itself (PDF.js's g_d0_fN).
+let faceProbeCtx = null;
+const faceProbeMemo = new Map(); // family -> true | false (an unknown face is not remembered)
+function smallCapsByMeasure(family) {
+  if (faceProbeMemo.has(family)) return faceProbeMemo.get(family);
+  if (typeof document === "undefined" || !document.fonts?.check) return null;
+  let verdict = null;
+  try {
+    const spec = `100px "${family}"`;
+    if (!document.fonts.check(spec)) return null; // not loaded yet: unknown, measured on the next pass
+    faceProbeCtx ??= document.createElement("canvas").getContext("2d");
+    const ctx = faceProbeCtx;
+    ctx.font = `${spec}, sans-serif`;
+    const asc = (t) => ctx.measureText(t).actualBoundingBoxAscent || 0;
+    const desc = (t) => ctx.measureText(t).actualBoundingBoxDescent || 0;
+    const cap = Math.max(asc("H"), asc("X"), asc("E"));
+    if (cap > 0) {
+      const drawn = (t) => asc(t) > cap * 0.4;
+      const flat = ["p", "q", "y", "g", "j"].filter((t) => drawn(t) && desc(t) < cap * 0.05);
+      const low = ["b", "d", "h", "k", "l"].filter((t) => drawn(t) && asc(t) < cap * 0.85);
+      verdict = flat.length > 0 || low.length > 0;
+      if (globalThis.__fxDebug) (globalThis.__fxFaceProbe ??= {})[family] = { cap: +cap.toFixed(1), flat: flat.join(""), low: low.join(""), p: +(desc("p") / cap).toFixed(2), b: +(asc("b") / cap).toFixed(2) };
+    }
+  } catch { verdict = null; }
+  if (verdict !== null) faceProbeMemo.set(family, verdict);
+  return verdict;
+}
+
 // Spans rewritten per idle callback. Each batch reads its rects, rewrites
 // its spans and is measured again — one forced layout a batch — so a bigger
 // batch is fewer layouts, and a longer task: at 150 a page's candidates fit
@@ -2010,6 +2055,56 @@ export class TypographyEngine {
           if (a1 - a0 > measureW) measureW = a1 - a0;
         }
         const proseWidth = Math.min(colW, measureW || colW) * 0.72;
+        // ...and its left edge, from the lines that fill it: a paragraph's
+        // lines start there (its first line an indent in). A line that starts
+        // well inside — a chart's title set over its plot, centred or near
+        // it — is figure text however many words it holds: taken for the
+        // prose bound, it stayed the bound and was emphasised over its figure
+        // (R58). Two ems is past any paragraph indent.
+        // The edge is the most common start of those lines, and only of lines
+        // that start inside the column: an item crossing the gutter from the
+        // other column put the right column's edge a column too far left, no
+        // paragraph line reached it, and whole columns were swept as figures.
+        const starts = new Map();
+        for (const ln of ordered) {
+          const ic = inColOf(ln);
+          if (!ic.length) continue;
+          const [a0, a1] = lineX(ic);
+          if (a1 - a0 < proseWidth || a0 < colX0 - 2) continue;
+          const k = Math.round(a0);
+          starts.set(k, (starts.get(k) || 0) + 1);
+        }
+        let measureX0 = Infinity, startN = 0;
+        for (const [k, n] of starts) if (n > startN || (n === startN && k < measureX0)) { startN = n; measureX0 = k; }
+        const startsAtMargin = (lx0) => measureX0 === Infinity || lx0 - measureX0 <= dominant * 2;
+        // ...unless the line is in a PARAGRAPH: an indented abstract on a title
+        // page starts two or three ems in on every line, and taking its lines
+        // for figure text swept the title block as a figure (the first version
+        // of this). A paragraph line has a prose line beside it, within the
+        // leading; a chart's title has its plot above and the caption below,
+        // and the caption does not count.
+        const proseLike = (k) => {
+          if (k < 0 || k >= ordered.length || k === ci) return false;
+          const ic = inColOf(ordered[k]);
+          if (!ic.length) return null; // the other column: look further
+          const [b0, b1] = lineX(ic);
+          const tt = ic.map((p) => p.item.str).join(" ").trim();
+          if (isCaptionLead(tt)) return false;
+          return lowerWords(ic) >= 4 && b1 - b0 >= proseWidth * 0.6;
+        };
+        const inParagraph = (j) => {
+          const h = Math.max(ordered[j].h || 0, 8);
+          for (const dir of [-1, 1]) {
+            for (let k = j + dir, n = 0; n < 4 && k >= 0 && k < ordered.length; k += dir, n++) {
+              const r = proseLike(k);
+              if (r === null) continue;
+              if (Math.abs(ordered[k].y - ordered[j].y) > h * 1.7) break;
+              if (r) return true;
+              break;
+            }
+          }
+          return false;
+        };
         // Nearest prose/caption line above the caption in this column. A
         // SUBFIGURE caption block — "(a) …" leads plus their WRAP rows
         // (side-by-side subcaptions join into wide, wordy lines) — is figure
@@ -2050,7 +2145,7 @@ export class TypographyEngine {
           const t = inCol.map((p) => p.item.str).join(" ").trim();
           if (inSubcapBlock(j)) continue; // subcaption lead or its wrap rows
           const capAbove = /^(?:Fig(?:ure)?\.?|FIG\.?|FIGURE|Tab(?:le)?\.?|TAB\.?|TABLE)\s*(?:\d|[IVXLCDM]+\b|[A-Z]\.?\d)/.test(t) && isCaptionLead(t);
-          const prose = lowerWords(inCol) >= 4 && lx1 - lx0 >= proseWidth;
+          const prose = lowerWords(inCol) >= 4 && lx1 - lx0 >= proseWidth && (startsAtMargin(lx0) || inParagraph(j));
           if (capAbove || prose) { boundIdx = j; break; }
         }
         // Absorb the bound paragraph's short continuation lines downward.
@@ -2714,18 +2809,42 @@ export class TypographyEngine {
           regions,
         });
       }
-      const proseLineDivs = new Set();
-      for (const ln of lines) {
-        const lnText = ln.items.map((p) => p.item.str).join(" ").trim();
-        const wCount = lnText.split(/\s+/).filter((w) => /[a-zA-Z]/.test(w)).length;
-        if (lowerWords(ln.items) >= 3 || wCount >= 5 || REF_PROSE.test(lnText) || HEAD_LEAD.test(lnText)) {
-          for (const p of ln.items) proseLineDivs.add(p.div);
-        }
-      }
+      // Is a line running prose? By the page-wide line, as it always was: a
+      // line with three lowercase words or five words. Except where the line
+      // JOINS CELLS OF TWO REGIONS: a full-width table is split at the gutter
+      // into one region per column, and the page-wide line joined a cell of
+      // the left region with a cell of the right — a one-word label with a
+      // three-word cell made four words and three lowercase ones, prose by
+      // the count, and the lone second line of a two-line cell was
+      // emphasised in its table (R58). When everything of the line outside
+      // this region lies inside other regions, the line is judged on its
+      // slice inside this one, which is that region's cells. A line whose
+      // rest is free text keeps the page-wide verdict: judging every line on
+      // its slice took short prose lines beside an equation block — four
+      // words, one of them hyphenated — for cells.
+      const lineOfDiv = new Map();
+      for (const ln of lines) for (const p of ln.items) lineOfDiv.set(p.div, ln);
+      const inRegX = (reg, q) => {
+        const x = q.item.transform[4];
+        return x >= reg.x0 - 2 && x + (q.item.width ?? 0) / 2 <= reg.x1 + 2;
+      };
+      const proseItems = (its) => {
+        const text = its.map((q) => q.item.str).join(" ").trim();
+        const wCount = text.split(/\s+/).filter((w) => /[a-zA-Z]/.test(w)).length;
+        return lowerWords(its) >= 3 || wCount >= 5 || REF_PROSE.test(text) || HEAD_LEAD.test(text);
+      };
+      const proseIn = (reg, p) => {
+        const ln = lineOfDiv.get(p.div);
+        if (!ln) return false;
+        const slice = ln.items.filter((q) => inRegX(reg, q));
+        const rest = ln.items.filter((q) => !inRegX(reg, q));
+        const joinsCells = rest.length > 0 && rest.every((q) => regions.some((r2) => r2 !== reg && r2.n >= 2 && inRegX(r2, q)));
+        return proseItems(joinsCells ? slice : ln.items);
+      };
       for (const reg of regions) {
         if (reg.n < 2) continue; // a single stray multi-gap row isn't a table
         for (const p of items) {
-          if (skip.has(p.div) || proseLineDivs.has(p.div)) continue;
+          if (skip.has(p.div) || proseIn(reg, p)) continue;
           const pStr = p.item.str.trim();
           if (REF_PROSE.test(pStr) || HEAD_LEAD.test(pStr) || lowerWords([p]) >= 4) continue;
           const y = p.item.transform[5];
@@ -3642,14 +3761,15 @@ export class TypographyEngine {
 
   /** True when the item is set in a math/symbol/mono/small-caps/bold face.
    *  The font objects are already resolved in commonObjs once the canvas has
-   *  rendered. */
+   *  rendered. A small-caps face is also known by MEASURE (smallCapsByMeasure):
+   *  the name says nothing when the face is the text face itself. */
   #isSpecialFont(pageView, fontName, cache) {
     if (!fontName) return false;
     if (cache.has(fontName)) return cache.get(fontName);
     let special = false;
     try {
       const font = pageView.pdfPage.commonObjs.get(fontName);
-      special = SPECIAL_FONT.test(font?.name ?? "");
+      special = SPECIAL_FONT.test(font?.name ?? "") || smallCapsByMeasure(fontName) === true;
     } catch {
       /* font not resolved — assume regular text */
     }
@@ -4158,6 +4278,14 @@ export class TypographyEngine {
       if (smallCapsHead()) return reject(div, "smallcaps-head");
       // Mojibake (isMojibake, above): the span's text is not the page's.
       if (isMojibake(trimmed)) return reject(div, "mojibake");
+      // ...and so is a span holding a C1 control or a non-character: a
+      // Windows-1252 quotation mark read through the wrong encoding comes
+      // out as "â€" plus U+009D or U+FFFF, which the overlay's face draws
+      // as nothing while the canvas drew the PDF's own glyph for it, and
+      // the span, stretched back to its measured width, closed the space
+      // after the quote onto the next word (R58). No paper's prose holds
+      // such a character.
+      if (/[-�￿]/.test(trimmed)) return reject(div, "mojibake");
       // ...a letter outside Latin, or a Latin letter from the Extended-B and
       // IPA blocks no paper's prose uses ("ȃ!" was the span over "せて").
       if (pageMojibake && /[ƀ-ʯ]|(?!\p{Script=Latin})\p{L}/u.test(trimmed)) return reject(div, "mojibake");
