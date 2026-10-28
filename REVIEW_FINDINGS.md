@@ -6683,14 +6683,15 @@ rules had already kept by their rules and one — a cell naming an attack
 — is new. Nothing lost. The v1.4.1 model's policy run (R56) changed 12
 pages, 8 releases and 4 keeps; the retrained model's is the same shape.
 
-### Found by the same step, present under v1.4.1, left open (R62)
+### Found by the same step, present under v1.4.1 (fixed as R62, below)
 
 Three settled pages a document over 48 documents is more of each paper
 than any gate before looked at, and the step turned up classification
 calls that the skip-reason diff shows unchanged since v1.4.1 — none a
 render defect, every one verified by wordshot, each on one private paper
-unless said. They are recorded here as the next round's sheet, with the
-mechanism as far as it was read, and not fixed in this release:
+unless said. They were recorded here as the next round's sheet, with the
+mechanism as far as it had been read; R62 reads each to its cause and
+fixes it before the tag:
 
 - A caption whose first line is set as one short span a word (a per-word
   text layer) is kept on that line only; its second and third lines, at
@@ -6748,3 +6749,331 @@ detector path, the `layoutModel` setting and its Options entry, the
 npm script, `test/diag-layout.mjs`; the line model now lives under
 `extension/vendor/model/`. `ml/doclaynet_eval.py` keeps `--onnx` as an
 option so a candidate detector can still be scored beside the classifier.
+
+## R62 — the eleven calls the visual step found under v1.4.1, read to their causes and fixed (2026-10-28)
+
+The R61 gate's visual step listed eleven classification calls, each
+verified by wordshot and each unchanged since v1.4.1, and the release
+was held at the bump until they were fixed. Every one was re-dumped
+with `__fxDebug` — span, reason, size against the body, the figure
+regions and block statistics the engine recorded — and read to a
+mechanism before anything was changed. Ten are fixed below; the
+eleventh is a keep by design and is said so. Each is on one private
+paper unless noted, and no line of any private paper is quoted here:
+the shapes are described.
+
+### A caption's continuation lines, under a body line of the other column
+
+The caption whose first line was set a span a word kept only that line.
+Not the per-word layer: the geometric absorb branch tested each next
+line's height by the LINE GROUP's height, which is the row's over both
+columns, and the other column's body line, grouped onto the caption's
+second line by a near baseline, made it read as a size change. The
+anchored branch had been given the in-column height in R55; the
+geometric branch had not. It now reads the height of the line's items
+in the caption's own band, for the gap test and the size test alike.
+Re-dumped: first line `caption`, second and third `caption-absorb`.
+
+### Operator words inside equations: max, s.t., diag, tr
+
+Two causes. The displayed optimisation problem carried SUB-EQUATION
+tags of the "(7a)", "(7b)" form, and the row-equation test's number
+pattern took only "(7)", "(A.3)", "(5.6)": the tag rows were no
+equation to it, and the "max" over the objective and the "s.t." opening
+the constraints were prose, emphasised on their first letters. The
+pattern now allows a letter after the number. And an operator name set
+upright in the text face INSIDE a line — a "diag" applied to a vector
+in an inline formula, a "tr" before its parenthesis, each a span of its
+own beside a math glyph — is notation the candidate filter had no rule
+for. A span that is exactly an operator name (`MATH_OP_SPAN`: the TeX
+operators plus tr, diag, rank, span, sgn, argmax, Pr, Var, s.t. and a
+few more) with a math glyph touching it on its own baseline — a special
+face, or no letter at all — within a line height and a fifth, is kept
+as `math-op`. The neighbour is found by position, not by the content
+stream's order, which for mathematics is no reading order at all (the
+item before a "tr" in the stream was a subscript two rows down). A
+prose "max" sits inside a longer span, or beside words, and is
+untouched. Re-dumped: the tag rows `row-eqn` whole, the inline operator
+names `math-op`.
+
+### Two author names of seven, and the e-mail lines
+
+The paper is IEEE-set: the abstract's heading run into its first
+sentence with a dash. `findContentStart` matched the heading alone on
+its line (`/^abstract\.?$/`) and so never found this document's content
+start; with no front-matter cut, the title block, author line and
+e-mail addresses were body prose to the engine, and what kept five of
+the seven names was the line-formula rule, applied to the author line's
+right-column half (its punctuation ratio over the threshold by the
+commas and asterisks) and not to its left half (under by a hair). The
+heading is now found alone, or run into its text by a dash or a colon
+("Abstract—We …", "Abstract: We …"), and a line that merely opens with
+the word ("Abstract syntax trees …") still is not it. On the paper,
+`contentStart` is the abstract's page, and the author line and both
+e-mail lines are `front-matter`. Unit test in `test/unit/parser.test.mjs`.
+This reaches every IEEE-style paper in both corpora: their title blocks
+were never cut before.
+
+### One of two identical prompt listings emphasised
+
+Two framed prompt listings on one page, each above its caption. The
+left column's listing heads the column: the figure sweep's prose bound
+search found nothing above it and kept the listing whole. The right
+column's listing sits under a body paragraph, and its own last lines —
+a note of three wordy lines — read as the prose bound: the sweep
+stopped a line over the caption and the listing above the note was
+emphasised. The lines are set at 0.84 of the body in a serif face on a
+sans paper. A prose bound must now be body prose: at the body's size,
+or in the body's face (`bodyFace`, the page's face by characters,
+hoisted above the sweep). Body prose is set so; a figure's text is set
+smaller, in another face, or both. Re-dumped: the listing `fig-body`
+from its title to the row of dots, its caption `caption`, the body
+paragraph above it processed.
+
+### A table's note
+
+A walkthrough of the table's columns and a key to its cell symbols,
+set at 0.77 of the body right under a full-width table at 0.77. The
+table-region pass fills a region's box but spares prose by design, and
+its tail chain walked down through the note by each half-region's
+slice (a half line of message names is not prose) without keeping
+anything. A note pass follows the region pass: from the TABLE's last
+confirmed row — the table is the regions sharing its rows, since a
+full-width table is split at the gutter, and the half whose last
+confirmed row sits higher saw a gap where the other half's was — it
+chains downward over lines that overlap the table's width, set smaller
+than the body and within twelve per cent of the table's own size,
+within two and a half heights of the last, and keeps them as
+`table-note`. A line is several groups when its message names in
+another face sit a hair off the prose's baseline: a group within half
+a height of the last absorbed is the same line, a sub-height group is
+passed over. Body-sized prose, a caption or a heading ends the chain.
+Re-dumped: 32 spans `table-note`, nothing processed between the table
+and the body paragraph below.
+
+### Italic run-in headings, on two papers
+
+`skipItalicLead` tolerates short roman words inside an italic run (an
+entity name between italics). The body's "The" after a seven-word
+"Remark: …" heading is three letters, rode along, and the run no longer
+ended in a period; the run proper is now the italic items only, with
+the trailing roman ones let go, and the test asks that roman body
+follow it on the same line. On the other paper the heading is in
+SENTENCE case, seven words of which five are lowercase, where the
+period-ended form asked for six words mostly capitalised — its
+Title-Case sibling of four words passed. A sentence-case italic run of
+up to eight words, ending in a period with roman body after it, is the
+heading of the paragraph it opens when the line opens a paragraph:
+indented, or under nothing, a gap, a line that stopped short of the
+measure, or a line that ended a sentence (`opensParagraph`, which finds
+the line above in the band, not the group above, which is often the
+other column's). An italic SENTENCE set so loses its emphasis on a few
+words; a heading emphasised is the fault the eye finds. Re-dumped: both
+`runin-ital`, the body after each processed.
+
+### A proof page kept whole as a table
+
+Every paragraph of the page was `blk-table`. The block statistics:
+forty rows, three "cells" — the widest row's count, where the block
+test reads `maxCells` — and 144 lowercase words, under the 156 that
+proseDense asks of forty rows (four a row), the shortfall the inline
+mathematics: a line's words beside its formulas, and every word ending
+in a period or comma, which `LOWER_WORD` does not count. One row with
+two gaps around a formula made the block a table. A table repeats its
+columns row after row: the rows carrying the structure (three cells, or
+two with half the items special) must now be three in ten of the
+block's body rows, with blocks of one or two rows judged as before. On
+the page, one such row in thirty-nine; the page's prose is processed,
+its displayed equations `row-eqn` and `line-formula` as before. The
+statistic is recorded in `__fxBlkStats` as `cellRows`.
+
+### A paragraph's one-word last line swept as a figure
+
+A one-word last line directly above a figure's caption: the figure
+sweep's bound paragraph is absorbed downward while its lines carry two
+lowercase words, and the one-word tail ended the flow before it was
+taken in, so it lay under the bound and was swept. A line under the
+bound at its pitch is the paragraph's when it opens lowercase or the
+line over it runs on; the sweep now takes it and then stops.
+Re-dumped: the word processed, the figure region a line lower.
+
+### The first of three contribution items
+
+The item's first line is numbered and has two lowercase words by the
+count (the rest wear commas or the hyphen that breaks its last word),
+and the label-led heading rule takes a line of three or fewer. Its
+hyphen then made the short remainder under it a wrapped heading. A
+numbered line in the body's face and weight that fills the measure and
+runs on — a broken word, a dangling word, a comma — is a list item: a
+heading stops short of the measure and breaks no word. Re-dumped: all
+three items processed.
+
+### A paragraph's two-word last line kept as a heading
+
+An acronym and a noun, under a line ending on "the" and over a
+numbered section heading. hyperref's heading anchor sits a skip above
+the heading, where the paragraph's last line is (the R55 case), and
+the guard there asked for four lowercase words of prose, which two
+words cannot give. The band is prose also when the nearest line above
+in the band, at the body's pitch, is prose that runs on: no heading
+opens under an unfinished sentence. Re-dumped: processed.
+
+### Public, ACM acmart (full) p9: the line above "Impact."
+
+"that the existing works [39, 46] cannot detect." was `fig-body`. The
+caption pass had already refused "Figure 5(b)). This signifies …" as a
+caption (its lead guard: prose at the body's pitch in the same face
+above it); the figure sweep's own guard asked that the line above RUN
+ON, and "… does not succeed (see" ran on by no word `DANGLING` listed.
+So the sweep took the line for a caption with no room above it, and
+swept the paragraph's last line below as the figure. Two changes: the
+figure sweep's guard is the caption pass's — prose above at the pitch,
+in the lead's face and size OR running on — so the two passes agree on
+what is not a caption. The same-face branch asks, further, that both
+lines be body-sized and that the line above not be a sub-caption: the
+first run of the gate's skip-reason diff showed a private paper's
+figure losing its region, its three "(a) …" sub-captions at the
+caption's small size having read as prose over a wrapped reference,
+and the sub-captions emphasised; a wrapped reference is body text,
+and a sub-caption is not. And `DANGLING` learns the words that open a
+clause or a reference and cannot close one (see, i.e., e.g., cf.,
+which, whose, be, been, if, when, where, because, since, although,
+whereas, but, its, their, our, every, and the float and section labels
+"Figure", "Table", "Section", "Eq.", "Algorithm", "Theorem", "Lemma",
+"Definition", "Appendix"). Words that CAN end a sentence — this, is,
+that, each, such, not, these — stay out. Re-dumped: the line processed,
+the sweep records the lead as `wrapped`.
+
+### What the proof page showed once it was prose
+
+With the page no longer a table, the visual step on the fixed pages
+found its mathematics marked where the block pass had hidden it: an
+"accept" after "=", a "negl" before its argument, the names of games
+set in a sans face as superscripts on an adversary's advantage, a
+"guess" over a variable — single tokens that TeX sets in \mathsf,
+\mathrm and \text, which no font test knows as special, each beside a
+glyph the engine keeps. Two rules in the candidate filter, both read
+from the dump: a token in a face other than the page's body face
+(`bodyFont`, by characters), letters and digits only, touching a kept
+glyph on its baseline — a special face, no letter, a single character,
+or a span the block pass left on the canvas — is a math name
+(`math-name`); and a token under four fifths of the body with no space
+in it, starting where a body-size item ends and set above or below its
+baseline as a script is (the scriptFrags window read from the script's
+side), is a script whatever its length (`script-size`; the rule had
+taken four characters at most). Body prose is in the body's face and
+its words beside inline math keep their emphasis: the "and" between
+two formulas on another paper's page is still processed, and the same
+word inside a displayed equation, in that equation's text face, is
+kept. Re-dumped: every name the step listed is `math-name`, `math-op`
+or `script-size`; the page's prose is processed as before.
+
+### Two words that looked typewriter-set, on the page with the italic run-in
+
+The same step saw two single words emphasised among a page's kept
+typewriter tokens, and took them for typewriter too. The dump's font
+names (the loaded font's own name through `commonObjs`, now printed by
+the scratchpad dumper) say otherwise: they are in the sans companion
+of the serif body — the ACM template's `\textsf`, a channel name and a
+command — while the kept tokens are in the typewriter face. The paper
+marks a name that way as small caps and typewriter mark theirs, and
+those faces are kept. A face's FAMILY is now read from the stem of its
+PDF name (the subset tag, a style suffix and a size dropped, six
+letters kept): a single upright token, letters and digits, in a face
+of another family than the body's that carries a tenth of the page's
+characters at most, is kept as `other-family`. Two subsets of one face
+share a stem; italic is told apart by ITALIC_FONT and stays prose; a
+sentence set in another family has spaces and keeps its emphasis. The
+rule's misses are by construction (two families whose names share six
+letters), its false positives a second roman face mixed into a body —
+a few words kept, not a defect the eye finds. Re-dumped on six pages:
+the two words `other-family`, an all-capitals abbreviation in another
+face on a second paper (no emphasis either way, R9-7), nothing else
+changed.
+
+### What the gate's own reading of the changed pages found
+
+The skip-reason diff of the first full run against the pre-R62 sweep
+changed 186 pages, and the classes were read from dumps: bibliography
+blocks no longer "tables" (kept as `refs-region` as before), the name
+rules over both corpora (every span a \mathsf or sans-companion
+identifier, checked by font name on seven of the heaviest pages),
+figure regions re-bounded past small-size figure text (counts
+unchanged), released table blocks (running prose with inline
+mathematics on six private pages, a definition list on a seventh),
+italic paragraph headings on two papers, caption absorbs on three
+public arXiv papers and a table note on a fourth. Sixteen of those
+pages were captured and read, and the reading found three more
+mechanisms, fixed before the final run:
+
+- A derivation page's paragraphs — thirteen prose rows among
+  thirty-one of mathematics — still met the repeated-structure test by
+  their formula rows' gaps. A table has no FULL prose row: a row of
+  four lowercase words running the block's measure with no cell gap in
+  it is a paragraph's line, and two such rows, or a fifth of the body
+  rows, now veto the table (`fullProseRows` in `__fxBlkStats`) — where
+  the cell rows are no majority: a comparison table whose block took
+  two lines of its key still has seven cell rows in ten, and the
+  second run's diff showed its key emphasised before that condition
+  was added. Three paragraphs regained on the derivation page; a
+  three-row block whose one prose line holds an inline formula's gap
+  stays as it was.
+- The figure sweep's tail absorb took a parameter list's label and its
+  first items for a paragraph's tail under a line that ran on: the
+  absorbed line must now carry a lowercase word of its own.
+- A row of a displayed equation built of NAMED quantities — "(1 −
+  suspicious) · weight factor" under an objective's max, three words
+  and none a function word — is swept with its numbered row as a
+  fraction's part is; a row opening on an operator's name is not a
+  sentence's. On the page that showed it, two of five such operands
+  are now kept; the three in fractions set beyond the tag row's
+  neighbourhood are not, and are listed below.
+
+And it found calls present under v1.4.1 on those pages, exposed where
+a block that had been kept whole is now prose, which are the next
+round's sheet (R63): named operands of a displayed equation set in
+fractions outside the tag row's x-span (one private paper, three
+spans); a "where … represents the mean of" line after a display, kept
+with the equation block (two private papers); a prose line of
+capitalised acronyms and parentheses with no lowercase word, kept as a
+text-face formula (one private paper, one line); an italic theorem
+statement's second line kept where its first is processed, and an
+italic sentence ending in a colon before a display kept as a run-in
+lead (two private papers); a parameter list at a column's foot with
+its figure on the next page, processed as prose (one private paper);
+and a short paragraph beside a figure's bound on a public paper
+(USENIX, the first paragraph of a subsection) whose math-dominated
+lines are kept whole.
+
+### Gate
+
+The release gate ran four times on this round, once per change to the
+engine that the previous run's own reading demanded — a run is only
+evidence for the tree it ran on. The final run, on the final tree, in
+lanes (four of allprobes `--all`, three of twelve private papers each
+and one of the 12 public; a console lane; the option in four lanes):
+fontkeep, whyskip, eqkeep, refcolor, tables and citepoint PASS on
+48/48 documents, no retries; whyskip unreasoned 0 and trailing 0 on
+every page; unit tests 338. Skip-reason diff against the pre-R62
+sweep (the R61 release tree, same harness, same zoom): 749/749 pages
+compared, 187 changed, every class read from dumps and sixteen pages
+captured and read by eye (above); between the last two runs one page
+changed, the comparison table whose key the veto had released, now
+kept again. Console silent on 48/48 (viewer and service worker, every
+page, errors and warnings). Option gate (`--line`, the retrained
+model) on the same tree: PASS 48/48, no retries; skip-reason diff
+against the plain gate 749/749 pages compared, 10 changed — the same
+ten pages R61's option gate read (six paragraph tails released from
+`line-head`, two `model-heading` second lines, two tables' cells as
+`model-table`), nothing lost.
+
+### Kept by design: a prose line holding a circled step digit
+
+Two papers set step numbers as a digit inside a drawn circle, and the
+line holding one is kept `vector-art`: the circle is canvas art under
+the span, and the span's mask would erase it. The alternative — a hole
+in the mask around the circle — leaves the canvas digit visible under
+the overlay's own digit, the two layers disagreeing by a fraction of a
+pixel, which is the ghosting class every past visual bug belonged to.
+One line a page, unemphasised, with a reason, is the better fault. Left
+as it is.

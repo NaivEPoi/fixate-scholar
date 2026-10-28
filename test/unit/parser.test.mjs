@@ -12,6 +12,7 @@ import {
   findCitations,
   findInternalRefs,
   findInternalRefsAcrossBreaks,
+  findContentStart,
   resolveCitation,
   REF_LEADER_END,
   REF_ITEM_START,
@@ -53,6 +54,20 @@ const APA_DOC = lines([
   "Smith, A., Jones, B., & Lee, C. (2020). Fixation points and reading speed. Cognitive",
   { text: "Science Quarterly, 8(1), 1–19." },
 ]);
+
+test("the content start is the Abstract heading, alone or run into its text (R62)", () => {
+  const at = (texts, page = 1) => findContentStart(lines(texts).map((l) => ({ ...l, page })));
+  assert.equal(at(["A Title", "Abstract", "We study …"])?.y, 700 - 12);
+  assert.equal(at(["A Title", "ABSTRACT.", "We study …"])?.y, 700 - 12);
+  // IEEE runs the heading into the first sentence with a dash; a colon does the same.
+  assert.equal(at(["A Title", "Abstract—We study the reading of papers on a screen, and", "find that …"])?.y, 700 - 12);
+  assert.equal(at(["A Title", "Abstract: We study …"])?.y, 700 - 12);
+  // A sentence that merely opens with the word is not the heading.
+  assert.equal(at(["Abstract syntax trees are …", "Related work"]), null);
+  // Only the first five pages: a review form before the paper is still searched, a deep "Abstract" is not.
+  assert.equal(at(["Form", "Abstract", "text"], 5)?.page, 5);
+  assert.equal(at(["Form", "Abstract", "text"], 6), null);
+});
 
 test("parses numeric-style references", () => {
   const entries = parseReferences(NUMERIC_DOC);
