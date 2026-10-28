@@ -10,4 +10,4 @@
 // two apart (overlay.mjs, workerIsCurrent).
 //
 // Kept equal to manifest.json's version by test/unit/build.test.mjs.
-export const BUILD = "1.4.1";
+export const BUILD = "1.4.2";
