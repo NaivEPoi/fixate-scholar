@@ -30,9 +30,9 @@ test("line model: trees are walked by feature <= threshold and classes softmaxed
   assert.equal(loadLineModel({ version: 2 }), null);
 });
 
-test("line model: the exported model reproduces LightGBM's probabilities on the fixture", { skip: !existsSync("extension/vendor/layout/line-model.fixture.json") || !existsSync("extension/vendor/layout/line-model.json") ? "no exported model" : false }, () => {
-  const m = loadLineModel(JSON.parse(readFileSync("extension/vendor/layout/line-model.json", "utf8")));
-  const fx = JSON.parse(readFileSync("extension/vendor/layout/line-model.fixture.json", "utf8"));
+test("line model: the exported model reproduces LightGBM's probabilities on the fixture", { skip: !existsSync("extension/vendor/model/line-model.fixture.json") || !existsSync("extension/vendor/model/line-model.json") ? "no exported model" : false }, () => {
+  const m = loadLineModel(JSON.parse(readFileSync("extension/vendor/model/line-model.json", "utf8")));
+  const fx = JSON.parse(readFileSync("extension/vendor/model/line-model.fixture.json", "utf8"));
   assert.deepEqual(fx.features, m.features);
   let worst = 0;
   for (let i = 0; i < fx.rows.length; i++) {
@@ -60,7 +60,7 @@ test("line model: the release lifts a weak keep only for a confident text verdic
   assert.equal(releasesKeep("table-aligned", { label: "table", p: 0.99 }, policy, line, inside), false);
   assert.equal(releasesKeep("line-head", { label: "heading", p: 0.99 }, policy, line, inside), false);
   // a reason the policy does not name — a block or rendering reason — never releases
-  for (const why of ["blk-table", "caption", "special-or-short", "vector-art", "rotated", "mojibake", "ocr-layer", "refs-region", "region-table", undefined, ""]) {
+  for (const why of ["blk-table", "caption", "special-or-short", "vector-art", "rotated", "mojibake", "ocr-layer", "refs-region", "model-table", undefined, ""]) {
     assert.equal(releasesKeep(why, text(1), policy, line, inside), false, why);
   }
   // no verdict (an item the line builder did not place), no policy, no line record, no span shape: no release

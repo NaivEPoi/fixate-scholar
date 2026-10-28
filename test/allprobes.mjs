@@ -160,8 +160,8 @@ try {
   const tab = await http(`/json/new?chrome-extension://${extId}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(URL0)}`, "PUT");
   // The front tab: a target opened here sits behind about:blank, hidden,
   // and the overlay applies a settings change only once the page is visible
-  // — the --layout option set below never reached the engine (R55). The
-  // default run sets only the defaults, so it is unchanged.
+  // — an option set below never reached the engine (R55). The default run
+  // sets only the defaults, so it is unchanged.
   await fetch(`http://127.0.0.1:${PORT}/json/activate/${tab.id}`).catch(() => {});
   await sleep(2500);
   const live = (await http("/json/list")).find((t) => t.id === tab.id) ?? tab;
@@ -181,10 +181,9 @@ try {
   // The zoom BEFORE the engine runs, so every page is processed once, at it.
   await ev(`(() => { window.PDFViewerApplication.pdfViewer.currentScaleValue = ${JSON.stringify(ZOOM)}; return true; })()`);
   await sleep(1500);
-  // --layout: the layout model option on (layout-model.mjs), so a gate can be
-  // run with regions on and off and the skip-reason diff read between them.
-  // --line: the line classifier option on (line-model.mjs), measured the same way.
-  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true, layoutModel: ${process.argv.includes("--layout")}, lineModel: ${process.argv.includes("--line")} }, r))`);
+  // --line: the line classifier option on (line-model.mjs), so a gate can be
+  // run with the option on and off and the skip-reason diff read between them.
+  await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true, lineModel: ${process.argv.includes("--line")} }, r))`);
   // The document-wide warm-up refcolor and citepoint wait for: enough
   // emphasis to know the engine is running, and the reference index built.
   for (let i = 0; i < 40; i++) {

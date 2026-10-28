@@ -89,13 +89,14 @@ test (the same lines must give the same feature vectors).
 ## Recipe (2026-10-19)
 
 ```
-python -m venv .venv && .venv/Scripts/pip install numpy pandas pyarrow scikit-learn lightgbm pymupdf huggingface_hub onnxruntime-gpu pillow
-# data: DocBank_500K_txt.zip (3.17 GB, Apache-2.0) into data/; DocLayNet v1.1 test parquets into data/doclaynet/
+python -m venv .venv && .venv/Scripts/pip install numpy pandas pyarrow scikit-learn lightgbm pymupdf huggingface_hub pillow
+# data: DocBank_500K_txt.zip (3.17 GB, Apache-2.0; the Hugging Face mirror liminghao1630/DocBank) into data/;
+#       DocLayNet v1.1 test parquets (docling-project/DocLayNet-v1.1, data/test-*.parquet, 1.9 GB) into data/doclaynet/
 python docbank_lines.py --zip data/DocBank_500K_txt.zip --out data/lines-8k.parquet --max-docs 8000     # 1.42M lines, 6 min
 python fetch_doclaynet_train.py && python doclaynet_lines.py --in data/doclaynet/train-sci.parquet --out data/lines-dln.parquet   # 628k lines, 918 papers, no images
 python train_deploy.py --data data/lines-8k.parquet --extra data/lines-dln.parquet --out models/deploy --rounds 260 --leaves 23 --lr 0.1
-python doclaynet_eval.py --model models/deploy --onnx ../extension/vendor/layout/pp-doclayout-s.onnx --out models/deploy/doclaynet.md
-python export_js.py --model models/deploy --out ../extension/vendor/layout/line-model.json --data data/lines-8k.parquet
+python doclaynet_eval.py --model models/deploy --out models/deploy/doclaynet.md     # [--onnx <detector.onnx>] scores a detector beside it
+python export_js.py --model models/deploy --out ../extension/vendor/model/line-model.json --data data/lines-8k.parquet
 python export_fixture_page.py --zip data/DocBank_500K_txt.zip --out data/line-features.fixture.json   # the JS parity test's fixture
 python fetch_doclaynet_pdfs.py && node dump-reasons.mjs --dir=data/doclaynet/pdf --out=data/doclaynet/reasons.jsonl   # the rules, through the viewer
 python compare.py --pages models/deploy/doclaynet.md.pages.jsonl --reasons data/doclaynet/reasons.jsonl --out models/deploy/compare.md
@@ -118,7 +119,8 @@ furniture):
 | stock PP-DocLayout-S (regions ≥ 0.5, line by its centre) | 0.895 | 0.884 | 0.803 |
 | classifier, DocBank only | 0.746 | 0.594 | 0.582 |
 | classifier, DocBank + DocLayNet train, 507 trees × 7, 7.3 MB | 0.949 | 0.947 | 0.933 |
-| classifier, same data, 260 trees × 7 of 23 leaves (shipped) | 0.944 | 0.942 | 0.926 |
+| classifier, same data, 260 trees × 7 of 23 leaves (shipped in v1.4.1) | 0.944 | 0.942 | 0.926 |
+| the same with the `ref_prose` feature (shipped in v1.4.2, R61) | 0.945 | 0.943 | 0.926 |
 
 Per class, the shipped model against the detector: headings 0.95 vs 0.78
 F1, tables 0.93 vs 0.66, headers/footers 0.93 vs 0.57, captions 0.91 vs
@@ -171,6 +173,23 @@ papers of this project's own corpora the same engine leaves no span
 unreasoned; DocLayNet's scientific pages are a wider world (publisher
 PDFs, non-LaTeX journals, single pages without their document), which is
 exactly where a learned classifier adds to hand-written rules.
+
+### The `ref_prose` feature (2026-10-28, R61)
+
+`cap_lead` was the caption regex alone, so "Figure 3(b) shows …" and
+"Figure 3: …" carried the same lead feature and the model told them apart
+by geometry — a paragraph opening on a sub-figure reference under a
+heading was `text` at 0.84, a real one-line caption `text` at 0.56.
+`ref_prose` is the engine's running-prose guard (engine.mjs `REF_PROSE`),
+the same expression in both extractors, on the line, its neighbours and
+its block's first line. On DocBank it splits the caption leads as it
+should (of 9,090 `cap_lead` lines, the 1,316 `ref_prose` ones are 95%
+paragraph; the rest 82% caption). Retrained with the recipe above: the
+DocLayNet aggregate is unchanged (such lines are 0.14% of its lines); on
+the page that prompted it the openers are `text` at 0.99 and the captions
+are captions. The JS mirror's page percentile now interpolates as numpy's
+does (the nearest rank differed on one line in 16 pages), and the parity
+fixture is 16 pages.
 
 ## In the engine (2026-10-19)
 

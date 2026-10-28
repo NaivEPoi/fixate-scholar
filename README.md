@@ -246,57 +246,34 @@ and rewrites each word as `<b>prefix</b>rest`, re-calibrating the span scaling s
 and search keep working. Pages are processed lazily as PDF.js renders them, in idle-time
 chunks. See `extension/viewer/typography/`.
 
-### Layout model (experimental, off by default)
+### Line classifier (experimental, off by default)
 
 What the engine leaves alone — figures, tables, captions, footnotes, formulas,
 headers, footers, headings — it decides by rules over the page's text items and
-the lines it finds on the canvas. Settings offers a second source of evidence:
-a small document-layout detector, PP-DocLayout-S from PaddleOCR (Apache-2.0,
-4.8 MB, 23 region classes), run once per page on the engine's own fixed-
-resolution render, in the same worker that scans the canvas for rules. Its
-regions keep text the rules would have processed; they never un-keep anything,
-so a model miss leaves the rules' decision in place. It runs through ONNX
-Runtime Web on the GPU (WebGPU) or the NPU (WebNN) where the browser has one,
-and on the CPU (WebAssembly) otherwise — tens of milliseconds a page on a GPU,
-a few hundred on a CPU, all off the main thread. Nothing leaves the computer.
+the lines it finds on the canvas. Settings offers a second source of evidence,
+a model trained in this repository (`ml/`): a gradient-boosted classifier
+over each text LINE of a page — its place against the column, its face and
+size against the body's, the shape of its text, its two neighbours each
+side, its block — that names it a heading, caption, formula, table row,
+figure label, header or footer. No pixels, no runtime: a few milliseconds a
+page on any CPU, in the engine's own thread. Trained on DocBank (500k arXiv
+pages, token labels from the LaTeX source) and DocLayNet's scientific pages,
+held out by paper; the numbers are in `ml/README.md`. It is evidence only,
+and deliberately narrow: its table-row calls (at 0.75 or better) and its
+heading calls (at 0.9) keep a line's text, because on papers whose captions
+and footers the rules already catch, its extra caption and footer calls were
+mostly body prose; and a line the rules kept as a heading goes back to
+processing when the model names it body text at 0.95 or better and the span
+has the shape of prose. The model file
+(`extension/vendor/model/line-model.json`) is produced by `ml/README.md`'s
+recipe and is not in the repository; with it absent the option does nothing.
+The release gate takes `--line` to run the probes with the option on.
 
-The runtime and the model are not in the extension by default. From a source
-checkout, `npm run fetch-layout` fetches ONNX Runtime Web 1.30.0 from npm
-(MIT) and the model — PP-DocLayout-S exported to ONNX with paddle2onnx, the
-export published beside the original on Hugging Face, checked against the
-SHA-256 its model card states — into `extension/vendor/layout/`
-(git-ignored), with both licences and a note of the model's provenance. With
-the files absent the option does nothing. The providers are tried in order:
-the NPU and GPU through WebNN where the browser offers them, WebGPU, then
-WebAssembly; a provider that opens a session but cannot run this graph
-(WebGPU fails inside one kernel on this export) is left for the next, once.
-Measured on a headless CPU, WebAssembly single-threaded: 130–230 ms a page,
-off the main thread, after the page's own render. `node test/diag-layout.mjs
---url=<pdf> [--provider=wasm]` prints, per page, the model's time, the
-provider it ran on and the regions it found; the release gate takes
-`--layout` to run the probes with the option on.
-
-### Line classifier (experimental, off by default)
-
-A second model, trained in this repository (`ml/`): a gradient-boosted
-classifier over each text LINE of a page — its place against the column,
-its face and size against the body's, the shape of its text, its two
-neighbours each side, its block — that names it a heading, caption,
-formula, table row, figure label, header or footer. No pixels, no
-runtime: a few milliseconds a page on any CPU, in the engine's own thread.
-Trained on DocBank (500k arXiv pages, token labels from the LaTeX source)
-and DocLayNet's scientific pages, held out by paper. On 940 held-out
-DocLayNet pages the shipped model names lines correctly 94.4% of the time
-(keep-vs-process F1 0.942) where the stock layout detector reaches 89.5%
-(0.884), and it is far stronger on the lines the engine most often gets
-wrong: headings (0.95 vs 0.78 F1), table rows (0.93 vs 0.66) and headers
-and footers (0.93 vs 0.57). Like the layout model it is evidence only, and
-deliberately narrow: only its table-row calls (at 0.75 or better) and its
-heading calls (at 0.9) keep a line's text, because on papers whose
-captions and footers the rules already catch, its extra caption and footer
-calls were mostly body prose; it never un-keeps what the rules kept. The
-model file (`extension/vendor/layout/line-model.json`) is produced by
-`ml/README.md`'s recipe and is not in the repository.
+An earlier option ran a stock document-layout detector (PP-DocLayout-S
+through ONNX Runtime Web) beside the rules. Measured on this project's
+corpora it changed one page in 773 at 130–230 ms a page, and the line
+classifier beats it on every class the rules get wrong, so it was removed in
+v1.4.2 (REVIEW_FINDINGS.md R61).
 
 ## Naming and legal
 

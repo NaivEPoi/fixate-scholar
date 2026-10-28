@@ -50,17 +50,11 @@ export const DEFAULTS = Object.freeze({
   // When editing a local PDF (file://), save changes directly back to the local
   // file rather than saving as a new download copy.
   saveLocalFile: true,
-  // The layout model (experimental, off): a small document-layout detector
-  // (PP-DocLayout-S through ONNX Runtime Web — WebGPU, the NPU through WebNN,
-  // or WebAssembly) run on each page's baseline render in the rules worker.
-  // Its regions — figure, table, caption, footnote, formula, header, footer,
-  // heading — keep text the rules would have processed; they never un-keep.
-  // Needs the runtime and the model under extension/vendor/layout (`npm run
-  // fetch-layout`); without them the option does nothing.
-  layoutModel: false,
-  // The line classifier (line-model.mjs, trained in ml on DocBank and
-  // DocLayNet): each line's class from its geometry, faces and text shape;
-  // a keep class keeps its candidates. Off by default, like the layout model.
+  // The line classifier (experimental, off; line-model.mjs, trained in ml on
+  // DocBank and DocLayNet): each line's class from its geometry, faces and
+  // text shape; a keep class keeps its candidates, and a confident text
+  // verdict releases a weak heading keep. Needs the model file under
+  // extension/vendor/model (ml/README.md); without it the option does nothing.
   lineModel: false,
 });
 

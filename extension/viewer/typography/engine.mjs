@@ -27,8 +27,8 @@ import { classify, loadLineModel, releasesKeep } from "./line-model.mjs";
 // The line classifier (line-model.mjs; trained in ml on DocBank and
 // DocLayNet, exported by export_js.py), fetched once when the option is on;
 // null when the file is not there. A class in LINE_MODEL_KEEP at its
-// confidence or better keeps its candidates — evidence like the layout
-// model's regions.
+// confidence or better keeps its candidates — evidence beside the rules,
+// never against them.
 let lineModelPromise = null;
 let lineModelLoaded = null; // the model once resolved, for the synchronous first stage
 // The classes the model may keep a line for, and the confidence each needs.
@@ -63,7 +63,7 @@ const LINE_MODEL_KEEP = { table: 0.75, heading: 0.9 };
 // (ml/README.md, "In the engine"); the
 // model names a sentence-shaped cell text, and no shape test tells it from
 // a sentence. Rendering reasons (special-or-short, vector-art, rotated,
-// mojibake, ocr-layer, refs-region, region-*) are not block reasons and
+// mojibake, ocr-layer, refs-region) are not block reasons and
 // are never released: the release lifts only the block pass's veto, and
 // every other filter still applies to the span afterwards.
 const LINE_MODEL_RELEASE = { "line-head": { p: 0.95, lower: 4, long: 8 } };
@@ -71,7 +71,7 @@ function ensureLineModel() {
   if (lineModelPromise) return lineModelPromise;
   lineModelPromise = (async () => {
     try {
-      const res = await fetch(new URL("../../vendor/layout/line-model.json", import.meta.url));
+      const res = await fetch(new URL("../../vendor/model/line-model.json", import.meta.url));
       if (!res.ok) return null;
       lineModelLoaded = loadLineModel(await res.json());
       return lineModelLoaded;
@@ -615,11 +615,6 @@ export class TypographyEngine {
     // under load the off and on changes' re-processes cancelled each other
     // until the document had no emphasis at all.
     const unchanged = this.#settings && sameExceptEnabled(this.#settings, settings);
-    // The layout model's regions ride with each page's baseline render,
-    // cached per page: switching the option drops the cache, so the next
-    // pass runs the model (or stops running it) instead of reading a
-    // baseline taken without it.
-    if (this.#settings && settings && settings.layoutModel !== this.#settings.layoutModel) this.#ruleBaseline.clear();
     this.#settings = settings;
     // The line model is fetched before the re-process, so the pages the
     // switch re-processes see it (a harness turns the option on after load).
@@ -1015,15 +1010,17 @@ export class TypographyEngine {
     // label — "Figure 5 (a) …", a caption — is not mistaken for prose
     // ("Listing 3 (representative of …" still is).
     // A sub-figure label between the number and the lowercase word — "Figure
-    // 3(b) shows …", "Fig. 3(a)–(c) compare …" — is the same in-text
-    // reference: the lowercase word after it is what makes the line prose,
-    // as it does after a bare number, and a caption under its label reads
-    // "Figure 3(b) The …" or stands alone. Without this, a paragraph whose
-    // first line opened on such a reference, under a heading (so no prose
-    // above to tell it from a float), was kept whole as a caption and every
-    // line under it absorbed; a wrapped "Fig. 3(c)" at a line's head made
-    // the paragraph above it a figure's body (R60, two private papers).
-    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|FIG|Tab(?:le)?|TAB|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*(?:\d+[a-z]?|[IVXLCDM]+\b|[A-Z]\.?\d+[a-z]?)(?:\s*\(\s*[a-zA-Z]\s*\)(?:\s*[-–]\s*\(\s*[a-zA-Z]\s*\))?)?\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})/;
+    // 3(b) shows …", "Fig. 3(a)–(c) compare …", "Fig. 8.A shows …", "Figure
+    // 8A shows …" — is the same in-text reference, as is a chapter-numbered
+    // figure's "Figure 2.1 shows …": the lowercase word after it is what
+    // makes the line prose, as it does after a bare number, and a caption
+    // under its label reads "Figure 3(b) The …" or stands alone. Without
+    // this, a paragraph whose first line opened on such a reference, under
+    // a heading (so no prose above to tell it from a float), was kept whole
+    // as a caption and every line under it absorbed; a wrapped "Fig. 3(c)"
+    // at a line's head made the paragraph above it a figure's body (R60,
+    // two private papers; the dotted letter, R61's visual step, a third).
+    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|FIG|Tab(?:le)?|TAB|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*(?:\d+(?:\.\d+)*(?:[.\-]?[a-zA-Z])?|[IVXLCDM]+\b|[A-Z]\.?\d+(?:\.\d+)*(?:[.\-]?[a-zA-Z])?)(?:\s*\(\s*[a-zA-Z]\s*\)(?:\s*[-–]\s*\(\s*[a-zA-Z]\s*\))?)?\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})/;
     // Publisher boilerplate markers (permission/copyright block, ISBN/DOI
     // lines, ACM self-citation). Matched against a whole block's text.
     const LEGAL_TEXT = /(Permission to make digital or hard copies|Copyrights? for components of this work|Request permissions from|licensed to ACM|ACM ISBN|ACM Reference Format|©\s*(19|20)\d\d\s|creativecommons\.org|(https?:\/\/)?(dx\.)?doi\.org\/)/i;
@@ -2178,6 +2175,25 @@ export class TypographyEngine {
             topY = ordered[j].y;
           }
         }
+        // A wrapped in-text reference at a line's head — "… is shown in ⏎
+        // Fig.4(a). The …", the label set bold by the paper's own
+        // markup, so the running-prose guard sees no lowercase word after it
+        // — is not a caption when the prose line directly above it, at the
+        // body's pitch, runs on (ends dangling or on a broken word): no
+        // caption opens under an unfinished sentence (R55), as the caption
+        // pass's own lead guard holds. Without this the one short line under
+        // such a lead was swept as the figure's body (R61, a private paper).
+        let ka = ci - 1;
+        while (ka >= 0 && !inColOf(ordered[ka]).length) ka--;
+        if (ka >= 0) {
+          const aboveCol = inColOf(ordered[ka]);
+          const pitchAbove = ordered[ka].y - cap.y;
+          if (pitchAbove > 0 && pitchAbove <= Math.max(ordered[ka].h || 0, cap.h || 0, dominant) * 1.5 &&
+              lowerWords(aboveCol) >= 3 && runsOn(aboveCol)) {
+            if (globalThis.__fxDebug) (globalThis.__fxFig ??= []).push({ page: globalThis.__fxCurPage, cap: (seg[0]?.item.str || "").slice(0, 28), capY: Math.round(cap.y), wrapped: true });
+            continue;
+          }
+        }
         if (globalThis.__fxDebug) {
           (globalThis.__fxFig ??= []).push({
             page: globalThis.__fxCurPage,
@@ -3048,7 +3064,13 @@ export class TypographyEngine {
           if (globalThis.__fxDebug && globalThis.__fxTitleProbe && lead.item.str.includes(globalThis.__fxTitleProbe)) {
             (globalThis.__fxCapTrace ??= []).push({ why: "lead-guard", page: pageNumber, lead: lead.item.str.slice(0, 30), above: lineText(aboveBand).slice(0, 60), pitch, leadH, aboveH, bodyPitch, sameFace, nearPitch, openAbove, proseAbove, lower: lowerWords(aboveBand), n: aboveBand.length });
           }
-          if (aboveBand.length && pitch > 0 && sameFace &&
+          // ...or the line above RUNS ON, whatever the lead's face: "… is
+          // shown in ⏎ Fig.4(a). The …", the reference set bold by
+          // the paper's own markup (R61's visual step, a private paper:
+          // five lines of the paragraph kept as a caption). No caption opens
+          // under an unfinished sentence; the bold label a float sets under
+          // a paragraph follows a finished one.
+          if (aboveBand.length && pitch > 0 && (sameFace || runsOn(aboveBand)) &&
               (nearPitch || openAbove) &&
               Math.abs(aboveH - leadH) <= leadH * 0.2 &&
               proseAbove) continue;
@@ -3699,18 +3721,10 @@ export class TypographyEngine {
         if (worker) {
           try {
             const bitmap = offscreen ? canvas.transferToImageBitmap() : await createImageBitmap(canvas);
-            // The layout model (layout-model.mjs), on the same bitmap, when
-            // the option is on: its regions, in page px, ride back with the
-            // rules, with the viewport that maps page px to PDF points.
-            const want = this.#settings?.layoutModel === true;
-            // `layoutProvider`: test introspection — the diagnostics force one
-            // execution provider to measure it (diag-layout --provider=).
-            const res = await this.#workerJob(worker, { kind: "rules", bitmap, kx, ky, layout: want, shades, layoutProvider: globalThis.__fxDebug && typeof globalThis.__fxLayoutProvider === "string" ? globalThis.__fxLayoutProvider : null }, [bitmap]);
+            const res = await this.#workerJob(worker, { kind: "rules", bitmap, kx, ky, shades }, [bitmap]);
             rules = res.rules;
             if (res.shades) entry.shades = res.shades;
-            entry.regions = want ? res.regions ?? null : null;
             entry.unit = unit;
-            if (globalThis.__fxDebug && want) (globalThis.__fxLayout ??= []).push({ page: page.pageNumber, ms: res.layoutMs, provider: res.layoutProvider, regions: res.regions, error: res.layoutError ?? null });
             outcome = "ok (worker)";
           } catch { rules = null; }
         }
@@ -4571,35 +4585,12 @@ export class TypographyEngine {
           for (const p of pairs) { reject(p.div, "ocr-layer"); candidateDivs.delete(p.div); }
           pairs.length = 0;
         }
-        // The layout model's regions (the option; layout-model.mjs): a
-        // candidate whose centre lies in a figure, table, caption, footnote,
-        // formula, header, footer, heading or aside region is kept, with the
-        // region's class as its reason. Evidence beside the rules, never
-        // against them: a region un-keeps nothing. Page px → PDF points by
-        // the baseline's own viewport, so rotation is right by construction.
-        if (baseline?.regions?.length && baseline.unit) {
-          const toPdf = (x, y) => baseline.unit.convertToPdfPoint(x, y);
-          const boxes = baseline.regions.map((rg) => {
-            const [ax, ay] = toPdf(rg.x0, rg.y0), [bx, by] = toPdf(rg.x1, rg.y1);
-            return { kind: rg.kind, x0: Math.min(ax, bx), x1: Math.max(ax, bx), y0: Math.min(ay, by), y1: Math.max(ay, by) };
-          });
-          for (let i = pairs.length; i--; ) {
-            const it = pairs[i].item;
-            if (!it?.transform) continue;
-            const cx = it.transform[4] + (it.width ?? 0) / 2, cy = it.transform[5] + (it.height ?? 0) * 0.35;
-            const hit = boxes.find((b) => cx >= b.x0 && cx <= b.x1 && cy >= b.y0 && cy <= b.y1);
-            if (!hit) continue;
-            reject(pairs[i].div, "region-" + hit.kind);
-            candidateDivs.delete(pairs[i].div);
-            pairs.splice(i, 1);
-          }
-        }
         // The line classifier's keeps (lineVerdicts above; LINE_MODEL_KEEP):
         // a line named a table row or a heading at that class's confidence
-        // or better keeps its candidates (`model-<class>`). Evidence, like
-        // the layout model's regions. Its releases (LINE_MODEL_RELEASE) were
-        // applied in the candidate filter and are recorded after the art
-        // keeps below.
+        // or better keeps its candidates (`model-<class>`). Evidence beside
+        // the rules, never against them. Its releases (LINE_MODEL_RELEASE)
+        // were applied in the candidate filter and are recorded after the
+        // art keeps below.
         if (lineModel) {
           const { lines, verdicts, lineOf } = lineModel;
           for (let i = pairs.length; i--; ) {

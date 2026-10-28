@@ -13,6 +13,28 @@ test("font flags: math faces, not Computer Modern's roman text face", () => {
   assert.equal(fontFlags("Helvetica-Bold").f_sans, 1);
 });
 
+// One DocBank-like token per word, on one baseline, from a line of text.
+const lineTokens = (text, y = 100) => text.split(" ").map((w, i) => [w, 100 + i * 40, y, 130 + i * 40, y + 10, 0, 0, 0, "CMR10"]);
+
+test("line features: an in-text sub-figure reference is prose, a caption lead is not (R61)", () => {
+  const recs = pageFeatures(buildLines([
+    ...lineTokens("Figure 3(b) shows the captured bytes increasing with load", 100),
+    ...lineTokens("Figure 3: Results of the experiment on the testbed", 120),
+    ...lineTokens("Fig. 3(a)–(c) compare the three settings on one axis", 140),
+    ...lineTokens("Table 2 (a) The baseline rows of the table", 160),
+    ...lineTokens("Figure 5 (a) shows the baseline and (b) the variant", 180),
+    ...lineTokens("Fig. 8.A shows the time taken by the algorithm", 200),
+    ...lineTokens("Figure 8A shows the time taken by the algorithm", 220),
+    ...lineTokens("Figure 2.1 shows the chapter's first figure", 240),
+    ...lineTokens("Figure 2.1. The chapter's first figure", 260),
+  ]));
+  assert.deepEqual(recs.map((r) => [r.cap_lead, r.ref_prose]), [[1, 1], [1, 0], [1, 1], [1, 0], [1, 1], [1, 1], [1, 1], [1, 1], [1, 0]]);
+  // the block's first line carries it, and the neighbours see it
+  assert.equal(recs[1].blk_ref_prose, 1);
+  assert.equal(recs[1].p1_ref_prose, 1);
+  assert.equal(recs[0].n1_ref_prose, 0);
+});
+
 // The Python extractor (ml/docbank_lines.py) and this module must agree
 // number for number on the same tokens, or a model trained there means
 // nothing here. The fixture holds four DocBank pages' tokens and rows; it is

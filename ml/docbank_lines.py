@@ -27,6 +27,10 @@ LABEL_ID = {l: i for i, l in enumerate(LABELS)}
 # compute the same numbers — a ligature "ﬂ" split "inﬂationary" differently
 # under Unicode word boundaries.
 CAP_LEAD = re.compile(r"^(?:Fig(?:ure)?\.?|FIG\.?|Tab(?:le)?\.?|TABLE|FIGURE|Algorithm|Listing)\s*(?:\d|[IVXLCDM]+\b|[A-Z]\.?\d)", re.A)
+# An in-text reference opening a sentence ("Figure 5 shows", "Fig. 3(b) compares"):
+# the engine's running-prose guard (engine.mjs REF_PROSE), the same expression
+# as line-features.mjs. A caption lead that is NOT one of these is a caption's.
+REF_PROSE = re.compile(r"^(?:Fig(?:ure)?|Figs?|FIG|Tab(?:le)?|TAB|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*(?:\d+(?:\.\d+)*(?:[.\-]?[a-zA-Z])?|[IVXLCDM]+\b|[A-Z]\.?\d+(?:\.\d+)*(?:[.\-]?[a-zA-Z])?)(?:\s*\(\s*[a-zA-Z]\s*\)(?:\s*[-–]\s*\(\s*[a-zA-Z]\s*\))?)?\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})", re.A)
 NUM_LEAD = re.compile(r"^(?:\d+(?:\.\d+)*\.?|[A-Z]\d*[.:]|[A-Z](?:\.\d+)+\.?|[IVX]{1,5}\.|(?:[a-zA-Z]|\d+)\))(?:$|\s)", re.A)
 LIST_MARK = re.compile(r"^(?:[•·▪–—\-\*]|\(?\d{1,2}[.)]|\(?[a-z][.)]|\(?[ivx]{1,4}[.)])(?:\s|$)", re.A)
 DANGLING = re.compile(r"\b(?:a|an|and|as|at|between|by|for|from|in|into|of|on|or|over|than|the|to|under|via|with)\s*$", re.I | re.A)
@@ -140,7 +144,7 @@ def line_record(L, page_stats):
         title_case=len(caps_words) / max(len(text.split()), 1),
         ends_period=int(bool(re.search(r"[.!?]\s*$", text))), ends_comma=int(text.rstrip().endswith(",")),
         ends_colon=int(text.rstrip().endswith(":")), dangling=int(bool(DANGLING.search(text))),
-        cap_lead=int(bool(CAP_LEAD.match(text))), num_lead=int(bool(NUM_LEAD.match(text))),
+        cap_lead=int(bool(CAP_LEAD.match(text))), ref_prose=int(bool(REF_PROSE.match(text))), num_lead=int(bool(NUM_LEAD.match(text))),
         list_mark=int(bool(LIST_MARK.match(text))), has_at=int("@" in text), has_url=int("http" in text or "www." in text),
         has_cid=int("(cid:" in text), bracket_ref=int(bool(re.search(r"\[\d{1,3}\]", text))),
         year=int(bool(re.search(r"\b(?:19|20)\d{2}\b", text))),
@@ -167,7 +171,7 @@ def page_statistics(lines):
     lefts = np.array([min(t[1] for t in L) for L in lines]); rights = np.array([max(t[3] for t in L) for L in lines])
     return dict(body_h=body_h, left=float(np.percentile(lefts, 5)), right=float(np.percentile(rights, 95)), mid=500.0)
 
-NEIGHBOUR_KEYS = ["h_rel", "x0", "x1", "f_bold", "f_italic", "f_math", "f_mono", "n_lower", "ends_period", "dangling", "cap_lead", "num_lead", "centred", "fills_measure", "frac_mathfont"]
+NEIGHBOUR_KEYS = ["h_rel", "x0", "x1", "f_bold", "f_italic", "f_math", "f_mono", "n_lower", "ends_period", "dangling", "cap_lead", "ref_prose", "num_lead", "centred", "fills_measure", "frac_mathfont"]
 
 def page_rows(doc, page, toks):
     lines = build_lines(toks)
@@ -195,7 +199,7 @@ def page_rows(doc, page, toks):
         for k, j in enumerate(b):
             r = recs[j]
             r["blk_len"] = len(b); r["blk_pos"] = k / max(len(b) - 1, 1); r["blk_first"] = int(k == 0); r["blk_last"] = int(k == len(b) - 1)
-            r["blk_cap_lead"] = first["cap_lead"]; r["blk_num_lead"] = first["num_lead"]; r["blk_list_mark"] = first["list_mark"]
+            r["blk_cap_lead"] = first["cap_lead"]; r["blk_ref_prose"] = first["ref_prose"]; r["blk_num_lead"] = first["num_lead"]; r["blk_list_mark"] = first["list_mark"]
             r["blk_first_centred"] = first["centred"]; r["blk_first_x0"] = first["x0"]; r["blk_first_bold"] = first["f_bold"]
             r["blk_last_fills"] = last["fills_measure"]; r["blk_last_period"] = last["ends_period"]
             r["blk_mean_math"] = mean_math; r["blk_mean_lower"] = mean_lower; r["blk_mean_hrel"] = mean_hrel
