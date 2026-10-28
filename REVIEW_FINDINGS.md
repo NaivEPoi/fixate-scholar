@@ -6476,3 +6476,69 @@ pages, none changed, as a change inside a processed span must leave the
 skip set alone; the fix is proven by the unit case and the wordshot, not
 by whyskip. Extra corpus, plain: 22/23 PASS (ex05 UNVERIFIED as always),
 457/457 pages, none changed. npm test: 339 pass.
+
+## R60 — a paragraph opening on "Figure 3(b) shows …" kept as a caption (2026-10-28)
+
+User report, a private paper (two-column, captions "Figure N: …"): two
+body paragraphs on one page, each the first under a sub-sub-section
+heading, were left unprocessed whole, while the prose above and below
+them was emphasised. whyskip reported the page clean — every span had a
+reason, `caption` on the first line and `caption-absorb` on the rest —
+which is the F2 shape the anchored absorb branch warns about: a reason is
+not a verdict.
+
+The cause is in the running-prose guard `REF_PROSE`, which is what keeps
+an in-text reference at the head of a line ("Figure 5 shows …") from
+reading as a caption lead. It accepted a lowercase word right after the
+label's number, or inside a parenthetical of two letters or more. A
+sub-figure reference — "Figure 3(b) shows …", and a second of that shape —
+has a single letter in parentheses between the number and the verb, and
+matched neither branch: the single-letter case had been excluded on
+purpose, so that a caption's own "(a)" after its label would not pass for
+prose, but that exclusion also swallowed the verb after it. So the line
+was a caption lead. The lead guard that reads the line above (prose at
+normal leading in the same face: not a caption) could not save it either:
+the line above was the section heading, in its own face, at a heading's
+pitch. From there the absorb loop took every line of the paragraph — the
+same size, the same leading, no bold run-in, no new in-text reference
+sentence (the paragraph's second sentence opened on another sub-figure
+reference, failed the same guard, and opened a caption of its own).
+
+The guard now allows one sub-figure label, or a range of two ("(a)–(c)"),
+between the number and the lowercase word. What makes the line prose is
+still the lowercase word after the label, exactly as after a bare
+number; a caption that follows its label with a sub-figure letter reads
+"Figure 2 (a) The …" or stands alone, and is a caption as before. "Figure
+5 (a) …" alone, with nothing lowercase after the letter, still is not
+prose. The same guard serves the figure-label, heading-row, figure-body
+and absorb sites, so a wrapped line beginning "Fig. 4(b), after …" now
+counts as prose everywhere "Figure 4, after …" always did.
+
+The line classifier option (R56) gave the same page: it layers on the
+block pass and can release a `line-head` keep only, never a `caption`
+one, so a paragraph the rules keep as a caption stays kept with the
+option on. With the guard fixed the block pass no longer keeps these
+lines, and the option has nothing to release; the two agree by
+construction. (The model file is not in this checkout, so the option was
+not run.)
+
+Verified on the paper: the page re-dumped with `__fxDebug` shows the two
+paragraphs processed and the page's five real captions kept with their
+continuation lines as before; wordshot on the two opening lines,
+`processed=true`, the emphasis on the prose and the reference in the
+citation colour, and on a real caption's first line, `processed=false
+keep=true`; fontkeep `--all` on the paper, 1137 spans resolved, 0
+violations. npm test: 339.
+
+### Sweep
+
+whyskip `--all` over both corpora (36 private, 12 public) on the fixed
+tree and on the v1.4.1 tree (6f2a14d), every page's reasons compared by
+count: 749/749 pages compared, 2 changed, both gains of this class and
+nothing lost. The reported page (17 spans from `caption`/`caption-absorb`
+to processed, the two paragraphs). And a page of another private paper
+(15 spans from `fig-body` to processed): a body paragraph whose sentence
+wrapped so that "Fig. N(c)" headed a line — the same guard read it as a
+caption lead, and the figure-body search above that "caption" took the
+paragraph over it for the figure. unreasoned 0 and trailing 0 on every
+page of both runs.

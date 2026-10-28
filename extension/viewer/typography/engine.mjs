@@ -1014,7 +1014,16 @@ export class TypographyEngine {
     // alternative requires ≥2 lowercase letters so a single-letter SUBFIGURE
     // label — "Figure 5 (a) …", a caption — is not mistaken for prose
     // ("Listing 3 (representative of …" still is).
-    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|FIG|Tab(?:le)?|TAB|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*(?:\d+[a-z]?|[IVXLCDM]+\b|[A-Z]\.?\d+[a-z]?)\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})/;
+    // A sub-figure label between the number and the lowercase word — "Figure
+    // 3(b) shows …", "Fig. 3(a)–(c) compare …" — is the same in-text
+    // reference: the lowercase word after it is what makes the line prose,
+    // as it does after a bare number, and a caption under its label reads
+    // "Figure 3(b) The …" or stands alone. Without this, a paragraph whose
+    // first line opened on such a reference, under a heading (so no prose
+    // above to tell it from a float), was kept whole as a caption and every
+    // line under it absorbed; a wrapped "Fig. 3(c)" at a line's head made
+    // the paragraph above it a figure's body (R60, two private papers).
+    const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|FIG|Tab(?:le)?|TAB|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*(?:\d+[a-z]?|[IVXLCDM]+\b|[A-Z]\.?\d+[a-z]?)(?:\s*\(\s*[a-zA-Z]\s*\)(?:\s*[-–]\s*\(\s*[a-zA-Z]\s*\))?)?\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})/;
     // Publisher boilerplate markers (permission/copyright block, ISBN/DOI
     // lines, ACM self-citation). Matched against a whole block's text.
     const LEGAL_TEXT = /(Permission to make digital or hard copies|Copyrights? for components of this work|Request permissions from|licensed to ACM|ACM ISBN|ACM Reference Format|©\s*(19|20)\d\d\s|creativecommons\.org|(https?:\/\/)?(dx\.)?doi\.org\/)/i;
