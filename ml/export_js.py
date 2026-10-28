@@ -2,7 +2,7 @@
 trees as flat arrays (feature index, threshold, left, right, leaf value),
 one list per class, plus the feature names in order.
 
-    python export_js.py --model models/lines-v1 --out ../extension/vendor/layout/line-model.json
+    python export_js.py --model models/lines-v1 --out ../extension/vendor/model/line-model.json
 
 The JS predictor (extension/viewer/typography/line-model.mjs) sums each
 tree's leaf per class and applies softmax; a fixture test checks it against

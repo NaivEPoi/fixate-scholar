@@ -17,8 +17,6 @@ $("flowCopy").checked = settings.flowCopy;
 $("scholarLookup").checked = settings.scholarLookup;
 $("openSources").checked = settings.openSources;
 $("saveLocalFile").checked = settings.saveLocalFile !== false;
-$("layoutModel").checked = settings.layoutModel === true;
-$("layoutModel").addEventListener("change", (e) => setSettings({ layoutModel: e.target.checked }));
 $("lineModel").checked = settings.lineModel === true;
 $("lineModel").addEventListener("change", (e) => setSettings({ lineModel: e.target.checked }));
 $("annotationAuthor").value = settings.annotationAuthor;

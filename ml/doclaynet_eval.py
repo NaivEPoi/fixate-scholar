@@ -1,12 +1,15 @@
-"""Score the line classifier and the stock detector on DocLayNet's scientific
-test pages, on one coarse class set and on the engine's keep/process decision.
+"""Score the line classifier — and, given `--onnx`, a stock detector — on
+DocLayNet's scientific test pages, on one coarse class set and on the engine's
+keep/process decision.
 
-    python doclaynet_eval.py --model models/lines-v1 --onnx ../extension/vendor/layout/pp-doclayout-s.onnx --out models/lines-v1/doclaynet.md
+    python doclaynet_eval.py --model models/lines-v1 --out models/lines-v1/doclaynet.md [--onnx pp-doclayout-s.onnx]
 
 Lines are built from the page's PDF cells split into words (so the features
 match DocBank's token distribution); each line's truth is the DocLayNet class
-of the box that holds it. The detector runs on the page image (1025 px); a
-line takes the class of the best-scoring region holding its centre.
+of the box that holds it. The detector, when given, runs on the page image
+(1025 px); a line takes the class of the best-scoring region holding its
+centre. The extension no longer ships a detector (R61); the option remains
+so a candidate can be measured against the classifier the same way.
 """
 import argparse, io, json, os, re, sys
 import numpy as np
@@ -74,16 +77,19 @@ def detector_regions(sess, names, img):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True); ap.add_argument("--onnx", required=True); ap.add_argument("--out", required=True)
+    ap.add_argument("--model", required=True); ap.add_argument("--onnx", default=None); ap.add_argument("--out", required=True)
     ap.add_argument("--data", default="data/doclaynet"); ap.add_argument("--max-pages", type=int, default=100000)
     a = ap.parse_args()
-    import lightgbm as lgb, onnxruntime as ort
-    ort.set_default_logger_severity(3)  # the graph's "unused initializer" warnings, hundreds per session
+    import lightgbm as lgb
     meta = json.load(open(os.path.join(a.model, "features.json")))
     feats = meta["features"]
     model = lgb.Booster(model_file=os.path.join(a.model, "model.txt"))
-    sess = ort.InferenceSession(a.onnx, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
-    names = [i.name for i in sess.get_inputs()]
+    sess = names = None
+    if a.onnx:
+        import onnxruntime as ort
+        ort.set_default_logger_severity(3)  # the graph's "unused initializer" warnings, hundreds per session
+        sess = ort.InferenceSession(a.onnx, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+        names = [i.name for i in sess.get_inputs()]
     truth, pred_cls, pred_det = [], [], []
     pages = 0; docs = set()
     dump = open(a.out + ".pages.jsonl", "w", encoding="utf-8")
@@ -108,7 +114,7 @@ def main():
                 X = df[feats].astype(np.float32).values
                 p = model.predict(X).argmax(1)
                 img = Image.open(io.BytesIO(r["image"]["bytes"]))
-                regs = detector_regions(sess, names, img)
+                regs = detector_regions(sess, names, img) if sess else []
                 page_lines = []
                 for i, row in df.iterrows():
                     truth.append(DL2C[row["label"]])
@@ -130,7 +136,8 @@ def main():
         if pages >= a.max_pages: break
     truth = np.array(truth); pred_cls = np.array(pred_cls); pred_det = np.array(pred_det)
     md = [f"# DocLayNet scientific test pages — {pages} pages, {len(docs)} documents, {len(truth)} lines", ""]
-    for name, pr in (("line classifier (DocBank-trained)", pred_cls), ("stock PP-DocLayout-S", pred_det)):
+    systems = [("line classifier", pred_cls)] + ([("stock detector", pred_det)] if sess else [])
+    for name, pr in systems:
         acc = (pr == truth).mean()
         kf = f1_score(np.isin(truth, list(KEEP)), np.isin(pr, list(KEEP)))
         md += [f"## {name}", f"accuracy {acc:.4f}; keep-vs-process F1 {kf:.4f}; macro F1 {f1_score(truth, pr, average='macro'):.4f}", "```",

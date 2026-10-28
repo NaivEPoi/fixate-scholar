@@ -9,6 +9,14 @@
 // into words with proportional boxes (DocBank tokens are words).
 
 const CAP_LEAD = /^(?:Fig(?:ure)?\.?|FIG\.?|Tab(?:le)?\.?|TABLE|FIGURE|Algorithm|Listing)\s*(?:\d|[IVXLCDM]+\b|[A-Z]\.?\d)/;
+// An in-text reference opening a running sentence ("Figure 5 shows …",
+// "Fig. 3(b) compares …", "Listing 3 (representative of …"): the label and
+// number, a sub-figure letter or a range of two if any, then a LOWERCASE
+// word — the engine's own running-prose guard (engine.mjs REF_PROSE), the
+// same expression. Without it `cap_lead` alone fired on such a line, and
+// the model had to tell a paragraph's opening from a caption's by geometry
+// (R61: it named one text at 0.84, below any release threshold).
+const REF_PROSE = /^(?:Fig(?:ure)?|Figs?|FIG|Tab(?:le)?|TAB|TABLE|FIGURE|Algorithm|Alg|Listing|Section|Sec)\.?\s*(?:\d+(?:\.\d+)*(?:[.\-]?[a-zA-Z])?|[IVXLCDM]+\b|[A-Z]\.?\d+(?:\.\d+)*(?:[.\-]?[a-zA-Z])?)(?:\s*\(\s*[a-zA-Z]\s*\)(?:\s*[-–]\s*\(\s*[a-zA-Z]\s*\))?)?\s*(?:[)\],;.]*\s+[a-zà-ÿ]|\(\s*[a-zà-ÿ]{2,})/;
 const NUM_LEAD = /^(?:\d+(?:\.\d+)*\.?|[A-Z]\d*[.:]|[A-Z](?:\.\d+)+\.?|[IVX]{1,5}\.|(?:[a-zA-Z]|\d+)\))(?:$|\s)/;
 const LIST_MARK = /^(?:[•·▪–—\-*]|\(?\d{1,2}[.)]|\(?[a-z][.)]|\(?[ivx]{1,4}[.)])(?:\s|$)/;
 const DANGLING = /\b(?:a|an|and|as|at|between|by|for|from|in|into|of|on|or|over|than|the|to|under|via|with)\s*$/i;
@@ -96,11 +104,18 @@ function pageStatistics(lines) {
   for (const [k, n] of counts) if (n > best || (n === best && k < bodyH)) { best = n; bodyH = k; }
   const lefts = lines.map((L) => Math.min(...L.map((t) => t[1]))).sort((a, b) => a - b);
   const rights = lines.map((L) => Math.max(...L.map((t) => t[3]))).sort((a, b) => a - b);
-  const pct = (a, p) => a[Math.min(a.length - 1, Math.max(0, Math.round((a.length - 1) * p)))];
+  // numpy's percentile (linear interpolation between the two nearest ranks),
+  // which is what the Python extractor computes; the nearest rank alone
+  // differed from it by a hundredth of the page on a line's right gap.
+  const pct = (a, p) => {
+    if (!a.length) return 0;
+    const k = (a.length - 1) * p, lo = Math.floor(k), hi = Math.min(a.length - 1, lo + 1);
+    return a[lo] + (a[hi] - a[lo]) * (k - lo);
+  };
   return { body_h: bodyH, left: pct(lefts, 0.05), right: pct(rights, 0.95), mid: 500 };
 }
 
-const NEIGHBOUR_KEYS = ["h_rel", "x0", "x1", "f_bold", "f_italic", "f_math", "f_mono", "n_lower", "ends_period", "dangling", "cap_lead", "num_lead", "centred", "fills_measure", "frac_mathfont"];
+const NEIGHBOUR_KEYS = ["h_rel", "x0", "x1", "f_bold", "f_italic", "f_math", "f_mono", "n_lower", "ends_period", "dangling", "cap_lead", "ref_prose", "num_lead", "centred", "fills_measure", "frac_mathfont"];
 
 function lineRecord(L, st) {
   const text = L.map((t) => t[0]).join(" ");
@@ -130,7 +145,7 @@ function lineRecord(L, st) {
     frac_mathfont: mathFonts / n, frac_nonblack: nonblack / n, n_fonts: fontCounts.size,
     title_case: capsWords.length / Math.max(parts.length, 1),
     ends_period: +/[.!?]\s*$/.test(text), ends_comma: +text.trimEnd().endsWith(","), ends_colon: +text.trimEnd().endsWith(":"),
-    dangling: +DANGLING.test(text), cap_lead: +CAP_LEAD.test(text), num_lead: +NUM_LEAD.test(text), list_mark: +LIST_MARK.test(text),
+    dangling: +DANGLING.test(text), cap_lead: +CAP_LEAD.test(text), ref_prose: +REF_PROSE.test(text), num_lead: +NUM_LEAD.test(text), list_mark: +LIST_MARK.test(text),
     has_at: +text.includes("@"), has_url: +(text.includes("http") || text.includes("www.")), has_cid: +text.includes("(cid:"),
     bracket_ref: +/\[\d{1,3}\]/.test(text), year: +/\b(?:19|20)\d{2}\b/.test(text),
     ...fontFlags(font),
@@ -179,7 +194,7 @@ export function pageFeatures(lines) {
     b.forEach((j, k) => {
       const r = recs[j];
       Object.assign(r, { blk_len: b.length, blk_pos: k / Math.max(b.length - 1, 1), blk_first: +(k === 0), blk_last: +(k === b.length - 1),
-        blk_cap_lead: first.cap_lead, blk_num_lead: first.num_lead, blk_list_mark: first.list_mark, blk_first_centred: first.centred, blk_first_x0: first.x0, blk_first_bold: first.f_bold,
+        blk_cap_lead: first.cap_lead, blk_ref_prose: first.ref_prose, blk_num_lead: first.num_lead, blk_list_mark: first.list_mark, blk_first_centred: first.centred, blk_first_x0: first.x0, blk_first_bold: first.f_bold,
         blk_last_fills: last.fills_measure, blk_last_period: last.ends_period, blk_mean_math: mMath, blk_mean_lower: mLower, blk_mean_hrel: mH, blk_width: bw });
     });
   }

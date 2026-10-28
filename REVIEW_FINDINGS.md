@@ -6542,3 +6542,209 @@ wrapped so that "Fig. N(c)" headed a line — the same guard read it as a
 caption lead, and the figure-body search above that "caption" took the
 paragraph over it for the figure. unreasoned 0 and trailing 0 on every
 page of both runs.
+
+## R61 — the line classifier learns the running-prose guard; the layout detector is removed (2026-10-28)
+
+The user asked, after R60, whether a model trained for this task could
+replace the rules so that such fixes stop being needed, and whether a model
+would be faster on a GPU or NPU. The answer, from this project's own
+measurements (R56: the classifier's extra caption calls on the gate corpora
+were about 170 losses to 20 gains; the detector moved one page in 773 at
+130–230 ms a page), was no on both counts — and the R60 page made the
+first point concrete. With the model files in place, the classifier's own
+verdicts on it were: the two misread paragraph openers `text` at 0.84 and
+0.85, under any release threshold; the real one-line caption above them
+`text` at 0.56. The model could not have fixed the page, and it was wrong
+on the same page in the other direction.
+
+The reason is in its features. `cap_lead` (line-features.mjs, and its
+Python twin docbank_lines.py) was the caption regex alone, with no
+running-prose exception, so "Figure 3(b) shows …" and "Figure 3: …"
+carried the same lead feature and the model had to tell them apart by
+geometry. The rules did not disappear when the model was trained; they
+moved into its features, and this one had been left out.
+
+### The model, retrained
+
+- `ref_prose`: the engine's running-prose guard (engine.mjs `REF_PROSE`,
+  with R60's sub-figure case), the same expression in both extractors, on
+  the line, on its two neighbours each side and on its block's first
+  line. On DocBank's 1.42M lines it splits the caption leads as it should:
+  of the 9,090 lines `cap_lead` fires on, the 1,316 that are also
+  `ref_prose` are 95% paragraph (1,245) and 5% caption (60); the 7,774 that
+  are not are 82% caption (6,388) and 18% paragraph.
+- The JS mirror's page percentile was the nearest rank where numpy's
+  interpolates between two ranks: a line's `right_gap` differed by a
+  hundredth of the page on one line of one page, and the 4-page parity
+  fixture had never held such a line. The mirror now interpolates, and the
+  fixture is 16 pages (869 lines, every numeric feature equal to 1e-6).
+  A unit case holds the new feature on five synthetic lines (the
+  sub-figure opener, the colon caption, the range, "(a) The …", "(a)
+  shows"), the Python extractor giving the same five answers.
+- The recipe is the shipped one (ml/README.md): DocBank 8,000 papers plus
+  DocLayNet's scientific train/val pages, 260 rounds of 23-leaf trees, held
+  out by paper; about 100 s to train, 1,820 trees, 2.78 MB. The data were
+  fetched again for this (DocBank's archive, MD5 as its page states; the
+  DocLayNet columns by range reads).
+- On DocLayNet's 940 held-out scientific test pages (45,423 lines), the
+  same measurement as R56: accuracy 0.945, keep-vs-process F1 0.943, macro
+  F1 0.926, against the v1.4.1 model's 0.944 / 0.942 / 0.926 — the same
+  model on the aggregate, as it should be: lines that open on an in-text
+  reference are 0.14% of DocLayNet's. Captions 0.90 F1 (0.91 before),
+  headings 0.95, tables 0.92, headers and footers 0.92, formulas 0.94,
+  figure text 0.90. (The model was trained twice: once with R60's guard,
+  then again on the final guard below; the numbers are the second's, and
+  the first's were the same to the third decimal.)
+- On the R60 page, with the option on: the two openers `text` at 0.992 and
+  0.991 (were 0.84 and 0.85), the next sentence's opener 0.994, and the
+  page's real captions `caption` at 0.69, 0.95 and 0.85 (the first was
+  `text` at 0.56). That is the change: the aggregate is unmoved, and the
+  line the rules had misread is now one the model would release at any
+  threshold, while the caption it had misread is a caption.
+
+### The guard, once more (the visual step)
+
+The gate's visual step on this tree (three settled full-page captures a
+document over both corpora, every image read, every suspected defect put
+through wordshot) found one classification call and no render defect: on
+a private paper, a thirteen-line body paragraph under a figure's caption
+kept whole, its first line opening "Fig. 8.A shows …". R60's guard
+accepted a sub-figure letter in parentheses; the dotted letter, the bare
+letter ("Figure 8A shows") and a chapter-numbered figure ("Figure 2.1
+shows") still read as caption leads. The guard now takes a dotted number
+and a letter after it, dotted, hyphenated or bare, in all three copies
+(engine, JS extractor, Python extractor), with the nine cases held in a
+unit test that the Python extractor answers identically; the rows were
+rebuilt and the model retrained on the final expression, so what ships
+was trained on what runs. The paragraph is processed (wordshot:
+`processed=true`, nine emphasis runs on its line).
+
+A second case, found on another private paper by the same step: a
+sentence wrapped so that its reference headed the next line — "… is
+shown in ⏎ Fig.4(a). The …" — with the label set BOLD by the
+paper's own markup. The guard cannot help there (no lowercase word
+follows the label; the sentence ends at it), and two passes read it as a
+caption. The caption pass's lead guard, which recognises a wrapped
+reference by the prose line directly above it at the body's pitch, asked
+that line to be in the lead's face — so a bold "Table 2:" under a
+paragraph is not taken for a continuation — and a bold reference failed
+it; the figure-region pass had no such guard at all, took the bound
+paragraph directly above as "no room for a figure", and swept the one
+line under the lead that has fewer than four lowercase words (a line
+naming a standard by its acronym, ending on "which") as the figure's
+body. Both now hold the R55 rule in the same words: no caption opens
+under an unfinished sentence. The caption pass's guard accepts the line
+above in any face when it runs on (a dangling word or a broken one); the
+figure pass skips a lead whose nearest line above, within a pitch and a
+half, is prose that runs on. The bold label itself stays on the canvas
+as a run-in (it is bold already); the sentence after it and the five
+lines under it are processed (wordshot `processed=true`, six runs on the
+once-swept line).
+
+The figure pass's guard changed one more page, found by the skip-reason
+diff and read: a private paper whose sentence wrapped so that "Figure 1."
+headed the line introducing a bullet list of acronyms and their
+names. The lead had been a caption to the figure pass, and the ten
+short list lines under it its figure's body; they are now the list they
+are, processed like every other list (the acronyms keep their weight,
+R59; wordshot on a list item, `processed=true`).
+
+Six other suspected defects across the private documents — line-end
+slivers, doubled parentheses, a jumbled small-caps wordmark, a missing
+period, a jammed monospace word, a drifted letter — each dissolved under
+wordshot at zoom: capture artefacts, as in every gate since R36.
+
+### Gate
+
+Release gate on the final tree, in lanes (four of allprobes `--all`, three
+of twelve private papers each and one of the 12 public, a console lane, a
+capture lane): fontkeep, whyskip, eqkeep, refcolor, tables and citepoint
+PASS on 48/48 documents (one infra retry, the extension not loading
+under six browsers; the re-run passed), console silent on 48/48 (viewer
+and service worker, every page), unit tests 337. Skip-reason diff
+against the v1.4.1 whyskip sweep: 749/749 pages compared, 9 changed —
+the six of R60 and this round (two pages of the reported paper's
+sibling, the R60 page, the dotted-letter page and its neighbour, the
+bold-reference page, the list page), every one read above, and three
+pages of two papers that differ only in `overlaps-skipped`,
+`dup-overlap`, `table-rules` and `cell-border` counts between the
+baseline's zoom (1.8) and the gate's (1.0); re-swept at the baseline's
+zoom on the final tree, those two papers' 37 pages show 0 changes. The
+lesson is in the runner notes: compare like with like.
+
+Option gate (`--line`, the retrained model) on the same tree: PASS,
+48/48, no retries. Skip-reason diff against the plain gate: 749/749
+pages compared, 10 changed, every changed span read: six releases, each
+a paragraph's last line the block pass had kept as `line-head` (on five
+private papers), now processed; two `model-heading` keeps, each the
+second line of a two-line section title; two pages of `model-table`
+keeps, 16 cells of two tables (one private, one public) of which 15 the
+rules had already kept by their rules and one — a cell naming an attack
+— is new. Nothing lost. The v1.4.1 model's policy run (R56) changed 12
+pages, 8 releases and 4 keeps; the retrained model's is the same shape.
+
+### Found by the same step, present under v1.4.1, left open (R62)
+
+Three settled pages a document over 48 documents is more of each paper
+than any gate before looked at, and the step turned up classification
+calls that the skip-reason diff shows unchanged since v1.4.1 — none a
+render defect, every one verified by wordshot, each on one private paper
+unless said. They are recorded here as the next round's sheet, with the
+mechanism as far as it was read, and not fixed in this release:
+
+- A caption whose first line is set as one short span a word (a per-word
+  text layer) is kept on that line only; its second and third lines, at
+  the caption's leading, are emphasised (`processed=true`, nine runs on
+  a continuation line).
+- The operator words of a display equation — "s.t.", "max", "diag" — in
+  the text face inside the formula's lines are emphasised ("s" and "t"
+  bold; "di" bold).
+- Two of seven author names in a title block are emphasised (the other
+  five kept); the e-mail lines under them are processed but carry no run.
+- Of two identical prompt-example boxes on one page, one is kept whole and
+  the other's numbered items and note are emphasised.
+- A table's note block (a walkthrough of its columns and a key to its
+  symbols) set small under the table is emphasised (twenty runs on one
+  span).
+- An italic run-in heading (one opening "Remark:", one in sentence case)
+  is emphasised while its Title-Case siblings in the same paper are
+  kept — on two papers.
+- On a proof page dense with inline formulas, whole paragraphs of
+  formula-free prose are kept (`keep=true`, reasoned), with fragments
+  between them processed: patchy to the eye.
+- A paragraph's one-word last line, and a two-word one led by an
+  acronym, are kept as short spans while the paragraph above them is
+  processed — on two papers.
+- The first of three numbered contribution items is kept while the other
+  two are processed.
+- A prose line that holds a circled step digit from a symbol font is left
+  unprocessed, with a reason — on two papers.
+- Public, ACM acmart (full) p9: the last line of a paragraph ("that the
+  existing works [39, 46] cannot detect."), directly above a bold run-in
+  ("Impact."), kept with a reason while the lines above it are processed.
+  The 36 public pages seen were otherwise clean; every other suspect on
+  them (apparent doubling, ghosting, an odd glyph) was a capture artefact
+  under wordshot, and one was the paper's own typo.
+
+Observations that are by design and stay so: a bibliography-style
+citation answer on a review form processed as prose; three identically
+styled form labels of which one is kept and two processed; a
+definition-list page whose mono-led entries are kept and three
+prose-led ones processed; URL-dominated lines skipped as link
+annotations.
+
+### The layout detector, removed
+
+PP-DocLayout-S through ONNX Runtime Web was the first option (R55). It was
+the project's one off-the-shelf model: a pixel detector no data in this
+repository could retrain, running in the rules worker at 130–230 ms a page
+on WebAssembly (WebGPU failed inside a kernel on its export; WebNN was never
+measured), with seven runtime files fetched from npm beside it. Measured
+on the gate corpora it changed one page in 773 (one more caption keep), and
+on DocLayNet's pages the line classifier beats it on every class the rules
+get wrong (R56). Removed: `layout-model.mjs`, its unit test, the worker's
+detector path, the `layoutModel` setting and its Options entry, the
+`--layout` option of the gate runner, `scripts/fetch-layout.mjs` and the
+npm script, `test/diag-layout.mjs`; the line model now lives under
+`extension/vendor/model/`. `ml/doclaynet_eval.py` keeps `--onnx` as an
+option so a candidate detector can still be scored beside the classifier.
