@@ -126,7 +126,14 @@ function findHeadingIndexes(lines) {
  * should be left as set. Null when the document has no Abstract.
  */
 export function findContentStart(lines) {
-  const line = lines.find((l) => l.page <= 5 && /^abstract\.?$/i.test(l.text));
+  // The heading alone on its line ("Abstract", "ABSTRACT", "Abstract."), or
+  // run into the text as IEEE sets it ("Abstract—We …") and as a colon
+  // does ("Abstract: We …"): the run-in form was never found, so an IEEE
+  // paper's title block, author line and e-mail addresses were body prose
+  // to the engine, and two author names of seven were emphasised (R62, a
+  // private paper). A line that merely opens with the word ("Abstract
+  // syntax trees …") does not qualify.
+  const line = lines.find((l) => l.page <= 5 && /^abstract(?:\s*[.:—–-]|$)/i.test(l.text));
   return line ? { page: line.page, y: line.y, h: line.h } : null;
 }
 
