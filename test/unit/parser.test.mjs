@@ -1231,6 +1231,19 @@ test("findInternalRefsAcrossBreaks: a reference hyphenated across a line break",
   // Unbroken text: identical to findInternalRefs.
   const t4 = "Section 3 and Tables 2-4 [5]";
   assert.deepEqual(findInternalRefsAcrossBreaks(t4), findInternalRefs(t4));
+  // Short lines between the hyphen and the continuation — the scripts of a
+  // formula beside the line, laid between the halves by the reading order,
+  // after a hard break — are seen through, and reported as gaps (R63).
+  const t5 = "proof is given in Appen-\u0000\nCert\n \ndix B. Lemma 5";
+  const r5 = findInternalRefsAcrossBreaks(t5);
+  assert.deepEqual(r5.map((r) => cut(t5, r)), ["Appen-\u0000\nCert\n \ndix B", "Lemma 5"]);
+  assert.deepEqual(r5[0].gaps.map(([a, b]) => t5.slice(a, b)), ["\u0000\nCert\n \n"]);
+  // ...but not a long line, nor a hard break right before the continuation.
+  assert.deepEqual(findInternalRefsAcrossBreaks("in Appen-\nthe other column's text\ndix B"), []);
+  assert.deepEqual(findInternalRefsAcrossBreaks("in Appen-\u0000\ndix B"), []);
+  // The continuation is never taken for an intervening line, whatever follows it.
+  const t6 = "see Algo-\nrithm 2.\nthe next line";
+  assert.deepEqual(findInternalRefsAcrossBreaks(t6).map((r) => cut(t6, r)), ["Algo-\nrithm 2"]);
 });
 
 test("a bibliography without a heading (REVTeX) is found by its numbered run", () => {

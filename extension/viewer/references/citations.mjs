@@ -450,8 +450,11 @@ export class ReferencesFeature {
       // reference, all in processed text: "Lemma 4, M" (the list grammar
       // reaching a math variable) colours "Lemma 4"; "§ 2" and "Listing 2",
       // whose leader or number is on the canvas, colour nothing.
+      // ...a piece the matcher saw THROUGH — a script row between "Appen-"
+      // and "dix B." — is no part of the reference, kept or not.
+      const inGap = (seg) => (found.gaps ?? []).some(([a, b]) => seg.start >= a && seg.end <= b);
       const inked = [...intersecting(segments, ref.start, ref.end)]
-        .filter((seg) => joined.slice(Math.max(ref.start, seg.start), Math.min(ref.end, seg.end)).trim());
+        .filter((seg) => !inGap(seg) && joined.slice(Math.max(ref.start, seg.start), Math.min(ref.end, seg.end)).trim());
       const firstKept = inked.findIndex((seg) => !seg.span.dataset.fxDone);
       if (firstKept >= 0) {
         const cut = firstKept === 0 ? ref.start : Math.max(ref.start, inked[firstKept].start);

@@ -7067,7 +7067,7 @@ ten pages R61's option gate read (six paragraph tails released from
 `line-head`, two `model-heading` second lines, two tables' cells as
 `model-table`), nothing lost.
 
-### Kept by design: a prose line holding a circled step digit
+### Kept by design: a prose line holding a circled step digit (R62)
 
 Two papers set step numbers as a digit inside a drawn circle, and the
 line holding one is kept `vector-art`: the circle is canvas art under
@@ -7077,3 +7077,185 @@ the overlay's own digit, the two layers disagreeing by a fraction of a
 pixel, which is the ghosting class every past visual bug belonged to.
 One line a page, unemphasised, with a reason, is the better fault. Left
 as it is.
+
+## R63 — the sheet R62's gate left, read to its causes and fixed (2026-10-29)
+
+Each item of R62's closing list was re-dumped at the gate's zoom and
+read before a rule moved. Each is on one private paper unless noted;
+no line of any private paper is quoted here.
+
+### A "where …" line kept with the block it fell into
+
+A "where f represents the mean of f at the total length T," under a
+display was `blk-table`, the next such line `blk-eqn`: the first fell
+into a block the formula rows' gaps made a table, the second into the
+equation block above it. The block skips now SPARE a block's
+running-prose rows (`skipBlockSparing`): four lowercase words, no cell
+gap in the row, running three fifths of the block's width. A table's
+description cell shares its row with the cells before it, so it keeps
+its gap; a tall cell's wrapped line is narrow. On a second paper the
+same rule released a three-row block's one prose line, "With respect
+to the … vector, the problem is:" over its display. Both where-lines
+and that line are processed.
+
+### Named operands in a fraction set beyond the tag row
+
+The "(1 − suspicious) · weight factor" row of an objective's fraction
+lies outside its tag row's x-span, where R62's named-row sweep could
+not reach it. An UNNUMBERED row of named quantities around an operator
+glyph — every text-face span a name span (three tokens at most, no
+function word), an operator or relation in the row, half its items
+symbols — is an equation's row (`allNamed`, in the row-equation test).
+Three of the page's five such operands are kept now; the two that
+remain sit in labelled constraint rows ("Slices accessed by user: …")
+whose label carries a function word, and are prose to the test by
+design.
+
+### A line of acronym expansions kept as a text-face formula
+
+"(e.g., X, Subscription Concealed Identifier (Y), Z-" — a justified
+line set a span a word, no lowercase word in it, a sixth of its
+characters punctuation — met every test of the text-face formula rule.
+A formula's names are camelCase or short; two capitalised words of
+dictionary length on the line now say prose.
+
+### Italic statements ending in a colon, on three papers
+
+A lemma's last lines before their display ("… there exists a PPT
+reduction B satisfying:"), an italic sentence broken over two lines to
+"-ible:", a theorem's second and third lines ending at a colon: each
+an italic run that opens its line and ends at a colon, which the
+italic-lead rule takes for a styled lead-in ("P1: Preventing identity
+exposure:"). A lead-in opens with a capital or a label; a colon run
+that opens LOWERCASE is a sentence's end and is processed now. The
+second line of one such lemma, which the same rule had kept, is
+processed with it.
+
+### A quantity's number taken for a heading's label
+
+A paragraph line opening on "2^-λ failure probability. According to
+…" had its "2" read as a numbered heading's label — the superscript
+"−λ" is its own item — and with two lowercase words by the count the
+line was a heading. A bare number whose next item is a script riding on
+it (sub-height, touching) is a quantity, not a label.
+
+### A word cut from its line into a block of its own
+
+"Under", a theorem statement's first word, split from "the … assumption"
+after it by the face change at the theorem's label; "dix B.", the tail
+of "Appen-" on the line above: each a one- or two-item block with no
+lowercase word, which the figure-label rule takes (`blk-figlabel`). A
+tiny block's item that sits inline with a prose line — a prose row of
+three lowercase words on its baseline within a line and a half, a
+broken word ending the line over it with the item opening lowercase,
+or a prose line opening lowercase at the pitch under it — goes to the
+body, item by item: the theorem's label beside "Under" stays kept, and
+so do the formula's scripts that share "dix B."'s block. Read from the
+page's line groups, not the region's blocks: the prose beside such a
+word lies in another stream when its line also carries the other
+column's text. Both words are processed now (wordshot `processed=true`).
+
+### Three prose lines with aligned equals signs, a public USENIX paper
+
+Three lines of one paragraph each hold an inline equation whose "=" fell
+at one x, and the script rows of those equations padded the run to the
+aligned-starts rule's length: a table of four rows. Two changes: a row
+under four fifths of the height of the rows beside it — the scripts —
+offers no cell start (a small-set table keeps all its rows, judged
+relative to the neighbours); and a row of two lowercase words with a
+relation in it, or three with a math-face item, is prose to the rule's
+prose guard (it asked for six). The paragraph's lines are processed;
+the figure sweep's tail absorb also passes over a sub-height row now,
+as the caption absorb does. One line of the paragraph, where the
+sequence notation "x1 x2 x3 …" aligns on four consecutive lines by its
+own spacing, still reads as a table and stays kept: that notation is
+table-shaped.
+
+### A float broken across the gutter
+
+A parameter list's label and first two items at the foot of the left
+column, their figure and its caption in the right column — a figure
+whose region filled its column from the top. The figure sweep now takes
+the left column's trailing lines as the float's when the right column's
+region is unbounded above: two or more lines that are no running prose,
+under that column's last caption or paragraph. The three lines are
+`fig-body` with their siblings.
+
+### What the first run's diff added
+
+The first full run's skip-reason diff against v1.4.2 changed 150
+pages, and reading them added three conditions and one repair. The
+block sparing had released a comparison table's key — prose-shaped
+lines at the table's small size — so a spared row must be at the
+body's size. The named-row rule had taken three prose fragments that
+open on a text span before their mathematics ("requires only O(…)",
+"(e.g., …", a sentence's two halves around an equation), so a named
+row must OPEN on mathematics: a math item, a glyph, or an operator's
+name. The cross-break reference matcher, taught to see through a
+script row between a broken word's halves, had skipped a continuation
+line of eight characters as such a row ("Algo-" / "rithm 2." on a
+public arXiv paper, found by the reference probe): an intervening line
+never opens lowercase. And the same probe had found, on the proof page,
+that "Appen-" / "dix B." was now processed and uncoloured, the script
+row between its halves having broken the matcher's chain — the
+see-through above is that repair, with the gap reported so the
+colouring pass does not take the kept script for a piece of the
+reference.
+
+The classes read: aligned-starts rows released on three private papers
+(running prose with inline equations, the pages' real tables still
+seeded), colon-ended italic sentences released on nine (definitions
+"… is defined as follows:", theorem bodies), where-lines released from
+table and equation blocks on five, the text-face formula rule's lines
+re-kept by the bibliography and table rules where they were those,
+and the named-row rule's new equation rows on twelve pages, each a
+formula.
+
+### Gate
+
+Five full runs this round, one per change the previous run's reading
+demanded. The final run, on the final tree, in lanes: fontkeep,
+whyskip, eqkeep, refcolor, tables and citepoint PASS on 48/48
+documents, no retries (an earlier run of the same rules had one
+infrastructure failure, the extension not loading under six browsers,
+and the document re-run alone passed), whyskip unreasoned 0 and
+trailing 0 on every page; console silent on 48/48; option gate
+(`--line`) PASS 48/48, its diff against the plain gate the same ten
+pages R61 and R62 read; unit tests 338. Skip-reason diff against the
+v1.4.2 release tree, same harness, same zoom: 749/749 pages compared,
+127 changed, every class read from dumps (above) and fourteen pages
+captured and read by eye with wordshot: ten clean; one capture that
+fired before paint and clipped a wide page, whose page the DOM and
+settled zooms show right (the harness trap of R36, recorded again);
+one page with the fraction operand the sheet below names; and three
+pages with the fragments after an inline formula, one class fixed
+above and three left on the sheet. The last change, the resuming
+fragment, moved four pages against the run before it, each one
+fragment released, and the narrowing after it moved none.
+
+### What the visual step added
+
+Fourteen changed pages read by eye found one more mechanism, fixed
+before the final run: a fragment of a sentence resuming after an inline
+formula — ". Let", ". Then," — twelve characters or fewer with no two
+prose words, beside the formula's scripts, read as the base those
+scripts attach to (`script-attach`) and stayed plain mid-sentence on
+two papers. A fragment that opens on sentence punctuation and a word is
+the sentence resuming, not a base.
+
+### Left for the next round
+
+A labelled constraint row ("Slices accessed by user: name = …") whose
+operand name follows a label with a function word, and the same
+operand alone on a fraction's numerator row — one item, under the
+row-equation test's three — set in bold over its fraction bar (one
+private paper, two spans; the one the visual step confirmed); the
+sequence-notation line above (public USENIX); a definition list's
+first description, wrapped under its label with the block's equation
+(one private paper, two spans, R62's note). And three more fragments
+after an inline formula, each kept by a different rule: a four-word
+lead-in ", which is written as" on an equation's own row (`row-eqn`,
+the row's ratio); a ". As shown in" at a column's foot merged into a
+footnote block (`blk-footnote`); an "in (11), (12), (17), and (18)."
+taken for a run of equation references (`url-or-math`) — one public
+arXiv paper, one private.
