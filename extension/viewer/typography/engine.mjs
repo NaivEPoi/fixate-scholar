@@ -292,6 +292,10 @@ const FONT_BASE_WORD_SPACING = {
   "source-serif-4": 0.02,
 };
 
+// How long a pass waits for a bundled face to load (#bundledFacesReady)
+// before it goes ahead in the fallback, as every pass did before the wait.
+const FACE_LOAD_MS = 3000;
+
 // Characters that can sit either side of a mid-word span break: Latin letters,
 // the accent glyphs TeX sets separately, and intra-word punctuation.
 const WORD_EDGE = /[A-Za-z\u00c0-\u024f'\u2019\u00a8\u00b4\u0060\u00af\u00b8\u02c6\u02c7\u02d8\u02d9\u02da\u02db\u02dc\u02dd]/;
@@ -476,6 +480,7 @@ export class TypographyEngine {
   #passSeq = 0; // bumped by every page pass as it starts
   #pageSeq = new Map(); // pageNumber -> #passSeq of its latest pass
   #allGen = 0; // bumped by every restore/re-process of all pages: an older queue (#processPages) stops
+  #faceLoads = new Map(); // fontMode -> promise: its bundled faces loaded, or waited for FACE_LOAD_MS
 
   constructor(app, settings) {
     this.#app = app;
@@ -629,7 +634,48 @@ export class TypographyEngine {
     // switch re-processes see it (a harness turns the option on after load).
     const modelReady = settings?.lineModel === true ? ensureLineModel() : Promise.resolve();
     if (!this.#enabled || unchanged) return Promise.resolve();
-    return modelReady.then(() => this.#reprocessAll());
+    // A newly chosen bundled face is loaded first, the pages keeping what
+    // they show meanwhile: re-processed before it arrives, they were laid
+    // out in the fallback, and processed all over again when it came.
+    return Promise.all([modelReady, this.#bundledFacesReady()]).then(() => {
+      // Reading mode switched off, or newer settings, while it loaded.
+      if (!this.#enabled || this.#settings !== settings) return;
+      return this.#reprocessAll();
+    });
+  }
+
+  /**
+   * Resolves when the current reading font's bundled faces, regular and
+   * bold, have loaded — at once in original-font mode — or after
+   * FACE_LOAD_MS, whichever comes first. Asked for once per mode.
+   *
+   * Nothing asked for the face before: the browser fetched it when the first
+   * pass laid a span out in it, so that pass measured the fallback face, and
+   * the face's arrival (refreshFonts) re-processed every page it had touched.
+   * That fetch is not prompt while the pages are being processed. Measured
+   * on the real display, a face first used by a font switch finished loading
+   * 0.3 to 22 seconds after the browser marked it loading (in one trace its
+   * request went out 12 s late and then took 8 ms) — the second pass came
+   * as a freeze of its own, long after the switch — while
+   * document.fonts.load() of a face took 5 ms. The fallback's metrics also
+   * stayed behind in #ascentCache (#baselineRatio's probe), which nothing
+   * re-measured, so every processed span's baseline was seated with the
+   * fallback's ratio; with the face loaded first it is the face's own.
+   */
+  #bundledFacesReady() {
+    const mode = this.#settings?.fontMode ?? "original";
+    const stack = FONT_STACKS[mode];
+    if (!stack || typeof document === "undefined" || !document.fonts?.load) return Promise.resolve();
+    let ready = this.#faceLoads.get(mode);
+    if (!ready) {
+      const loads = Promise.all([
+        document.fonts.load(`16px ${stack}`),
+        document.fonts.load(`bold 16px ${stack}`),
+      ]).catch(() => {});
+      ready = Promise.race([loads, new Promise((r) => setTimeout(r, FACE_LOAD_MS))]);
+      this.#faceLoads.set(mode, ready);
+    }
+    return ready;
   }
 
   /** Re-process every rendered page from a clean (restored) state. Used when
@@ -6745,9 +6791,11 @@ export class TypographyEngine {
     // Measure only with the real faces: if the embedded fonts are still
     // loading (the Chrome race above), geometry reads would see the fallback.
     if (timing) timing.classify = Math.round(performance.now() - timing.t0);
+    // A bundled reading face is asked for first (#bundledFacesReady), so the
+    // pass measures it and not the fallback.
     const kick = () => requestIdleCallback(work, { timeout: 200 });
     if (typeof document !== "undefined" && document.fonts?.ready) {
-      document.fonts.ready.then(kick, kick);
+      this.#bundledFacesReady().then(() => document.fonts.ready).then(kick, kick);
     } else {
       kick();
     }
