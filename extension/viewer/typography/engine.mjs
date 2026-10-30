@@ -910,20 +910,41 @@ export class TypographyEngine {
    * a re-render, a font refresh. A newer #reprocessAll, or reading mode
    * switched off, ends the queue (#allGen).
    */
-  #processPages(pages) {
-    if (!pages.length) return Promise.resolve();
+  async #processPages(pages) {
+    if (!pages.length) return;
     const gen = this.#allGen;
     const since = this.#passSeq;
-    const { near, far } = this.#byDistanceFromView(pages);
-    const now = Promise.all(near.map((pv) => this.#processPage(pv)));
-    if (!far.length) return now;
-    return now.then(async () => {
-      for (const pv of far) {
-        if (gen !== this.#allGen || !this.#enabled) return;
-        if (!pv.textLayer?.div?.childElementCount) continue;
-        if ((this.#pageSeq.get(pv.id) ?? 0) > since) continue;
-        await this.#processPage(pv);
-      }
+    // Still to do: not evicted, and no pass started on it since the call.
+    const due = (pv) =>
+      !!pv.textLayer?.div?.childElementCount && (this.#pageSeq.get(pv.id) ?? 0) <= since;
+    // Where the pages are is read after the next frame. The change that
+    // asked for this pass has usually just restyled the whole document (a
+    // font switch sets data-fx-font and every page's spans with it), and
+    // measuring the pages at once forced that restyle and layout — 90 ms
+    // and 80 ms over ten pages — inside the settings handler; after the
+    // frame the browser has done it in its own rendering step, and the
+    // boxes read clean.
+    await this.#afterNextFrame();
+    if (gen !== this.#allGen || !this.#enabled) return;
+    const { near, far } = this.#byDistanceFromView(pages.filter(due));
+    await Promise.all(near.map((pv) => this.#processPage(pv)));
+    for (const pv of far) {
+      if (gen !== this.#allGen || !this.#enabled) return;
+      if (!due(pv)) continue;
+      await this.#processPage(pv);
+    }
+  }
+
+  /** Resolves once the browser has rendered the next frame — or at once in
+   *  a hidden document, and after 100 ms at the latest, as frames are not
+   *  produced for a page nobody sees. */
+  #afterNextFrame() {
+    if (typeof document === "undefined" || document.hidden || typeof requestAnimationFrame !== "function") {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, 100);
+      requestAnimationFrame(() => setTimeout(() => { clearTimeout(timer); resolve(); }, 0));
     });
   }
 
