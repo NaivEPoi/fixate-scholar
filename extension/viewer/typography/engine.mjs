@@ -292,6 +292,10 @@ const FONT_BASE_WORD_SPACING = {
   "source-serif-4": 0.02,
 };
 
+// How long a pass waits for a bundled face to load (#bundledFacesReady)
+// before it goes ahead in the fallback, as every pass did before the wait.
+const FACE_LOAD_MS = 3000;
+
 // Characters that can sit either side of a mid-word span break: Latin letters,
 // the accent glyphs TeX sets separately, and intra-word punctuation.
 const WORD_EDGE = /[A-Za-z\u00c0-\u024f'\u2019\u00a8\u00b4\u0060\u00af\u00b8\u02c6\u02c7\u02d8\u02d9\u02da\u02db\u02dc\u02dd]/;
@@ -469,9 +473,14 @@ export class TypographyEngine {
   #scanWorker = undefined; // rules-worker.mjs: undefined until first needed, null if unavailable
   #scanJobs = new Map(); // job id -> { resolve, reject }
   #scanSeq = 0;
-  #pageFonts = new Map(); // pageNumber -> Set<famKey> used by processed spans
+  #pageFonts = new Map(); // pageNumber -> Set<famKey> its processed spans were laid out in before the face had loaded
+  #spaceInkProvisional = new Set(); // famKeys whose #spaceInkCache answer was probed before the face had loaded
   #inkRetryPages = new Set(); // pages whose ink decisions used a capped-resolution canvas
   #batching = false; // document-wide setters record only; endBatch re-processes once
+  #passSeq = 0; // bumped by every page pass as it starts
+  #pageSeq = new Map(); // pageNumber -> #passSeq of its latest pass
+  #allGen = 0; // bumped by every restore/re-process of all pages: an older queue (#processPages) stops
+  #faceLoads = new Map(); // fontMode -> promise: its bundled faces loaded, or waited for FACE_LOAD_MS
 
   constructor(app, settings) {
     this.#app = app;
@@ -502,8 +511,7 @@ export class TypographyEngine {
     if (!this.#batching) return Promise.resolve();
     this.#batching = false;
     if (!this.#enabled) return Promise.resolve();
-    this.#restoreAll();
-    return this.#processAll();
+    return this.#reprocessAll();
   }
 
   /** Reset document-specific state and font metric caches when a new document loads. */
@@ -524,6 +532,9 @@ export class TypographyEngine {
     this.#inkRetryPages.clear();
     this.#ascentCache.clear();
     this.#spaceInkCache.clear();
+    this.#spaceInkProvisional.clear();
+    this.#pageSeq.clear();
+    this.#allGen++;
     for (const holder of this.#pending.values()) {
       holder.cancelled = true;
       holder.resolve();
@@ -539,8 +550,7 @@ export class TypographyEngine {
     if (!h || h === this.#bodyHeight) return Promise.resolve();
     this.#bodyHeight = h;
     if (!this.#enabled || this.#batching) return Promise.resolve();
-    this.#restoreAll();
-    return this.#processAll();
+    return this.#reprocessAll();
   }
 
   /**
@@ -559,8 +569,7 @@ export class TypographyEngine {
       ? { ...this.#hints.counts, pages: this.#hints.headings.size + this.#hints.captions.size }
       : null;
     if (!this.#enabled || !this.#hints || this.#batching) return Promise.resolve();
-    this.#restoreAll();
-    return this.#processAll();
+    return this.#reprocessAll();
   }
 
   /** The article body starts here (Abstract heading). Cover pages and the
@@ -625,7 +634,48 @@ export class TypographyEngine {
     // switch re-processes see it (a harness turns the option on after load).
     const modelReady = settings?.lineModel === true ? ensureLineModel() : Promise.resolve();
     if (!this.#enabled || unchanged) return Promise.resolve();
-    return modelReady.then(() => { this.#restoreAll(); return this.#processAll(); });
+    // A newly chosen bundled face is loaded first, the pages keeping what
+    // they show meanwhile: re-processed before it arrives, they were laid
+    // out in the fallback, and processed all over again when it came.
+    return Promise.all([modelReady, this.#bundledFacesReady()]).then(() => {
+      // Reading mode switched off, or newer settings, while it loaded.
+      if (!this.#enabled || this.#settings !== settings) return;
+      return this.#reprocessAll();
+    });
+  }
+
+  /**
+   * Resolves when the current reading font's bundled faces, regular and
+   * bold, have loaded — at once in original-font mode — or after
+   * FACE_LOAD_MS, whichever comes first. Asked for once per mode.
+   *
+   * Nothing asked for the face before: the browser fetched it when the first
+   * pass laid a span out in it, so that pass measured the fallback face, and
+   * the face's arrival (refreshFonts) re-processed every page it had touched.
+   * That fetch is not prompt while the pages are being processed. Measured
+   * on the real display, a face first used by a font switch finished loading
+   * 0.3 to 22 seconds after the browser marked it loading (in one trace its
+   * request went out 12 s late and then took 8 ms) — the second pass came
+   * as a freeze of its own, long after the switch — while
+   * document.fonts.load() of a face took 5 ms. The fallback's metrics also
+   * stayed behind in #ascentCache (#baselineRatio's probe), which nothing
+   * re-measured, so every processed span's baseline was seated with the
+   * fallback's ratio; with the face loaded first it is the face's own.
+   */
+  #bundledFacesReady() {
+    const mode = this.#settings?.fontMode ?? "original";
+    const stack = FONT_STACKS[mode];
+    if (!stack || typeof document === "undefined" || !document.fonts?.load) return Promise.resolve();
+    let ready = this.#faceLoads.get(mode);
+    if (!ready) {
+      const loads = Promise.all([
+        document.fonts.load(`16px ${stack}`),
+        document.fonts.load(`bold 16px ${stack}`),
+      ]).catch(() => {});
+      ready = Promise.race([loads, new Promise((r) => setTimeout(r, FACE_LOAD_MS))]);
+      this.#faceLoads.set(mode, ready);
+    }
+    return ready;
   }
 
   /** Re-process every rendered page from a clean (restored) state. Used when
@@ -635,8 +685,7 @@ export class TypographyEngine {
    *  return, leaving spans we measured during the fallback window mis-spaced. */
   refresh() {
     if (!this.#enabled) return Promise.resolve();
-    this.#restoreAll();
-    return this.#processAll();
+    return this.#reprocessAll();
   }
 
   /** Re-process only the rendered pages whose processed spans USE any of the
@@ -652,19 +701,27 @@ export class TypographyEngine {
     // A face that has only just loaded was probed against the FALLBACK, whose
     // space is blank — so the cached answer for it is a false negative. Drop it
     // and let the re-process below measure the real face.
-    for (const k of keys) this.#spaceInkCache.delete(k);
-    const promises = [];
+    for (const k of keys) {
+      this.#spaceInkCache.delete(k);
+      this.#spaceInkProvisional.delete(k);
+    }
+    // Only the pages laid out in one of these faces BEFORE it had loaded
+    // (#pageFonts records nothing else): a page measured in the loaded face
+    // would be re-processed into exactly what it already shows. On a switch
+    // to a bundled face, the pages processed after the face arrived were all
+    // re-processed a second time here.
+    const pages = [];
     this.#eachRenderedPage((pv) => {
       const used = this.#pageFonts.get(pv.id);
       if (!used) return; // never processed — textlayerrendered will handle it
       for (const k of used) {
         if (keys.has(k)) {
-          promises.push(this.#processPage(pv)); // restores first
+          pages.push(pv); // #processPage restores first
           return;
         }
       }
     });
-    return Promise.all(promises);
+    return this.#processPages(pages);
   }
 
   /** Hook for `pagerendered` events with isDetailView set: a full-resolution
@@ -801,18 +858,126 @@ export class TypographyEngine {
   }
 
   #processAll() {
-    const promises = [];
-    this.#eachRenderedPage((pv) => promises.push(this.#processPage(pv)));
-    return Promise.all(promises);
+    const pages = [];
+    this.#eachRenderedPage((pv) => pages.push(pv));
+    return this.#processPages(pages);
   }
 
-  #restoreAll() {
+  /** Cancel every pass in flight and any older queue (#processPages). */
+  #cancelAll() {
+    this.#allGen++;
     for (const holder of this.#pending.values()) {
       holder.cancelled = true;
       holder.resolve();
     }
     this.#pending.clear();
+  }
+
+  #restoreAll() {
+    this.#cancelAll();
     this.#eachRenderedPage((pv) => this.#restorePage(pv));
+  }
+
+  /**
+   * Re-process every rendered page from a clean state, as #restoreAll then
+   * #processAll did — but each page is restored where its own pass starts
+   * (#processPage restores first), not all of them up front: a page waiting
+   * its turn keeps what it showed until then, instead of flashing back to the
+   * plain text layer.
+   */
+  #reprocessAll() {
+    this.#cancelAll();
+    return this.#processAll();
+  }
+
+  /**
+   * Process these pages: the ones in view at once, the rest one at a time,
+   * nearest first, each starting when the one before it has finished.
+   *
+   * PDF.js keeps ten or more pages rendered, not only the ones in view, and
+   * every document-wide change (a font switch, the reference extractor's
+   * batch) re-processed all of them at once. Each pass works in idle
+   * callbacks with a 200 ms timeout, so ten passes in flight timed out
+   * together and ran back to back: on a font switch, measured on the real
+   * display over ten rendered pages of a two-column paper, two to three
+   * seconds of 50–190 ms tasks with hardly a frame between them — the
+   * browser froze. One pass in flight leaves the frames between its
+   * callbacks free. The passes and what they write are unchanged; only
+   * their order and overlap are.
+   *
+   * A page whose text layer went away before its turn is skipped (its next
+   * render processes it), and so is one that a pass started on meanwhile —
+   * a re-render, a font refresh. A newer #reprocessAll, or reading mode
+   * switched off, ends the queue (#allGen).
+   */
+  async #processPages(pages) {
+    if (!pages.length) return;
+    const gen = this.#allGen;
+    const since = this.#passSeq;
+    // Still to do: not evicted, and no pass started on it since the call.
+    const due = (pv) =>
+      !!pv.textLayer?.div?.childElementCount && (this.#pageSeq.get(pv.id) ?? 0) <= since;
+    // Where the pages are is read after the next frame. The change that
+    // asked for this pass has usually just restyled the whole document (a
+    // font switch sets data-fx-font and every page's spans with it), and
+    // measuring the pages at once forced that restyle and layout — 90 ms
+    // and 80 ms over ten pages — inside the settings handler; after the
+    // frame the browser has done it in its own rendering step, and the
+    // boxes read clean.
+    await this.#afterNextFrame();
+    if (gen !== this.#allGen || !this.#enabled) return;
+    const { near, far } = this.#byDistanceFromView(pages.filter(due));
+    await Promise.all(near.map((pv) => this.#processPage(pv)));
+    for (const pv of far) {
+      if (gen !== this.#allGen || !this.#enabled) return;
+      if (!due(pv)) continue;
+      await this.#processPage(pv);
+    }
+  }
+
+  /** Resolves once the browser has rendered the next frame — or at once in
+   *  a hidden document, and after 100 ms at the latest, as frames are not
+   *  produced for a page nobody sees. */
+  #afterNextFrame() {
+    if (typeof document === "undefined" || document.hidden || typeof requestAnimationFrame !== "function") {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, 100);
+      requestAnimationFrame(() => setTimeout(() => { clearTimeout(timer); resolve(); }, 0));
+    });
+  }
+
+  /** The pages intersecting the viewer's scroll box, and the others ordered
+   *  by their distance from it. All of them "near" when there is no box to
+   *  measure (a hidden viewer), which is how every page was processed. */
+  #byDistanceFromView(pages) {
+    const container =
+      this.#app.appConfig?.mainContainer ?? document.getElementById("viewerContainer");
+    const view = container?.getBoundingClientRect();
+    if (!view || !(view.width > 0) || !(view.height > 0)) return { near: pages, far: [] };
+    const near = [], far = [];
+    for (const pv of pages) {
+      const r = pv.div.getBoundingClientRect();
+      const dx = Math.max(0, view.left - r.right, r.left - view.right);
+      const dy = Math.max(0, view.top - r.bottom, r.top - view.bottom);
+      if (dx === 0 && dy === 0) near.push(pv);
+      else far.push({ pv, d: Math.hypot(dx, dy) });
+    }
+    far.sort((a, b) => a.d - b.d);
+    return { near, far: far.map((f) => f.pv) };
+  }
+
+  /** Whether the faces a CSS font-family list names are loaded now, regular
+   *  and bold — false when the browser cannot say (the conservative answer:
+   *  the page is then re-processed when the face loads, as before). */
+  #faceLoaded(family) {
+    try {
+      const fonts = document.fonts;
+      return !!fonts?.check && fonts.check(`16px ${family}`) && fonts.check(`bold 16px ${family}`);
+    } catch {
+      return false;
+    }
   }
 
   #restorePage(pageView) {
@@ -3747,7 +3912,14 @@ export class TypographyEngine {
   #spacePaintsInk(family) {
     if (!family) return false;
     const key = famKey(family);
-    if (this.#spaceInkCache.has(key)) return this.#spaceInkCache.get(key);
+    // An answer probed before the face loaded is the fallback's, kept only
+    // until the face is there: a page laid out in the loaded face is no
+    // longer re-processed on the face's arrival (refreshFonts), so it must
+    // not be handed the fallback's answer in the meantime either.
+    if (this.#spaceInkCache.has(key) && !(this.#spaceInkProvisional.has(key) && this.#faceLoaded(family))) {
+      return this.#spaceInkCache.get(key);
+    }
+    const loaded = this.#faceLoaded(family);
     let inks = false;
     try {
       const canvas = document.createElement("canvas");
@@ -3770,6 +3942,8 @@ export class TypographyEngine {
       inks = false; // no canvas read (tainted/blocked) — assume the normal case
     }
     this.#spaceInkCache.set(key, inks);
+    if (loaded) this.#spaceInkProvisional.delete(key);
+    else this.#spaceInkProvisional.add(key);
     return inks;
   }
 
@@ -4346,6 +4520,7 @@ export class TypographyEngine {
 
   async #processPage(pageView) {
     const pageNumber = pageView.id;
+    this.#pageSeq.set(pageNumber, ++this.#passSeq);
     // A re-render (zoom) replaces the text layer DOM; drop any stale run.
     const prev = this.#pending.get(pageNumber);
     if (prev) {
@@ -4369,10 +4544,17 @@ export class TypographyEngine {
     const holder = { cancelled: false };
     holder.promise = new Promise((resolve) => (holder.resolve = resolve));
     this.#pending.set(pageNumber, holder);
-    // Font families this page's processed spans render with — refreshFonts()
-    // uses it to re-process only the pages a newly (re)loaded face affects.
+    // Font families this page's processed spans render with, where the face
+    // had not loaded when the pass laid them out — refreshFonts() uses it to
+    // re-process only the pages a newly (re)loaded face affects. A face that
+    // was loaded already measured right, and loading it again changes nothing.
     const usedFonts = new Set();
     this.#pageFonts.set(pageNumber, usedFonts);
+    const faceLoadedMemo = new Map();
+    const faceLoaded = (f) => {
+      if (!faceLoadedMemo.has(f)) faceLoadedMemo.set(f, this.#faceLoaded(f));
+      return faceLoadedMemo.get(f);
+    };
 
     const allPairs = await this.#pagePairs(pageView);
     // External-link annotations are the PDF's own metadata for URLs/emails:
@@ -6412,8 +6594,8 @@ export class TypographyEngine {
           // actually draws its baseline. Both are em-relative, so they
           // survive zoom/DPI re-layout.
           const fam = family || origFamily;
-          usedFonts.add(famKey(fam));
-          if (origFamily) usedFonts.add(famKey(origFamily));
+          if (!faceLoaded(fam)) usedFonts.add(famKey(fam));
+          if (origFamily && !faceLoaded(origFamily)) usedFonts.add(famKey(origFamily));
           // Only where the rendered face changes: with the same face PDF.js's
           // own placement is right, and a calibration applied there would
           // move every processed span by the measurement's own noise.
@@ -6709,9 +6891,11 @@ export class TypographyEngine {
     // Measure only with the real faces: if the embedded fonts are still
     // loading (the Chrome race above), geometry reads would see the fallback.
     if (timing) timing.classify = Math.round(performance.now() - timing.t0);
+    // A bundled reading face is asked for first (#bundledFacesReady), so the
+    // pass measures it and not the fallback.
     const kick = () => requestIdleCallback(work, { timeout: 200 });
     if (typeof document !== "undefined" && document.fonts?.ready) {
-      document.fonts.ready.then(kick, kick);
+      this.#bundledFacesReady().then(() => document.fonts.ready).then(kick, kick);
     } else {
       kick();
     }
