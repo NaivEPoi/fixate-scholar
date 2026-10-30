@@ -1506,19 +1506,37 @@ export class TypographyEngine {
     // by its formula rows' gaps, or the equation block above it (R63, two
     // private papers). A table's description cell shares its row with the
     // cells before it (a gap), and a tall cell's wrapped line is narrow.
+    // The block skipped row by row, sparing the rows `spare` accepts.
+    const skipBlockExcept = (b, why, spare) => {
+      for (const r of b.rows) {
+        if (spare(r)) continue;
+        for (const p of r.items) { skip.add(p.div); dbg(p.div, why); }
+      }
+    };
     const skipBlockSparing = (b, why) => {
       const bx0 = Math.min(...b.items.map((p) => p.item.transform[4]));
       const bx1 = Math.max(...b.items.map((p) => p.item.transform[4] + (p.item.width ?? 0)));
+      // A WRAP is spared too: two rows of three lowercase words, no cell gap, the
+      // upper running to the block's right edge and the lower starting back
+      // at its left — a sentence carried over a line end, at any width. A
+      // labelled item's description opens after its label and wraps short,
+      // so neither line runs the measure; with its equation under it in the
+      // block, both were kept (R64, a private paper). A table's wrapped
+      // cell restarts at its column, not at the block's left edge.
+      const wordRow = (r) => !!r && lowerWords(r.items) >= 3 && maxCells([r]) < 2 &&
+        Math.max(...r.items.map((p) => p.item.height || 0)) >= dominant * 0.92;
+      const wrap = (u, l) => wordRow(u) && wordRow(l) &&
+        Math.max(...u.items.map((p) => p.item.transform[4] + (p.item.width ?? 0))) >= bx1 - dominant &&
+        Math.min(...l.items.map((p) => p.item.transform[4])) <= bx0 + dominant;
       // ...and at the BODY's size: a table's key under its last row is
       // prose-shaped too, at the table's own small size (R63's first gate).
-      for (const r of b.rows) {
+      skipBlockExcept(b, why, (r) => {
         const rx0 = Math.min(...r.items.map((p) => p.item.transform[4]));
         const rx1 = Math.max(...r.items.map((p) => p.item.transform[4] + (p.item.width ?? 0)));
         const rh = Math.max(...r.items.map((p) => p.item.height || 0));
-        const prose = lowerWords(r.items) >= 4 && maxCells([r]) < 2 && rx1 - rx0 >= (bx1 - bx0) * 0.6 && rh >= dominant * 0.92;
-        if (prose) continue;
-        for (const p of r.items) { skip.add(p.div); dbg(p.div, why); }
-      }
+        if (wrap(r, b.rows[b.rows.indexOf(r) + 1]) || wrap(b.rows[b.rows.indexOf(r) - 1], r)) return true;
+        return lowerWords(r.items) >= 4 && maxCells([r]) < 2 && rx1 - rx0 >= (bx1 - bx0) * 0.6 && rh >= dominant * 0.92;
+      });
     };
     // A run-in heading that opens a body block ("Minimizing duplicate states.
     // We also …" / "A1: … reuse. To address …"): skip the leading bold/glyph
@@ -1764,7 +1782,17 @@ export class TypographyEngine {
         const markerless = lc >= 4 && lowest && bodyAbove && !inRefs && cells < 3;
         if (b.h < dominant * 0.92 && b.yBot - vy0 < pageH * 0.3 &&
             (/^[•†‡§¶*∗⁎]/.test(b.lead) || supMark || markerless)) {
-          skipBlock(b, "blk-footnote"); continue;
+          // ...sparing its BODY-SIZE rows. `b.h` is an average over the
+          // rows, so a body paragraph's lines dense with inline mathematics
+          // — each with a row of sub- and superscripts beside it — average
+          // below the body and pass for a footnote, the first script glyph
+          // standing in for the marker; the sentence resuming after a
+          // formula (". As shown in") was kept with them (R64, a public
+          // paper). A footnote's own rows are set small throughout: a row
+          // whose words are at the body's size is the body's.
+          skipBlockExcept(b, "blk-footnote", (r) => r.items.some((p) =>
+            /[A-Za-zÀ-ɏ]{2}/.test(p.item.str) && !isMath(p) && (p.item.height || 0) >= dominant * 0.92));
+          continue;
         }
         // Table: wide column gaps (cells) or special-font label columns. Spare
         // RUNNING PROSE — a justified body line stretches its inter-word spaces
@@ -1964,10 +1992,40 @@ export class TypographyEngine {
           // operator's name — not on a text span: "requires only O(…)" and
           // "(e.g., G := …" are a sentence's fragments beside their
           // formulas (R63's first gate, two private papers).
-          const lead0 = r.items[0];
-          const opensMath = !!lead0 && (isMath(lead0) || isSpecial(lead0) || !/[A-Za-zÀ-ɏ]/.test(lead0.item.str) || MATH_OP.test(lead0.item.str.trim()));
-          const allNamed = prose > 0 && opensMath && /[+=×·∑∫√∂−/≤≥≈]/.test(rowText) &&
-            r.items.filter((p) => !isMath(p) && /[a-zà-ÿ]{3,}/.test(p.item.str)).every(nameSpan);
+          // ...after a LABEL, when the row has one: a constraint written
+          // "<label>: <name> = <math>" opens on its label, whose words may
+          // well include a function word. The label is the first word-bearing
+          // item and ends with a colon; only that one item is set aside, and
+          // the row must still open on mathematics right after it (R64, a
+          // private paper).
+          // A label is shaped like one: it opens on a CAPITAL and is a
+          // single clause. A body line that runs into a colon before an
+          // inline formula — a sentence's tail opening lowercase ("… the
+          // following:"), or one that holds a sentence break before the
+          // colon — is no label, and five such lines were kept as equation
+          // rows (R64's gate, four private papers and a public one).
+          const wordy = (p) => !isMath(p) && /[a-zà-ÿ]{3,}/.test(p.item.str);
+          const li = r.items.findIndex(wordy);
+          const labelText = li >= 0 ? r.items[li].item.str.trim() : "";
+          const labelled = li >= 0 && li < r.items.length - 1 && labelText.endsWith(":") &&
+            /^[^A-Za-zÀ-ɏ]*[A-ZÀ-Þ]/.test(labelText) && !/[.;!?]\s/.test(labelText);
+          const lead0 = r.items[labelled ? li + 1 : 0];
+          // ...or, after a label only, on the constraint's NAME — "<label>:
+          // <name> ≥ <math>" — when an operator or relation glyph follows the
+          // name in the row: a label, a name and a relation are a
+          // constraint's parts, not a sentence's (R64, a private paper).
+          const namedLead = labelled && !!lead0 && wordy(lead0) && nameSpan(lead0) &&
+            /[+=×·∑∫√∂−/≤≥≈]/.test(r.items.slice(li + 2).map((p) => p.item.str).join(""));
+          const opensMath = !!lead0 && (isMath(lead0) || isSpecial(lead0) || !/[A-Za-zÀ-ɏ]/.test(lead0.item.str) || MATH_OP.test(lead0.item.str.trim()) || namedLead);
+          // ...and the operator may be one the text layer cannot spell: TeX's
+          // extension face draws a DISPLAYED sum under the code of a letter,
+          // so a fraction's numerator row — a double sum over a named operand
+          // alone — reads as two one-letter math items and a name, with no
+          // glyph to find. Math-face items outnumbering the row's names stand
+          // for the operator there (R64, a private paper).
+          const names = r.items.filter((p, i) => wordy(p) && !(labelled && i === li));
+          const operated = /[+=×·∑∫√∂−/≤≥≈]/.test(rowText) || r.items.filter((p) => isMath(p)).length > names.length;
+          const allNamed = prose > 0 && opensMath && operated && names.every(nameSpan);
           if (prose > 0 && !eqBase && !numberedDisplay && !allNamed) continue;
           let symbolish = 0;
           for (const p of r.items) {
@@ -2041,6 +2099,17 @@ export class TypographyEngine {
               // on a private paper): three words, none a function word.
               const named = nItems.filter((p) => !isMath(p) && /[a-zà-ÿ]{3,}/.test(p.item.str)).every(nameSpan);
               if (!built || (nWords.length > 2 && !named) || /[.;:!?]\s+[a-zà-ÿ]/.test(nText)) continue;
+              // ...and an equation's row never ENDS on a sentence's phrase: a
+              // body line carrying an inline "d(H, H)" and then ", which is
+              // written as" — the lead-in to this very display — counted two
+              // words of three letters and passed (R64, a public paper). The
+              // last word-bearing text-face item running three lowercase
+              // words, a function word among them, is prose. Whole LOWERCASE
+              // words of two letters or more only: a capital "A" is a
+              // variable, not the article FUNCTION_WORD (case-blind) takes.
+              const tail = nItems.findLast((p) => !isMath(p) && /[A-Za-zÀ-ÿ]{2}/.test(p.item.str));
+              const tailWords = tail ? tail.item.str.match(/(?<![A-Za-zÀ-ÿ])[a-zà-ÿ]{2,}(?![A-Za-zÀ-ÿ])/g) ?? [] : [];
+              if (tailWords.length >= 3 && tailWords.some((w) => FUNCTION_WORD.test(w))) continue;
               // A row opening lowercase is a sentence's ("where x is …") —
               // unless the word is an operator's name (a "max" over its
               // objective).
@@ -2081,10 +2150,20 @@ export class TypographyEngine {
         // A multi-line derivation aligns its relation symbol at one x on row
         // after row — an aligned interior start that is math, not a column.
         if (isDisplayMathRow(r)) return [];
+        // A SEQUENCE written inline — "x1 x2 x3 x4 x5", "y y y y y" — is set
+        // as one one-character item per letter and subscript at an even
+        // pitch, so its starts coincide from line to line of a paragraph by
+        // the pitch alone. A one-character item flanked on BOTH sides by
+        // one-character items is such a sequence's interior, not a cell: its
+        // start is not offered. A row's outermost one-character cells are
+        // never flanked on both sides, so a table of ●/○ or digit cells keeps
+        // its edge columns (R64, a public USENIX paper).
+        const one = (k) => r.items[k]?.item.str.trim().length === 1;
         const xs = [];
         for (let k = 1; k < r.items.length; k++) {
           const prev = r.items[k - 1].item;
           const x = r.items[k].item.transform[4];
+          if (one(k) && one(k - 1) && one(k + 1)) continue;
           if (x - (prev.transform[4] + (prev.width ?? 0)) >= 1) xs.push(x);
         }
         return xs;

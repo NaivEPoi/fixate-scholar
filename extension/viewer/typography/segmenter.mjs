@@ -93,8 +93,17 @@ function stripCitationsAndRefs(text) {
 // a year or page number must still pass. Citations (e.g. "[25]", "[27]–[30]")
 // and in-paper references are stripped first so their digits are not miscounted
 // as math characters.
+// ...and a sentence's tail LISTING equation references — "in (3), (4),
+// (7), and (8)." — is prose: its parenthesised numbers are references, not
+// arithmetic, and a function word between them says so. Only with such a
+// word (lowercase, whole) are the "(12)" groups set aside, and only free-
+// standing ones: "x(1)" is a function applied, and stays counted (R64, a
+// private paper).
+const FUNCTION_WORD_LC = /(?<!\p{L})(?:the|of|and|or|to|in|is|are|for|with|by|as|on|at|from|that|see)(?!\p{L})/u;
+const EQ_REF = /(?<![\p{L}\d)\]])\(\d{1,3}[a-z]?\)/gu;
 const MATHY = (text) => {
-  const clean = stripCitationsAndRefs(text);
+  let clean = stripCitationsAndRefs(text);
+  if (FUNCTION_WORD_LC.test(clean)) clean = clean.replace(EQ_REF, " ");
   const letters = (clean.match(/\p{L}/gu) || []).length;
   const mathChars = (clean.match(/[\d=+*/^<>|\\∑∏∫√∞±×÷∈∉∀∃≤≥≈≠⊂⊃∪∩→←↔]/gu) || []).length;
   return mathChars > letters;
