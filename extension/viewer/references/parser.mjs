@@ -870,15 +870,32 @@ export function findInternalRefs(text) {
 export function findInternalRefsAcrossBreaks(text) {
   let flat = "";
   const at = []; // flat offset -> text offset
+  const gaps = []; // text ranges dropped between a hyphen and its word's continuation
   for (let i = 0; i < text.length; i++) {
-    if (text[i] === "-" && text[i + 1] === "\n" && /[A-Za-z]/.test(text[i - 1] ?? "") && /[a-z]/.test(text[i + 2] ?? "")) {
-      i++; // drop the hyphen and the break
-      continue;
+    if (text[i] === "-" && /[A-Za-z]/.test(text[i - 1] ?? "")) {
+      // ...seeing through up to three SHORT lines between the hyphen and
+      // the continuation: the scripts of a formula beside the line, which
+      // the reading order lays between "Appen-" and "dix B." (R63, a
+      // private paper). The break before the continuation is a soft one;
+      // the intervening lines may follow hard breaks.
+      // An intervening line never opens lowercase: that is the
+      // continuation itself ("Algo-" / "rithm 2." was skipped as one).
+      const m = /^(?:\u0000?\n(?![a-z])[^\n\u0000]{0,8}){0,3}\n(?=[a-z])/.exec(text.slice(i + 1));
+      if (m) {
+        if (m[0].length > 1) gaps.push([i + 1, i + 1 + m[0].length]);
+        i += m[0].length; // drop the hyphen, the breaks and the short lines
+        continue;
+      }
     }
     at.push(i);
     flat += text[i];
   }
-  return findInternalRefs(flat).map((r) => ({ start: at[r.start], end: at[r.end - 1] + 1 }));
+  return findInternalRefs(flat).map((r) => {
+    const out = { start: at[r.start], end: at[r.end - 1] + 1 };
+    const inside = gaps.filter(([a, b]) => a >= out.start && b <= out.end);
+    if (inside.length) out.gaps = inside;
+    return out;
+  });
 }
 
 // A numeric citation bracket: a number list, optionally followed by a single
