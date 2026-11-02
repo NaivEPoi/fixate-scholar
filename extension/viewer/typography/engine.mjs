@@ -482,6 +482,7 @@ export class TypographyEngine {
   #allGen = 0; // bumped by every restore/re-process of all pages: an older queue (#processPages) stops
   #faceLoads = new Map(); // fontMode -> promise: its bundled faces loaded, or waited for FACE_LOAD_MS
   #batchMs = 0; // how long the latest batch of a pass took (#batchBudget)
+  #faceWarm = new Map(); // font stack -> promise: the face used once, in an idle task of its own (#warmFace)
 
   constructor(app, settings) {
     this.#app = app;
@@ -677,6 +678,58 @@ export class TypographyEngine {
       this.#faceLoads.set(mode, ready);
     }
     return ready;
+  }
+
+  /**
+   * Resolves once the current reading font's bundled face has been used for
+   * the first time, in an idle task of its own — at once in original-font
+   * mode. Once per face; tried again by the next pass if the face had not
+   * loaded.
+   *
+   * The first batch of a pass in a newly chosen face paid for that face's
+   * first use: the baseline probe (#baselineRatio) laid out text in it and
+   * the space-ink probe (#spacePaintsInk) drew it on a canvas, 5-9 ms
+   * together, inside a batch that already runs 40-60 ms. Both answers are
+   * cached per family and computed here exactly as the batch would compute
+   * them, with the face loaded (probed before it loads they would be the
+   * fallback's, so nothing is probed then); the bold face, which the
+   * emphasis prefixes are set in, is laid out once as well. The batch finds
+   * the answers cached and the faces in use.
+   */
+  #warmFace() {
+    const stack = FONT_STACKS[this.#settings?.fontMode ?? "original"];
+    if (!stack || typeof document === "undefined" || typeof requestIdleCallback !== "function") {
+      return Promise.resolve();
+    }
+    let warm = this.#faceWarm.get(stack);
+    if (!warm) {
+      warm = new Promise((resolve) => {
+        requestIdleCallback(() => {
+          try {
+            if (!this.#faceLoaded(stack)) {
+              this.#faceWarm.delete(stack);
+              return;
+            }
+            this.#baselineRatio(stack);
+            this.#spacePaintsInk(stack);
+            const probe = document.createElement("div");
+            probe.style.cssText =
+              "position:absolute;left:-99999px;top:0;visibility:hidden;white-space:nowrap;font-weight:700;font-size:16px;font-family:" +
+              stack;
+            probe.textContent = "Hxbdfhklgjpqy";
+            document.body.append(probe);
+            probe.getBoundingClientRect();
+            probe.remove();
+          } catch {
+            /* the pass probes for itself */
+          } finally {
+            resolve();
+          }
+        }, { timeout: 200 });
+      });
+      this.#faceWarm.set(stack, warm);
+    }
+    return warm;
   }
 
   /** Re-process every rendered page from a clean (restored) state. Used when
@@ -6957,10 +7010,11 @@ export class TypographyEngine {
     // loading (the Chrome race above), geometry reads would see the fallback.
     if (timing) timing.classify = Math.round(performance.now() - timing.t0);
     // A bundled reading face is asked for first (#bundledFacesReady), so the
-    // pass measures it and not the fallback.
+    // pass measures it and not the fallback, and used first in a task of its
+    // own (#warmFace), not in the pass's first batch.
     const kick = () => requestIdleCallback(work, { timeout: 200 });
     if (typeof document !== "undefined" && document.fonts?.ready) {
-      this.#bundledFacesReady().then(() => document.fonts.ready).then(kick, kick);
+      this.#bundledFacesReady().then(() => document.fonts.ready).then(() => this.#warmFace()).then(kick, kick);
     } else {
       kick();
     }
