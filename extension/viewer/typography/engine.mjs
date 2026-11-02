@@ -481,12 +481,36 @@ export class TypographyEngine {
   #pageSeq = new Map(); // pageNumber -> #passSeq of its latest pass
   #allGen = 0; // bumped by every restore/re-process of all pages: an older queue (#processPages) stops
   #faceLoads = new Map(); // fontMode -> promise: its bundled faces loaded, or waited for FACE_LOAD_MS
-  #batchMs = 0; // how long the latest batch of a pass took (#batchBudget)
+  #spanMs = 0; // how long the latest batch of a pass took, per span (#batchBudget)
+  #faceWarm = new Map(); // font stack -> promise: the face used once, in an idle task of its own (#warmFace)
 
   constructor(app, settings) {
     this.#app = app;
     this.#settings = settings;
     if (settings?.lineModel === true) ensureLineModel();
+    this.#primeFaces();
+  }
+
+  /**
+   * Load one bundled face now, while the viewer has little or no text: the
+   * current reading font's regular face when it is a bundled one (the first
+   * pass asks for it anyway, #bundledFacesReady, whose wait starts with that
+   * pass as before), otherwise the smallest bundled file (Lexend 400, 14 KB),
+   * which nothing renders in.
+   *
+   * The first of our @font-face faces to load in a document makes the
+   * browser lay out every text object again, the whole text layer of every
+   * rendered page, and repaint it: measured on a switch to a bundled face,
+   * headless, seven rendered pages of a two-column paper, one rendering task
+   * of 107 ms (layout 40-48 ms over 32,000 objects, paint 50-70 ms) right
+   * after the face arrived. A face loaded after another one does not (the
+   * second switch, to another face, has no such task, whichever face comes
+   * first), so with one loaded here a switch costs its own face's load only.
+   */
+  #primeFaces() {
+    if (typeof document === "undefined" || !document.fonts?.load) return;
+    const stack = FONT_STACKS[this.#settings?.fontMode] ?? FONT_STACKS.lexend;
+    document.fonts.load(`16px ${stack}`).catch(() => {});
   }
 
   /**
@@ -677,6 +701,58 @@ export class TypographyEngine {
       this.#faceLoads.set(mode, ready);
     }
     return ready;
+  }
+
+  /**
+   * Resolves once the current reading font's bundled face has been used for
+   * the first time, in an idle task of its own — at once in original-font
+   * mode. Once per face; tried again by the next pass if the face had not
+   * loaded.
+   *
+   * The first batch of a pass in a newly chosen face paid for that face's
+   * first use: the baseline probe (#baselineRatio) laid out text in it and
+   * the space-ink probe (#spacePaintsInk) drew it on a canvas, 5-9 ms
+   * together, inside a batch that already runs 40-60 ms. Both answers are
+   * cached per family and computed here exactly as the batch would compute
+   * them, with the face loaded (probed before it loads they would be the
+   * fallback's, so nothing is probed then); the bold face, which the
+   * emphasis prefixes are set in, is laid out once as well. The batch finds
+   * the answers cached and the faces in use.
+   */
+  #warmFace() {
+    const stack = FONT_STACKS[this.#settings?.fontMode ?? "original"];
+    if (!stack || typeof document === "undefined" || typeof requestIdleCallback !== "function") {
+      return Promise.resolve();
+    }
+    let warm = this.#faceWarm.get(stack);
+    if (!warm) {
+      warm = new Promise((resolve) => {
+        requestIdleCallback(() => {
+          try {
+            if (!this.#faceLoaded(stack)) {
+              this.#faceWarm.delete(stack);
+              return;
+            }
+            this.#baselineRatio(stack);
+            this.#spacePaintsInk(stack);
+            const probe = document.createElement("div");
+            probe.style.cssText =
+              "position:absolute;left:-99999px;top:0;visibility:hidden;white-space:nowrap;font-weight:700;font-size:16px;font-family:" +
+              stack;
+            probe.textContent = "Hxbdfhklgjpqy";
+            document.body.append(probe);
+            probe.getBoundingClientRect();
+            probe.remove();
+          } catch {
+            /* the pass probes for itself */
+          } finally {
+            resolve();
+          }
+        }, { timeout: 200 });
+      });
+      this.#faceWarm.set(stack, warm);
+    }
+    return warm;
   }
 
   /** Re-process every rendered page from a clean (restored) state. Used when
@@ -950,9 +1026,15 @@ export class TypographyEngine {
    * (its spans' masks clamp against the obstacles its own read pass
    * records), and a callback past its deadline still runs one, as before;
    * only where the pass hands over to the next idle period moves.
+   *
+   * The estimate is per span, for the batch about to start: the latest
+   * batch is often a page's last, a few spans long, and its time taken
+   * whole let the next page's first stage and first full batch share one
+   * callback (a 13-span batch of 6 ms asked for 12 ms, where 60 spans take
+   * 25-50).
    */
-  #batchBudget() {
-    return Math.max(4, 2 * this.#batchMs);
+  #batchBudget(spans) {
+    return Math.max(4, 2 * this.#spanMs * spans);
   }
 
   /** Resolves once the browser has rendered the next frame — or at once in
@@ -6528,7 +6610,7 @@ export class TypographyEngine {
       // between callbacks (the `frame` shift), so nothing here goes stale.
       if (deadline && i === 0 && !stageYielded && i < pairs.length) {
         stageYielded = true;
-        if (deadline.timeRemaining() < this.#batchBudget()) {
+        if (deadline.timeRemaining() < this.#batchBudget(Math.min(CHUNK, pairs.length))) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }
@@ -6978,9 +7060,9 @@ export class TypographyEngine {
             wrapInk(span, runs);
           }
         }
+        this.#spanMs = (performance.now() - tBatch) / (end - i);
         i = end;
-        this.#batchMs = performance.now() - tBatch;
-        if (deadline && deadline.timeRemaining() < this.#batchBudget() && i < pairs.length) {
+        if (deadline && deadline.timeRemaining() < this.#batchBudget(Math.min(CHUNK, pairs.length - i)) && i < pairs.length) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }
@@ -6994,10 +7076,11 @@ export class TypographyEngine {
     // loading (the Chrome race above), geometry reads would see the fallback.
     if (timing) timing.classify = Math.round(performance.now() - timing.t0);
     // A bundled reading face is asked for first (#bundledFacesReady), so the
-    // pass measures it and not the fallback.
+    // pass measures it and not the fallback, and used first in a task of its
+    // own (#warmFace), not in the pass's first batch.
     const kick = () => requestIdleCallback(work, { timeout: 200 });
     if (typeof document !== "undefined" && document.fonts?.ready) {
-      this.#bundledFacesReady().then(() => document.fonts.ready).then(kick, kick);
+      this.#bundledFacesReady().then(() => document.fonts.ready).then(() => this.#warmFace()).then(kick, kick);
     } else {
       kick();
     }
