@@ -918,8 +918,8 @@ export class TypographyEngine {
     const due = (pv) =>
       !!pv.textLayer?.div?.childElementCount && (this.#pageSeq.get(pv.id) ?? 0) <= since;
     // Where the pages are is read after the next frame. The change that
-    // asked for this pass has usually just restyled the whole document (a
-    // font switch sets data-fx-font and every page's spans with it), and
+    // asked for this pass may just have restyled the whole document (the
+    // emphasis style used to follow a font switch on every page at once), and
     // measuring the pages at once forced that restyle and layout — 90 ms
     // and 80 ms over ten pages — inside the settings handler; after the
     // frame the browser has done it in its own rendering step, and the
@@ -4533,6 +4533,15 @@ export class TypographyEngine {
     // stale. Restore to pristine synchronously — the page shows its native
     // rendering rather than a half-stale hybrid — then process fresh below.
     this.#restorePage(pageView);
+    // The emphasis style follows the reading font (overlay.css: 400 + shadow
+    // in the original face, the bundled face's own weights otherwise), and it
+    // is chosen per page, here, where the page holds no emphasis: a font
+    // switch restyles each page as its pass reaches it, not every page's
+    // emphasis at once, and a page still waiting keeps the style its spans
+    // were measured with. Set before anything below measures the page.
+    if (pageView.textLayer?.div) {
+      pageView.textLayer.div.dataset.fxFace = this.#settings.fontMode ?? "original";
+    }
     // Font-only mode with the ORIGINAL font changes nothing visually — leave
     // the page pristine (no masks, no re-render, no drift risk).
     if (
