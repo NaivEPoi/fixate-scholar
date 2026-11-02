@@ -163,8 +163,17 @@
    bold is a single heavy weight that also changes glyph advances. In
    original-font mode, keep the face at 400 and emphasize with the shadow alone
    — its width follows the weight slider, giving a true light/semi/heavy
-   range at zero layout cost. */
-#viewerContainer.fx-on[data-fx-font="original"] .textLayer span[data-fx-done] .fx-b {
+   range at zero layout cost.
+
+   The mode is read from the PAGE's text layer (data-fx-face), which the
+   engine sets as each page's pass starts, not from the viewer: on the
+   viewer it restyled and re-laid-out every emphasized prefix of every
+   rendered page in one go the moment the font changed (the 400/700 swap
+   re-shapes the text), while each page's spans still sat in the old face
+   until its own pass reached it. Per page, a page takes the new emphasis
+   style with the spans its pass writes, and one still waiting keeps the
+   style its spans were measured with. */
+#viewerContainer.fx-on .textLayer[data-fx-face="original"] span[data-fx-done] .fx-b {
   font-weight: 400;
   text-shadow: var(--fx-shadow, 0.00625em 0 currentColor, -0.00625em 0 currentColor, 0 0.00625em currentColor, 0 -0.00625em currentColor);
 }
@@ -180,7 +189,7 @@
   text-shadow: var(--fx-stack-shadow, none);
 }
 
-#viewerContainer.fx-on[data-fx-font="original"] .textLayer span[data-fx-done] .fx-b::selection {
+#viewerContainer.fx-on .textLayer[data-fx-face="original"] span[data-fx-done] .fx-b::selection {
   text-shadow: var(--fx-shadow, 0.00625em 0 currentColor, -0.00625em 0 currentColor, 0 0.00625em currentColor, 0 -0.00625em currentColor);
 }
 

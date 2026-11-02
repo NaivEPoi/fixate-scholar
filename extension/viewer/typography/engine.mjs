@@ -481,6 +481,7 @@ export class TypographyEngine {
   #pageSeq = new Map(); // pageNumber -> #passSeq of its latest pass
   #allGen = 0; // bumped by every restore/re-process of all pages: an older queue (#processPages) stops
   #faceLoads = new Map(); // fontMode -> promise: its bundled faces loaded, or waited for FACE_LOAD_MS
+  #batchMs = 0; // how long the latest batch of a pass took (#batchBudget)
 
   constructor(app, settings) {
     this.#app = app;
@@ -918,8 +919,8 @@ export class TypographyEngine {
     const due = (pv) =>
       !!pv.textLayer?.div?.childElementCount && (this.#pageSeq.get(pv.id) ?? 0) <= since;
     // Where the pages are is read after the next frame. The change that
-    // asked for this pass has usually just restyled the whole document (a
-    // font switch sets data-fx-font and every page's spans with it), and
+    // asked for this pass may just have restyled the whole document (the
+    // emphasis style used to follow a font switch on every page at once), and
     // measuring the pages at once forced that restyle and layout — 90 ms
     // and 80 ms over ten pages — inside the settings handler; after the
     // frame the browser has done it in its own rendering step, and the
@@ -933,6 +934,25 @@ export class TypographyEngine {
       if (!due(pv)) continue;
       await this.#processPage(pv);
     }
+  }
+
+  /**
+   * The idle time a pass needs left before it starts another batch: twice
+   * what the latest batch took, and never under 4 ms.
+   *
+   * A batch (CHUNK spans) costs 20-40 ms, and the pass started one whenever
+   * 4 ms of the idle period remained — so a callback given a full 50 ms
+   * period ran a second batch past its end, and the first callback of a
+   * page, the first stage and a batch after it, ran 55-70 ms. Measured,
+   * those were the longest tasks of a font switch. Twice, not once: the
+   * first batch in a newly chosen face costs more than the last one in the
+   * old face, which is the estimate it gets. A batch is still never split
+   * (its spans' masks clamp against the obstacles its own read pass
+   * records), and a callback past its deadline still runs one, as before;
+   * only where the pass hands over to the next idle period moves.
+   */
+  #batchBudget() {
+    return Math.max(4, 2 * this.#batchMs);
   }
 
   /** Resolves once the browser has rendered the next frame — or at once in
@@ -4554,6 +4574,15 @@ export class TypographyEngine {
     // stale. Restore to pristine synchronously — the page shows its native
     // rendering rather than a half-stale hybrid — then process fresh below.
     this.#restorePage(pageView);
+    // The emphasis style follows the reading font (overlay.css: 400 + shadow
+    // in the original face, the bundled face's own weights otherwise), and it
+    // is chosen per page, here, where the page holds no emphasis: a font
+    // switch restyles each page as its pass reaches it, not every page's
+    // emphasis at once, and a page still waiting keeps the style its spans
+    // were measured with. Set before anything below measures the page.
+    if (pageView.textLayer?.div) {
+      pageView.textLayer.div.dataset.fxFace = this.#settings.fontMode ?? "original";
+    }
     // Font-only mode with the ORIGINAL font changes nothing visually — leave
     // the page pristine (no masks, no re-render, no drift risk).
     if (
@@ -6472,14 +6501,25 @@ export class TypographyEngine {
       // between callbacks (the `frame` shift), so nothing here goes stale.
       if (deadline && i === 0 && !stageYielded && i < pairs.length) {
         stageYielded = true;
-        if (deadline.timeRemaining() < 4) {
+        if (deadline.timeRemaining() < this.#batchBudget()) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }
       }
       while (i < pairs.length) {
+        const tBatch = performance.now();
         const end = Math.min(i + CHUNK, pairs.length);
         const batch = [];
+        // A bundled face drawn at a scale (FONT_SCALES) sizes each span from
+        // its own font size, read here with the geometry: read in the content
+        // pass below, after the spans before it had been rewritten, every
+        // read forced a style recalculation of the dirtied text layer — one
+        // per span, sixty per batch. Nothing the content pass writes before
+        // that read changes a span's font size.
+        const readsBasePx = (() => {
+          const m = this.#settings.fontMode ?? "original";
+          return m !== "original" && Boolean(FONT_STACKS[m]) && (FONT_SCALES[m] ?? 1.0) !== 1.0;
+        })();
         // Read pass: pristine geometry.
         for (let j = i; j < end; j++) {
           const pair = pairs[j];
@@ -6545,7 +6585,10 @@ export class TypographyEngine {
             vpScale && pair.item?.width > 0
               ? pair.item.width * vpScale
               : rect.width;
-          batch.push({ pair, parts: result.parts, rect, targetW, wordStart, join });
+          const basePx = readsBasePx
+            ? parseFloat(pair.div.style.fontSize) || parseFloat(getComputedStyle(pair.div).fontSize)
+            : undefined;
+          batch.push({ pair, parts: result.parts, rect, targetW, wordStart, join, basePx });
         }
         // Content + font pass: rewrite each span as bold-prefix + rest, swap in
         // the chosen face, and RE-SEAT THE BASELINE. PDF.js set each span's top
@@ -6598,8 +6641,8 @@ export class TypographyEngine {
               const scale = isBundled ? (FONT_SCALES[mode] ?? 1.0) : 1.0;
               if (scale !== 1.0) {
                 const basePx =
-                  parseFloat(span.style.fontSize) ||
-                  parseFloat(getComputedStyle(span).fontSize);
+                  entry.basePx ??
+                  (parseFloat(span.style.fontSize) || parseFloat(getComputedStyle(span).fontSize));
                 if (basePx > 0) {
                   span.style.fontSize = `${(basePx * scale).toFixed(3)}px`;
                 }
@@ -6899,7 +6942,8 @@ export class TypographyEngine {
           }
         }
         i = end;
-        if (deadline && deadline.timeRemaining() < 4 && i < pairs.length) {
+        this.#batchMs = performance.now() - tBatch;
+        if (deadline && deadline.timeRemaining() < this.#batchBudget() && i < pairs.length) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }
