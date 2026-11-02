@@ -488,6 +488,29 @@ export class TypographyEngine {
     this.#app = app;
     this.#settings = settings;
     if (settings?.lineModel === true) ensureLineModel();
+    this.#primeFaces();
+  }
+
+  /**
+   * Load one bundled face now, while the viewer has little or no text: the
+   * current reading font's regular face when it is a bundled one (the first
+   * pass asks for it anyway, #bundledFacesReady, whose wait starts with that
+   * pass as before), otherwise the smallest bundled file (Lexend 400, 14 KB),
+   * which nothing renders in.
+   *
+   * The first of our @font-face faces to load in a document makes the
+   * browser lay out every text object again, the whole text layer of every
+   * rendered page, and repaint it: measured on a switch to a bundled face,
+   * headless, seven rendered pages of a two-column paper, one rendering task
+   * of 107 ms (layout 40-48 ms over 32,000 objects, paint 50-70 ms) right
+   * after the face arrived. A face loaded after another one does not (the
+   * second switch, to another face, has no such task, whichever face comes
+   * first), so with one loaded here a switch costs its own face's load only.
+   */
+  #primeFaces() {
+    if (typeof document === "undefined" || !document.fonts?.load) return;
+    const stack = FONT_STACKS[this.#settings?.fontMode] ?? FONT_STACKS.lexend;
+    document.fonts.load(`16px ${stack}`).catch(() => {});
   }
 
   /**
