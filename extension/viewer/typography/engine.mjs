@@ -481,6 +481,7 @@ export class TypographyEngine {
   #pageSeq = new Map(); // pageNumber -> #passSeq of its latest pass
   #allGen = 0; // bumped by every restore/re-process of all pages: an older queue (#processPages) stops
   #faceLoads = new Map(); // fontMode -> promise: its bundled faces loaded, or waited for FACE_LOAD_MS
+  #batchMs = 0; // how long the latest batch of a pass took (#batchBudget)
 
   constructor(app, settings) {
     this.#app = app;
@@ -933,6 +934,25 @@ export class TypographyEngine {
       if (!due(pv)) continue;
       await this.#processPage(pv);
     }
+  }
+
+  /**
+   * The idle time a pass needs left before it starts another batch: twice
+   * what the latest batch took, and never under 4 ms.
+   *
+   * A batch (CHUNK spans) costs 20-40 ms, and the pass started one whenever
+   * 4 ms of the idle period remained — so a callback given a full 50 ms
+   * period ran a second batch past its end, and the first callback of a
+   * page, the first stage and a batch after it, ran 55-70 ms. Measured,
+   * those were the longest tasks of a font switch. Twice, not once: the
+   * first batch in a newly chosen face costs more than the last one in the
+   * old face, which is the estimate it gets. A batch is still never split
+   * (its spans' masks clamp against the obstacles its own read pass
+   * records), and a callback past its deadline still runs one, as before;
+   * only where the pass hands over to the next idle period moves.
+   */
+  #batchBudget() {
+    return Math.max(4, 2 * this.#batchMs);
   }
 
   /** Resolves once the browser has rendered the next frame — or at once in
@@ -6460,12 +6480,13 @@ export class TypographyEngine {
       // between callbacks (the `frame` shift), so nothing here goes stale.
       if (deadline && i === 0 && !stageYielded && i < pairs.length) {
         stageYielded = true;
-        if (deadline.timeRemaining() < 4) {
+        if (deadline.timeRemaining() < this.#batchBudget()) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }
       }
       while (i < pairs.length) {
+        const tBatch = performance.now();
         const end = Math.min(i + CHUNK, pairs.length);
         const batch = [];
         // A bundled face drawn at a scale (FONT_SCALES) sizes each span from
@@ -6900,7 +6921,8 @@ export class TypographyEngine {
           }
         }
         i = end;
-        if (deadline && deadline.timeRemaining() < 4 && i < pairs.length) {
+        this.#batchMs = performance.now() - tBatch;
+        if (deadline && deadline.timeRemaining() < this.#batchBudget() && i < pairs.length) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }
