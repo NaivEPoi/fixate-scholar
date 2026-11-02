@@ -481,7 +481,7 @@ export class TypographyEngine {
   #pageSeq = new Map(); // pageNumber -> #passSeq of its latest pass
   #allGen = 0; // bumped by every restore/re-process of all pages: an older queue (#processPages) stops
   #faceLoads = new Map(); // fontMode -> promise: its bundled faces loaded, or waited for FACE_LOAD_MS
-  #batchMs = 0; // how long the latest batch of a pass took (#batchBudget)
+  #spanMs = 0; // how long the latest batch of a pass took, per span (#batchBudget)
   #faceWarm = new Map(); // font stack -> promise: the face used once, in an idle task of its own (#warmFace)
 
   constructor(app, settings) {
@@ -1003,9 +1003,15 @@ export class TypographyEngine {
    * (its spans' masks clamp against the obstacles its own read pass
    * records), and a callback past its deadline still runs one, as before;
    * only where the pass hands over to the next idle period moves.
+   *
+   * The estimate is per span, for the batch about to start: the latest
+   * batch is often a page's last, a few spans long, and its time taken
+   * whole let the next page's first stage and first full batch share one
+   * callback (a 13-span batch of 6 ms asked for 12 ms, where 60 spans take
+   * 25-50).
    */
-  #batchBudget() {
-    return Math.max(4, 2 * this.#batchMs);
+  #batchBudget(spans) {
+    return Math.max(4, 2 * this.#spanMs * spans);
   }
 
   /** Resolves once the browser has rendered the next frame — or at once in
@@ -6554,7 +6560,7 @@ export class TypographyEngine {
       // between callbacks (the `frame` shift), so nothing here goes stale.
       if (deadline && i === 0 && !stageYielded && i < pairs.length) {
         stageYielded = true;
-        if (deadline.timeRemaining() < this.#batchBudget()) {
+        if (deadline.timeRemaining() < this.#batchBudget(Math.min(CHUNK, pairs.length))) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }
@@ -6994,9 +7000,9 @@ export class TypographyEngine {
             wrapInk(span, runs);
           }
         }
+        this.#spanMs = (performance.now() - tBatch) / (end - i);
         i = end;
-        this.#batchMs = performance.now() - tBatch;
-        if (deadline && deadline.timeRemaining() < this.#batchBudget() && i < pairs.length) {
+        if (deadline && deadline.timeRemaining() < this.#batchBudget(Math.min(CHUNK, pairs.length - i)) && i < pairs.length) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }
