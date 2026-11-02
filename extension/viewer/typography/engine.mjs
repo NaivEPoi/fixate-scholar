@@ -6888,12 +6888,14 @@ export class TypographyEngine {
           const prevScale =
             parseFloat(span.style.getPropertyValue("--scale-x")) || 1;
           const natural = newWidth / prevScale;
-          if (Math.abs(natural - targetW) <= 0.5) {
+          const spaces = (span.textContent.match(/ /g) || []).length;
+          // A face's base word-spacing widens every space, so a span that
+          // has spaces is never already at its width with it (below).
+          if (Math.abs(natural - targetW) <= 0.5 && !(baseSpacingEm > 0 && spaces >= 1)) {
             if (prevScale !== 1) span.style.setProperty("--scale-x", 1);
             if (baseSpacingEm > 0) span.style.wordSpacing = `${baseSpacingEm}em`;
             continue;
           }
-          const spaces = (span.textContent.match(/ /g) || []).length;
           // The two directions are NOT symmetric.
           //
           // A POSITIVE correction is justification surplus: the PDF set this
@@ -6906,14 +6908,22 @@ export class TypographyEngine {
           // same point size. Spending that on word-spacing eats the inter-word
           // gaps themselves, and they are the one piece of horizontal space a
           // reader actually reads. When using bundled reading fonts, we NEVER
-          // trim spaces negatively (minTrim = 0): inter-word gaps remain wide,
+          // trim spaces negatively (minTrim >= 0): inter-word gaps remain wide,
           // open, and legible, while width shrink goes to --scale-x.
+          //
+          // A face's base word-spacing (FONT_BASE_WORD_SPACING) is the FLOOR of
+          // that widening, not an addition on top of the fit: added after it,
+          // uncounted in `carried`, it ran every span 0.04em per space past
+          // its canvas width — Literata's processed "C" opening a faked
+          // small-caps word ("C"+"ORE" at the end of a prose span) overlapped
+          // the kept "ORE" (R66). Counted here, the spaces open by at least
+          // the base and --scale-x takes back what that costs.
           if (spaces >= 1) {
             const raw = (targetW - natural) / spaces;
-            const minTrim = isBundled ? 0 : rect.height * -MAX_SPACE_TRIM;
-            const perSpace = Math.min(rect.height * MAX_SPACE_STRETCH, Math.max(minTrim, raw));
             const fontPx = measuredFontPx || rect.height;
-            const totalSpacingEm = baseSpacingEm + perSpace / fontPx;
+            const minTrim = isBundled ? baseSpacingEm * fontPx : rect.height * -MAX_SPACE_TRIM;
+            const perSpace = Math.min(rect.height * MAX_SPACE_STRETCH, Math.max(minTrim, raw));
+            const totalSpacingEm = perSpace / fontPx;
             if (Math.abs(totalSpacingEm) > 0.001) {
               span.style.wordSpacing = `${totalSpacingEm.toFixed(4)}em`;
             } else {
