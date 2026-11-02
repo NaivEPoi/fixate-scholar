@@ -6468,6 +6468,16 @@ export class TypographyEngine {
       while (i < pairs.length) {
         const end = Math.min(i + CHUNK, pairs.length);
         const batch = [];
+        // A bundled face drawn at a scale (FONT_SCALES) sizes each span from
+        // its own font size, read here with the geometry: read in the content
+        // pass below, after the spans before it had been rewritten, every
+        // read forced a style recalculation of the dirtied text layer — one
+        // per span, sixty per batch. Nothing the content pass writes before
+        // that read changes a span's font size.
+        const readsBasePx = (() => {
+          const m = this.#settings.fontMode ?? "original";
+          return m !== "original" && Boolean(FONT_STACKS[m]) && (FONT_SCALES[m] ?? 1.0) !== 1.0;
+        })();
         // Read pass: pristine geometry.
         for (let j = i; j < end; j++) {
           const pair = pairs[j];
@@ -6533,7 +6543,10 @@ export class TypographyEngine {
             vpScale && pair.item?.width > 0
               ? pair.item.width * vpScale
               : rect.width;
-          batch.push({ pair, parts: result.parts, rect, targetW, wordStart, join });
+          const basePx = readsBasePx
+            ? parseFloat(pair.div.style.fontSize) || parseFloat(getComputedStyle(pair.div).fontSize)
+            : undefined;
+          batch.push({ pair, parts: result.parts, rect, targetW, wordStart, join, basePx });
         }
         // Content + font pass: rewrite each span as bold-prefix + rest, swap in
         // the chosen face, and RE-SEAT THE BASELINE. PDF.js set each span's top
@@ -6586,8 +6599,8 @@ export class TypographyEngine {
               const scale = isBundled ? (FONT_SCALES[mode] ?? 1.0) : 1.0;
               if (scale !== 1.0) {
                 const basePx =
-                  parseFloat(span.style.fontSize) ||
-                  parseFloat(getComputedStyle(span).fontSize);
+                  entry.basePx ??
+                  (parseFloat(span.style.fontSize) || parseFloat(getComputedStyle(span).fontSize));
                 if (basePx > 0) {
                   span.style.fontSize = `${(basePx * scale).toFixed(3)}px`;
                 }
