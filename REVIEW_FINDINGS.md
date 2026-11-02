@@ -7243,7 +7243,7 @@ scripts attach to (`script-attach`) and stayed plain mid-sentence on
 two papers. A fragment that opens on sentence punctuation and a word is
 the sentence resuming, not a base.
 
-### Left for the next round
+### Left for the next round (fixed as R64, below)
 
 A labelled constraint row ("Units touched by user: name = …") whose
 operand name follows a label with a function word, and the same
@@ -7259,3 +7259,176 @@ the row's ratio); a ". As shown in" at a column's foot merged into a
 footnote block (`blk-footnote`); an "in (3), (4), (7), and (8)."
 taken for a run of equation references (`url-or-math`) — one public
 arXiv paper, one private.
+
+## R64 — the sheet R63 left, fixed by assigned subagents (2026-10-29)
+
+Four tasks, one subagent each (Opus 5.5), each briefed with the
+mechanism as far as R63 had read it, each required to read the page's
+dump before a rule moved, to verify by re-dump against a before-dump,
+to spot-check named regression pages span for span, and to run the
+unit tests; none committed, none touched this file. Three of the four
+found the mechanism was not the one the brief guessed, and fixed the
+real one. The gate ran after all four, on the combined tree.
+
+### The fraction's named operand, and the labelled constraint rows
+
+The numerator row was not one item but three: TeX's extension face
+draws a displayed sum under the code of a letter, so the text layer
+holds two one-letter math-face items and the name, and no operator
+glyph to find — the named-row test's glyph requirement failed. A row
+whose math-face items outnumber its names has its operator in them.
+And a constraint written "<label>: <name> = <math>" opens on its
+label, whose words may hold a function word: the first word-bearing
+item, when it ends with a colon, is set aside, the row judged from the
+item after it, and — only after a label — the row may open on the name
+when an operator or relation glyph follows it. Two labelled rows and
+the numerator are `row-eqn`; the four copies of the names in the
+page's notation list stay processed.
+
+### A description wrapped under its label, with the item's equation
+
+The constraint item's two description lines, the first opening after
+the label and the second wrapped to the column's edge, sat in a block
+with the item's equation row, whose gaps made the block a table (or,
+with equation rows excluded from the count, a tagged equation block —
+either way kept whole through the sparing rule, whose rows must run
+most of the block's width, which a line opening after a label cannot).
+The sparing now takes a WRAP: two rows of three lowercase words with
+no cell gap, the upper running to the block's right edge and the
+lower starting back at its left, at any width. A table's wrapped cell
+restarts at its column, not at the block's left edge. Seven pages of
+real tables (a comparison table and its key, a table with a small-type
+key, a full-width table with a note, two public tables, two
+derivation pages) are span-for-span unchanged.
+
+### Three fragments after an inline formula
+
+- ", which is written as", the lead-in to a display on a body line:
+  not the ratio branch but the fraction-neighbour sweep beside the
+  numbered row below — the inline formula's items made the line
+  "built", and "is" and "as" are too short for its word count. An
+  equation's row never ends on a sentence's phrase: the last
+  word-bearing text-face item running three lowercase words with a
+  function word among them vetoes the sweep.
+- ". As shown in" at a column's foot: a body paragraph dense with
+  inline mathematics, each line with its row of scripts, averaged
+  below the body's height and, its first item a script glyph, passed
+  for a footnote; the whole block was kept. The footnote skip now
+  spares the block's rows whose words are at the body's size
+  (`skipBlockExcept`, the row loop `skipBlockSparing` shares). Real
+  footnotes on five public pages stay kept.
+- "in (3), (4), (7), and (8).": the segmenter's digits-versus-
+  letters test for a formula or URL, which does not know a bare
+  equation reference. A span holding a whole lowercase function word
+  has its free-standing "(12)" references blanked before the count; a
+  function applied, "x(1)", still counts.
+
+### The sequence-notation line
+
+Each letter and each subscript of an inline sequence is its own
+one-character item, so the spacing is never regular from item to item,
+and the starts lined up with the seed row's real word-to-symbol
+starts. A one-character item flanked on both sides by one-character
+items is a sequence's interior, not a cell: its start is not offered
+to the aligned-starts rule. A row's outermost one-character cells are
+never flanked on both sides, so tables of marks or digits keep their
+edge columns (one public table lost its interior one-character
+starts and still matched its seven rows). The paragraph is processed
+whole; the page's two real tables keep their records.
+
+### What the first gate run added
+
+The combined tree's first run changed 20 pages against v1.4.3; reading
+them found the label rule of the first task taking a body line that
+runs into a colon for a constraint's label on five pages (four
+private, one public): the item after the colon — a math letter, a
+monospace name, a URL — then opened the row on mathematics, and a
+glyph in the row stood for the operator. A label opens on a capital
+letter and holds no sentence break before its colon; the five lines
+are processed again, the three real labels on the constraint page are
+still labels. The other changes read as gains: a column foot's
+body-size lines released from a footnote block on a public paper, a
+paragraph with inline mathematics released from the aligned-starts
+rule on a private one, two lead-in phrases on a public paper released
+by the sentence-tail veto.
+
+### The font switch, measured and rescheduled (a performance task)
+
+The user reported the browser freezing for seconds on a font switch.
+A subagent measured it on the real display before the headful ban
+(and headless after): on a switch, every rendered page was restored
+and re-processed at once — ten passes in flight, their idle callbacks
+timing out together into 21–25 tasks of 50–190 ms in the first three
+seconds — and, twelve to twenty seconds later, a second full pass: the
+bundled face was fetched only when a pass first laid a span out in
+it, the busy page held the fetch back, and when the face arrived
+`refreshFonts` re-processed every page again. Three commits, merged
+from the branch `perf/font-switch`:
+
+- A font switch re-processes the pages in view first and the rest one
+  at a time, nearest first, each restored where its own pass starts;
+  a page that left the DOM or was restarted by a newer pass is skipped,
+  and a newer re-process or reading mode switched off ends the queue.
+  `refreshFonts` re-processes only the pages laid out before their face
+  had loaded. The DOM digests of every processed span and mask after
+  three switches are identical to v1.4.3 on seven pages.
+- A bundled face is loaded before the pass that measures it (at most
+  three seconds' wait). This changes what the FIRST switch renders, on
+  purpose: the fallback's baseline ratio had been cached by the first
+  measurement, so processed spans sat a pixel or two below kept text in
+  the same line until a reload; with the face loaded first they share
+  the baseline. Digests identical to v1.4.3 run with the face already
+  loaded.
+- Where the pages are is read after the next frame, not in the
+  settings task, which had forced the whole document's restyle and
+  layout (about 170 ms) inside it.
+
+Measured on the real display before the change: 20 passes, 44 tasks
+over 50 ms, total blocked time 1162 ms, longest freeze 608 ms, and the
+second burst at 19 s; after the first commit: 11 passes, 24 tasks,
+longest freeze 450 ms, no second burst. Headless, after the third
+commit against the second: total blocked time on one face down from
+311 to 233 ms over three runs, the other face unchanged within noise.
+The real display was not re-measured after the second and third
+commits (the headful harness was stopped at the user's request); the
+restyle itself and the per-chunk tasks remain.
+
+### Gate
+
+Run on the final tree (the classification fixes above and the three
+font-switch commits merged), lanes two at a time because the machine
+is in use: fontkeep, whyskip, eqkeep, refcolor, tables and citepoint
+PASS on 48/48 documents, no retries, whyskip unreasoned 0 and trailing
+0 on every page; console silent on 49/49 (47 upstream messages, all
+matched by the two-entry allowlist, re-read this release); option gate
+(`--line`) PASS 49/49, its diff against the plain run ten pages, all
+the line model's own relabels — two `model-heading` keeps, six
+`line-head` releases, two tables relabelled `model-table`, one of them
+the public page R61–R63 read; unit tests 338.
+Skip-reason diff against the v1.4.3 release tree, same harness, same
+zoom: 749/749 pages compared, 14 changed, every one read from dumps:
+the operands and labels kept with their equations, the sequence
+paragraph and the paragraph taken for a table released, the where-lines
+and the fragments after inline formulas released, a column foot's body
+lines released from a footnote block, and the rest neutral relabels.
+
+The private corpus grew by one document while the console and option
+lanes were starting, which moved every positional alias from the sixth
+on by one: the option diff first showed 96 "changed" pages that were
+one paper compared with its neighbour. The plain baseline was re-keyed
+and the diff re-run; the new document was then put through the plain
+lane (PASS, unreasoned 0), the console lane and the option lane, and
+seven of its pages read by eye: clean. Its first four pages are a
+submission system's cover sheet at about one and a half times the
+paper's page size, every span skipped as `over-body`, which is the
+right reading of a form that is not the paper. A gate's lane runner
+must count the corpus before each launch and before each diff.
+
+### Left for the next round
+
+The name spans in a definition line (a two-word verb phrase between a
+set-notation left side and its predicate) still read as an operand; a
+capitalised one-clause sentence that ends in a colon could still be
+taken for a row label; the font switch's per-chunk tasks and the
+170 ms restyle remain, and the real display was not re-measured after
+the last two scheduling commits.
