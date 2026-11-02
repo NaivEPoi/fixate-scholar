@@ -2098,10 +2098,19 @@ export class TypographyEngine {
       // Words no named quantity carries and every sentence does.
       const FUNCTION_WORD = /\b(?:the|of|and|or|to|in|is|are|be|for|with|by|as|that|we|an?|between|from|on|at|gives?|yields?|becomes?|holds?|implies|obtain|get|have|has|where|then|thus|hence|so|which|if|when|let|since|setting|using)\b/i;
       // A NAMED quantity's span: up to three words in the text face and no
-      // function word among them ("scale term", "max unit alloc"); a
+      // function word among them (a two-word name, a three-word one); a
       // row of an equation whose words are all such names is built of
       // names, not of a sentence.
-      const nameSpan = (p) => { const t = p.item.str.trim(); return t.split(/\s+/).length <= 3 && !FUNCTION_WORD.test(t); };
+      // A name is a NOUN phrase: it carries no adverb on a verb. A word
+      // made from an adjective with -ly (-ely, -tly, -lly, -sly: "closely",
+      // "exactly", "locally", "previously") with another word after it in
+      // the span is a verb phrase — "<adverb> <verb>" between a definition's
+      // set-notation left side and its predicate, on a line that wrapped to
+      // open on the formula, was read as an operand between math (R65, a
+      // private paper). The -ly words a quantity's name does carry
+      // ("weekly", "anomaly", "supply", "assembly") end otherwise.
+      const ADVERB_LED = /\b[A-Za-z]{3,}[elst]ly\s+[a-z]/;
+      const nameSpan = (p) => { const t = p.item.str.trim(); return t.split(/\s+/).length <= 3 && !FUNCTION_WORD.test(t) && !ADVERB_LED.test(t); };
       for (const b of blocks) {
         for (const r of b.rows) {
           if (r.items.length < 3) continue;
@@ -2149,8 +2158,9 @@ export class TypographyEngine {
             !FUNCTION_WORD.test(rowTrim) &&
             r.items.filter((p) => isMath(p)).length >= 3;
           // An UNNUMBERED row of named quantities around an operator — the
-          // "(1 − flagged) · scale term" under an objective's max, in
-          // a fraction set beyond its tag row's reach — has prose words only
+          // parenthesised complement times a two-word name under an
+          // objective's max, in a fraction set beyond its tag row's reach —
+          // has prose words only
           // in name spans (nameSpan) and an operator glyph; with half its
           // items symbols it is an equation's row (R63, a private paper).
           // ...and the row OPENS on mathematics — a math item, a glyph, an
@@ -2169,11 +2179,21 @@ export class TypographyEngine {
           // following:"), or one that holds a sentence break before the
           // colon — is no label, and five such lines were kept as equation
           // rows (R64's gate, four private papers and a public one).
+          // ...and it is SHORT, and no one's sentence: at most five words
+          // from its first lettered one to the colon, and no "we". A row's
+          // label names a thing in a word or a few: the longest label the
+          // two corpora hold runs five words, the longest on a kept
+          // equation row four. The capitalised one-clause sentences that end
+          // in a colon before a formula ran six to nine (a first-person
+          // clause, a figure reference resumed by its verb), and a short
+          // one says who acts ("Hence we get:") (R65).
           const wordy = (p) => !isMath(p) && /[a-zà-ÿ]{3,}/.test(p.item.str);
           const li = r.items.findIndex(wordy);
           const labelText = li >= 0 ? r.items[li].item.str.trim() : "";
+          const labelWords = labelText.replace(/^[^A-Za-zÀ-ɏ]*/, "").split(/\s+/).filter(Boolean);
           const labelled = li >= 0 && li < r.items.length - 1 && labelText.endsWith(":") &&
-            /^[^A-Za-zÀ-ɏ]*[A-ZÀ-Þ]/.test(labelText) && !/[.;!?]\s/.test(labelText);
+            /^[^A-Za-zÀ-ɏ]*[A-ZÀ-Þ]/.test(labelText) && !/[.;!?]\s/.test(labelText) &&
+            labelWords.length <= 5 && !/\bwe\b/i.test(labelText);
           const lead0 = r.items[labelled ? li + 1 : 0];
           // ...or, after a label only, on the constraint's NAME — "<label>:
           // <name> ≥ <math>" — when an operator or relation glyph follows the
@@ -2259,9 +2279,10 @@ export class TypographyEngine {
               const nBody = nItems.filter((p) => (p.item.height || rh) >= rh * 0.8 && !isMath(p)).map((p) => p.item.str).join(" ");
               const nWords = (nBody.match(/(?:^|[^A-Za-zÀ-ÿ])([a-zà-ÿ]{3,})(?![A-Za-zÀ-ÿ])/g) ?? []).map((w) => w.replace(/^[^a-zà-ÿ]/, "")).filter((w) => !MATH_OP.test(w));
               const built = nItems.some((p) => isMath(p)) || MATH_SIGNAL.test(nText) || /[+=×·∑∫√∂−/]/.test(nText);
-              // ...or its words are all NAMED quantities' ("(1 − flagged)
-              // · scale term" under an objective's max, R62's visual step
-              // on a private paper): three words, none a function word.
+              // ...or its words are all NAMED quantities' (a parenthesised
+              // complement times a two-word name under an objective's max,
+              // R62's visual step on a private paper): three words, none a
+              // function word.
               const named = nItems.filter((p) => !isMath(p) && /[a-zà-ÿ]{3,}/.test(p.item.str)).every(nameSpan);
               if (!built || (nWords.length > 2 && !named) || /[.;:!?]\s+[a-zà-ÿ]/.test(nText)) continue;
               // ...and an equation's row never ENDS on a sentence's phrase: a

@@ -7021,9 +7021,9 @@ mechanisms, fixed before the final run:
 - The figure sweep's tail absorb took a parameter list's label and its
   first items for a paragraph's tail under a line that ran on: the
   absorbed line must now carry a lowercase word of its own.
-- A row of a displayed equation built of NAMED quantities — "(1 −
-  flagged) · scale term" under an objective's max, three words
-  and none a function word — is swept with its numbered row as a
+- A row of a displayed equation built of NAMED quantities — a
+  parenthesised complement times a two-word name under an objective's
+  max, three words and none a function word — is swept with its numbered row as a
   fraction's part is; a row opening on an operator's name is not a
   sentence's. On the page that showed it, two of five such operands
   are now kept; the three in fractions set beyond the tag row's
@@ -7100,15 +7100,16 @@ and that line are processed.
 
 ### Named operands in a fraction set beyond the tag row
 
-The "(1 − flagged) · scale term" row of an objective's fraction
-lies outside its tag row's x-span, where R62's named-row sweep could
+The row of named quantities — a parenthesised complement times a
+two-word name — under an objective's max in a fraction lies outside
+its tag row's x-span, where R62's named-row sweep could
 not reach it. An UNNUMBERED row of named quantities around an operator
 glyph — every text-face span a name span (three tokens at most, no
 function word), an operator or relation in the row, half its items
 symbols — is an equation's row (`allNamed`, in the row-equation test).
 Three of the page's five such operands are kept now; the two that
-remain sit in labelled constraint rows ("Units touched by user: …")
-whose label carries a function word, and are prose to the test by
+remain sit in labelled constraint rows (a four-word label with a
+function word, then a colon) whose label carries a function word, and are prose to the test by
 design.
 
 ### A line of acronym expansions kept as a text-face formula
@@ -7245,8 +7246,8 @@ the sentence resuming, not a base.
 
 ### Left for the next round (fixed as R64, below)
 
-A labelled constraint row ("Units touched by user: name = …") whose
-operand name follows a label with a function word, and the same
+A labelled constraint row (a four-word label with a function word, a
+colon, then "name = …") whose operand name follows the label, and the same
 operand alone on a fraction's numerator row — one item, under the
 row-equation test's three — set in bold over its fraction bar (one
 private paper, two spans; the one the visual step confirmed); the
