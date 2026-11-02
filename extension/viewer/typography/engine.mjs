@@ -2130,7 +2130,34 @@ export class TypographyEngine {
       // private paper). The -ly words a quantity's name does carry
       // ("weekly", "anomaly", "supply", "assembly") end otherwise.
       const ADVERB_LED = /\b[A-Za-z]{3,}[elst]ly\s+[a-z]/;
-      const nameSpan = (p) => { const t = p.item.str.trim(); return t.split(/\s+/).length <= 3 && !FUNCTION_WORD.test(t) && !ADVERB_LED.test(t); };
+      // ...no MODAL or auxiliary verb ("<name> will <verb> …" after a
+      // small-caps name, a row that wrapped to open on an inline set
+      // formula), lowercase only — a capitalised one may be a name — and no
+      // SENTENCE BREAK: a lowercase word, a full stop and a capital is one
+      // sentence ending and the next one's subject (R66, a private paper).
+      const AUXILIARY = /\b(?:can|cannot|could|may|might|must|shall|should|will|would|was|were|been|does|did)\b/;
+      const SENTENCE_BREAK = /\b[a-z]{4,}[.;!?]\s+[A-Z]/;
+      // ...and a name takes no OBJECT: one lowercase word in the third
+      // person (-s, not -ss, -is, -us) whose next item opens a parenthesis
+      // is a verb with its object — "<math subject> <verb>s (<operands>)",
+      // an item of a condition list or a game's step (R66, two private
+      // papers). A function applied in an equation is named by its stem or
+      // a capitalised name, never a verb's -s form: across both corpora a
+      // lowercase word before "(" otherwise belongs to two dozen equation
+      // rows, a lone -s word otherwise to a score of them (plurals, an
+      // -ous adjective naming a quantity), and this shape to the two prose
+      // rows alone.
+      const VERB_S = /^[a-z]{2,}[a-hj-rt-z]s$/;
+      const takesObject = (p, row) => {
+        if (!row || !VERB_S.test(p.item.str.trim())) return false;
+        const i = row.indexOf(p);
+        return i >= 0 && /^\(/.test(row[i + 1]?.item.str.trim() ?? "");
+      };
+      const nameSpan = (p, row = null) => {
+        const t = p.item.str.trim();
+        return t.split(/\s+/).length <= 3 && !FUNCTION_WORD.test(t) && !ADVERB_LED.test(t) &&
+          !AUXILIARY.test(t) && !SENTENCE_BREAK.test(t) && !takesObject(p, row);
+      };
       for (const b of blocks) {
         for (const r of b.rows) {
           if (r.items.length < 3) continue;
@@ -2219,7 +2246,7 @@ export class TypographyEngine {
           // <name> ≥ <math>" — when an operator or relation glyph follows the
           // name in the row: a label, a name and a relation are a
           // constraint's parts, not a sentence's (R64, a private paper).
-          const namedLead = labelled && !!lead0 && wordy(lead0) && nameSpan(lead0) &&
+          const namedLead = labelled && !!lead0 && wordy(lead0) && nameSpan(lead0, r.items) &&
             /[+=×·∑∫√∂−/≤≥≈]/.test(r.items.slice(li + 2).map((p) => p.item.str).join(""));
           const opensMath = !!lead0 && (isMath(lead0) || isSpecial(lead0) || !/[A-Za-zÀ-ɏ]/.test(lead0.item.str) || MATH_OP.test(lead0.item.str.trim()) || namedLead);
           // ...and the operator may be one the text layer cannot spell: TeX's
@@ -2230,7 +2257,7 @@ export class TypographyEngine {
           // for the operator there (R64, a private paper).
           const names = r.items.filter((p, i) => wordy(p) && !(labelled && i === li));
           const operated = /[+=×·∑∫√∂−/≤≥≈]/.test(rowText) || r.items.filter((p) => isMath(p)).length > names.length;
-          const allNamed = prose > 0 && opensMath && operated && names.every(nameSpan);
+          const allNamed = prose > 0 && opensMath && operated && names.every((p) => nameSpan(p, r.items));
           if (prose > 0 && !eqBase && !numberedDisplay && !allNamed) continue;
           let symbolish = 0;
           for (const p of r.items) {
@@ -2303,7 +2330,7 @@ export class TypographyEngine {
               // complement times a two-word name under an objective's max,
               // R62's visual step on a private paper): three words, none a
               // function word.
-              const named = nItems.filter((p) => !isMath(p) && /[a-zà-ÿ]{3,}/.test(p.item.str)).every(nameSpan);
+              const named = nItems.filter((p) => !isMath(p) && /[a-zà-ÿ]{3,}/.test(p.item.str)).every((p) => nameSpan(p, nItems));
               if (!built || (nWords.length > 2 && !named) || /[.;:!?]\s+[a-zà-ÿ]/.test(nText)) continue;
               // ...and an equation's row never ENDS on a sentence's phrase: a
               // body line carrying an inline "d(H, H)" and then ", which is
