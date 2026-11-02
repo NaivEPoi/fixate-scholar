@@ -7433,3 +7433,140 @@ capitalised one-clause sentence that ends in a colon could still be
 taken for a row label; the font switch's per-chunk tasks and the
 170 ms restyle remain, and the real display was not re-measured after
 the last two scheduling commits.
+
+## R65 — the sheet R64 left, fixed by assigned subagents (2026-11-02)
+
+The two classification leftovers and the font switch's remaining cost,
+each assigned to an Opus subagent with the dump tools, one headless
+browser each, and read back from their dumps and traces.
+
+### A name is a noun phrase
+
+A definition line on a private paper, wrapped so that its row opened
+on the set-notation left side, held a two-word lowercase verb phrase
+between the formula and its predicate. The row opened on math
+(`opensMath`), its math items outnumbered its single name span
+(`operated` by count, no operator glyph in the row), and the span —
+two words, no function word — passed `nameSpan`; so `allNamed` held at
+ratio 0.83 and the row was an equation's (`row-eqn`), the phrase kept
+plain. R64's wrap concept could not reach it: the line before sat in
+another block.
+
+A trace of every named and labelled row in both corpora (49 documents,
+371 rows with `allNamed` true) showed that a structural rule — the name
+ending the row, or math on both sides of it — would have released
+dozens of algorithm rows of the form `x ← Name(…)`. A lexical one did
+not: a name span is a noun phrase, and a span holding an adjective's
+-ly adverb (-ely, -tly, -lly, -sly) followed by another word is a verb
+phrase; across every name span of both corpora the pattern matches the
+target alone. The -ly words quantities' names do carry end otherwise.
+It lives inside `nameSpan`, so the named-row test, the labelled-row
+name check and the fraction-neighbour sweep agree. After: the phrase
+is processed; the row's math items fall to `special-or-short`, its
+scripts to `script-size`; the constraint page, the where-line pages
+and R64's fraction operand are identical span for span.
+
+### A row label is five words at most
+
+R64's label (a first word-bearing item ending in a colon, opening on a
+capital, with no sentence break) could still be a capitalised
+one-clause sentence. Measured across both corpora: the longest real
+label is five words (three description-list labels), the longest on a
+row the engine keeps as an equation's four (the constraint page); the
+capitalised clauses taken for labels ran six to nine words — two
+papers' first-person sentences, a figure reference resumed by its verb,
+a caption's lead — and none had turned a row into an equation's today.
+A label holds at most five words from its first lettered word to the
+colon and no "we", which also blocks a short clause that names its
+actor. The five clauses lose `labelled` (`allNamed` false before and
+after); every real label keeps it; no page's reasons change.
+
+### The font switch: the style per page, the thrash out, the yield right
+
+Three commits on the perf branch, each measured headless on three
+public papers (USENIX, ACM, IEEE journal), three runs a configuration,
+medians; the real display was not available this round.
+
+- The emphasis style for the original face (400 and a shadow) was keyed
+  on the viewer's `data-fx-font`: a switch restyled and re-laid-out
+  every emphasised prefix of every rendered page at once, while each
+  page's spans still sat in the old face until its own pass. The rule
+  now reads `data-fx-face` on each page's text layer, set in
+  `#processPage` right after the page is restored and before anything
+  is measured; a page waiting its turn keeps the style its spans were
+  measured with. `data-fx-font` stays on the viewer for tabsync and the
+  zoom shot.
+- In a bundled face drawn at a scale, the content pass read each span's
+  computed font size after the spans before it had been rewritten — a
+  forced style recalculation per span, sixty a batch. It is read in the
+  read pass with the geometry. Forced recalculations over a switch:
+  742 → 116 (USENIX), 1123 → 140 (ACM).
+- A pass started another batch whenever 4 ms of the idle period
+  remained, and a batch costs 20–40 ms, so a callback ran past its
+  deadline and the first callback of a page — a stage and a batch — ran
+  55–70 ms. It starts one only when twice the last batch's time
+  remains. Batch size and contents are unchanged (masks clamp against
+  the batch's own obstacles).
+
+Blocked time / restyle / longest chunk, ms, v1.4.4 → this tree, for the
+serif face: USENIX 40→20 / 62→21 / 67→56; ACM 97→45 / 102→47 / 68→58;
+IEEE 124→51 / 88→21 / 61→64. The sans face and the original face
+halve their restyle likewise. The engine's chunk time summed over a
+switch: 411→303, 640→482, 601→444 ms. What remains: the first batch in
+a newly loaded face (45–60 ms) and 18–40 ms of layout on the first
+switch, from the face's first load. Tried and dropped:
+`content-visibility: auto` on pages (restyle 21→15 ms only, chunks
+slightly longer, and paint containment can clip a popup overflowing
+its page); a one-times yield (the first callback in a new face still
+ran 60 ms). The DOM digest after three switches is identical to v1.4.4
+on every page compared, to ten significant digits, in every run where
+PDF.js rendered pages one and two at the same output scale; the runs
+that differed all hit a pre-existing harness state (a 1080 or 1078 px
+page box instead of 1083) in which v1.4.4's own digest varies run to
+run.
+
+### Scrubbed
+
+Earlier rounds' comments in the engine and three findings paragraphs
+(R63, R64) quoted a private paper's operand names and a constraint
+row's label. They now describe the shapes. The history still holds
+them.
+
+### Gate
+
+Run on the final tree (the two classification fixes and the three
+font-switch commits merged), the corpus counted first (37 private
+files, the lane ranges widened to hold them), lanes two at a time,
+headless: fontkeep, whyskip, eqkeep, refcolor, tables and citepoint
+PASS on 49/49 documents, no retries, whyskip unreasoned 0 and trailing
+0 on every page; console silent on 49/49 (47 upstream messages, all
+matched by the two-entry allowlist); option gate (`--line`) PASS
+49/49, its diff against the plain run the same ten pages of the line
+model's own relabels as R64; unit tests 338. Skip-reason diff against
+the v1.4.4 release tree, same harness, same zoom, the baseline re-keyed
+to the new aliases: 766/766 pages compared, one changed — the
+definition line's phrase released from `row-eqn`. The visual step: the
+released phrase on a settled fx-on/fx-off pair at zoom 2, emphasis on
+its two words' leading letters at the body's weight and nothing on the
+formula around it (wordshot's own capture showed no emphasis anywhere
+in frame, a harness capture fault, and was not trusted); and the face
+switch, v1.4.4 against this tree on a public paper at zoom 1.6, two
+pages (one in view during the switch, one scrolled to after), four
+faces in sequence, at the default emphasis weight and at 700 where the
+original and bundled rules differ: sixteen capture pairs byte-identical,
+every page's `data-fx-face` the current face after every switch,
+computed styles identical to v1.4.4, console silent.
+
+### Left for the next round
+
+The trace showed other prose kept as named rows without an operator
+glyph: a verb between a math subject and a parenthesised object, and a
+modal verb phrase after a small-caps name, on three private papers;
+the -ly rule does not cover them. The first batch in a newly loaded
+face is still one task over 50 ms; the real display has not been
+measured since R64's first commit. The visual step's face-switch pairs
+(below) also showed, in both trees, a one-letter processed capital
+opening a small-caps name (public USENIX, page 10) set in the bundled
+serif face overlapping the small-caps letters left on the canvas: the
+bundled capital is wider than the slot the original's gave it; the
+original face is fine.
