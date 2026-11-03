@@ -29,6 +29,7 @@ export class ReferencesFeature {
   #hasBibliography = false;
   #popup;
   #ready = null;
+  #annotateGen = 0; // bumped by every reannotateRendered: an older queue stops
 
   /** Called with the bibliography line boxes (Map<page, boxes>) once known. */
   onRefsRegion = null;
@@ -192,13 +193,57 @@ export class ReferencesFeature {
     this.annotatePage(pageView);
   }
 
-  /** Rebuild hit-targets on every rendered page (geometry has changed). */
+  /**
+   * Rebuild hit-targets on every rendered page (geometry has changed): one
+   * page per idle callback, the pages in view first, the rest nearest first.
+   *
+   * All of them at once was one task: a page costs 4-9 ms (its spans' rects,
+   * the reading order, the citation search), and after a font switch the
+   * whole rendered document's worth — 30-55 ms over seven pages, measured
+   * headless — ran on in the microtasks of the engine's last batch, a task
+   * of 60-70 ms. A newer call supersedes the pages an older one has not
+   * reached; each call annotates each page once, and a page whose text
+   * layer went away before its turn is skipped (its next render annotates
+   * it).
+   */
   reannotateRendered() {
+    const gen = ++this.#annotateGen;
     const viewer = this.#app.pdfViewer;
+    const pages = [];
     for (let i = 0; i < viewer.pagesCount; i++) {
       const pv = viewer.getPageView(i);
-      if (pv?.textLayer?.div?.childElementCount) this.annotatePage(pv);
+      if (pv?.textLayer?.div?.childElementCount) pages.push(pv);
     }
+    if (typeof requestIdleCallback !== "function") {
+      for (const pv of pages) this.annotatePage(pv);
+      return;
+    }
+    const queue = this.#byDistanceFromView(pages);
+    const next = () => {
+      if (gen !== this.#annotateGen) return;
+      const pv = queue.shift();
+      if (pv?.textLayer?.div?.childElementCount) this.annotatePage(pv);
+      if (queue.length) requestIdleCallback(next, { timeout: 200 });
+    };
+    requestIdleCallback(next, { timeout: 200 });
+  }
+
+  /** The pages intersecting the viewer's scroll box, then the others by
+   *  their distance from it — in document order when there is no box. */
+  #byDistanceFromView(pages) {
+    const container =
+      this.#app.appConfig?.mainContainer ?? document.getElementById("viewerContainer");
+    const view = container?.getBoundingClientRect();
+    if (!view || !(view.width > 0) || !(view.height > 0)) return pages;
+    return pages
+      .map((pv) => {
+        const r = pv.div.getBoundingClientRect();
+        const dx = Math.max(0, view.left - r.right, r.left - view.right);
+        const dy = Math.max(0, view.top - r.bottom, r.top - view.bottom);
+        return { pv, d: Math.hypot(dx, dy) };
+      })
+      .sort((a, b) => a.d - b.d)
+      .map((x) => x.pv);
   }
 
   /**
