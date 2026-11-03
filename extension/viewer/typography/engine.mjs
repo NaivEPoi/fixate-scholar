@@ -433,6 +433,94 @@ const SMALL_TEXT = 0.7;
 // touching a math glyph, is notation (the candidate filter's math-op).
 const MATH_OP_SPAN = /^(?:exp|log|ln|lg|cos|sin|tan|cot|sec|csc|sinh|cosh|tanh|arg|max|min|sup|inf|lim|det|dim|deg|gcd|lcm|mod|ker|hom|tr|diag|rank|span|sgn|sign|argmax|argmin|dist|supp|Pr|Var|Cov|s\.t\.)$/;
 
+// A pass's obstacles as plain numbers, four per rect (left, right, top,
+// bottom), for the two scans that test every obstacle against every span:
+// the read pass's duplicate check and the mask pass's clamp. Most of the
+// obstacles are DOMRects, and every read of a DOMRect's side boxed a
+// fresh number, as did every double read in the pass's own (too large to
+// optimize) function: those two scans allocated 4-11 MB a batch, and the
+// collections that followed — a full one of 11-14 ms in a session's first
+// font switch — landed in the batches. The values are the rects' own, so
+// every test below answers exactly as it did on the rects.
+// Appends rects[from..] to the store (grown as needed); returns the store.
+function obstacleBoxes(rects, from, store) {
+  const n = rects.length;
+  if (store.length < n * 4) {
+    const grown = new Float64Array(Math.max(n * 4, store.length * 2, 256));
+    grown.set(store.subarray(0, from * 4));
+    store = grown;
+  }
+  for (let k = from; k < n; k++) {
+    const o = rects[k];
+    store[k * 4] = o.left;
+    store[k * 4 + 1] = o.right;
+    store[k * 4 + 2] = o.top;
+    store[k * 4 + 3] = o.bottom;
+  }
+  return store;
+}
+
+// Whether a rect overlaps any of the first n boxes by more than 35% of its
+// area (the read pass's overlapsObstacle).
+function overlapsBox(box, n, left, right, top, bottom, area) {
+  for (let k = 0; k < n * 4; k += 4) {
+    const w = Math.min(right, box[k + 1]) - Math.max(left, box[k]);
+    const h = Math.min(bottom, box[k + 3]) - Math.max(top, box[k + 2]);
+    if (w > 0 && h > 0 && w * h > area * 0.35) return true;
+  }
+  return false;
+}
+
+// The first box at or after index k (of n) that reaches into L..R × T..B —
+// the mask clamp's quick test, negated — or n when none does.
+function nextBoxInto(box, n, k, L, R, T, B) {
+  for (; k < n; k++) {
+    const i = k * 4;
+    if (box[i + 1] <= L || box[i] >= R || box[i + 3] <= T || box[i + 2] >= B) continue;
+    return k;
+  }
+  return n;
+}
+
+// The mask cuts (descenderZones) the same way, five numbers per zone: its
+// sides and whether it carries a kept glyph's own box. The mask pass made
+// a cut's variants for this span (spread copies of the zone) before
+// testing whether any of them reached the mask at all, for every zone and
+// every span; this tests first, on bounds that hold every variant: none
+// is wider than the zone, except a kept glyph's sideways overhang, which
+// reaches no further than one px into this span's own glyph box (gL..gR).
+function zoneBoxes(zones, from, store) {
+  const n = zones.length;
+  if (store.length < n * 5) {
+    const grown = new Float64Array(Math.max(n * 5, store.length * 2, 320));
+    grown.set(store.subarray(0, from * 5));
+    store = grown;
+  }
+  for (let k = from; k < n; k++) {
+    const z = zones[k];
+    store[k * 5] = z.left;
+    store[k * 5 + 1] = z.right;
+    store[k * 5 + 2] = z.top;
+    store[k * 5 + 3] = z.bottom;
+    store[k * 5 + 4] = z.own ? 1 : 0;
+  }
+  return store;
+}
+
+// The first zone at or after index k (of n) any variant of which can reach
+// into L..R × T..B, or n.
+function nextZoneInto(box, n, k, L, R, T, B, gL, gR) {
+  for (; k < n; k++) {
+    const i = k * 5;
+    const own = box[i + 4] === 1;
+    const left = own ? Math.min(box[i], gR - 1) : box[i];
+    const right = own ? Math.max(box[i + 1], gL + 1) : box[i + 1];
+    if (right <= L || left >= R || box[i + 3] <= T || box[i + 2] >= B) continue;
+    return k;
+  }
+  return n;
+}
+
 
 // Key a font by its bare leading family name: the same face reaches spans as
 // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12, sans-serif'
@@ -483,6 +571,7 @@ export class TypographyEngine {
   #faceLoads = new Map(); // fontMode -> promise: its bundled faces loaded, or waited for FACE_LOAD_MS
   #spanMs = 0; // how long the latest batch of a pass took, per span (#batchBudget)
   #faceWarm = new Map(); // font stack -> promise: the face used once, in an idle task of its own (#warmFace)
+  #inkMemo = new WeakMap(); // span -> { canvas, key, ink }: its colour as last read off that canvas (inkColor)
 
   constructor(app, settings) {
     this.#app = app;
@@ -1006,10 +1095,21 @@ export class TypographyEngine {
     const { near, far } = this.#byDistanceFromView(pages.filter(due));
     await Promise.all(near.map((pv) => this.#processPage(pv)));
     for (const pv of far) {
+      // Each page starts in an idle period of its own. The pass before it
+      // resolves in its last batch's callback, and the next page's start —
+      // its restore — ran on in that callback's microtasks, adding to a task
+      // already 40-50 ms long.
+      await this.#nextIdle();
       if (gen !== this.#allGen || !this.#enabled) return;
       if (!due(pv)) continue;
       await this.#processPage(pv);
     }
+  }
+
+  /** Resolves in the next idle callback (at once where there is none). */
+  #nextIdle() {
+    if (typeof requestIdleCallback !== "function") return Promise.resolve();
+    return new Promise((resolve) => requestIdleCallback(() => resolve(), { timeout: 200 }));
   }
 
   /**
@@ -5423,6 +5523,26 @@ export class TypographyEngine {
       )
       .map((p) => p.div);
     let obstacleRects = null;
+    // obstacleRects as numbers (obstacleBoxes), its first obsN entries; the
+    // list only grows, except when the page moved and every entry was
+    // replaced (the frame shift below), which starts it over.
+    let obsBox = new Float64Array(0);
+    let obsN = 0;
+    const syncObstacles = () => {
+      if (obsN < obstacleRects.length) {
+        obsBox = obstacleBoxes(obstacleRects, obsN, obsBox);
+        obsN = obstacleRects.length;
+      }
+    };
+    // descenderZones the same way (zoneBoxes), for the mask pass.
+    let zoneBox = new Float64Array(0);
+    let zoneN = 0;
+    const syncZones = () => {
+      if (zoneN < descenderZones.length) {
+        zoneBox = zoneBoxes(descenderZones, zoneN, zoneBox);
+        zoneN = descenderZones.length;
+      }
+    };
     let frame = null; // the text layer's viewport position when the geometry below was recorded
     const snaps = new Set(); // canvas snapshots read by this pass (their `cr` is viewport geometry too)
     const artKept = new Set(); // spans kept for the vector art on them (work())
@@ -5434,6 +5554,8 @@ export class TypographyEngine {
     let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
     let inkColor = null; // (rect) => { color: the glyphs' own colour unless black/grey, mixed: several }
     let inkRuns = null; // (span) => a mixed span's colours as character runs (see inkColor)
+    let inkReads = 0; // colours inkColor read off the canvas (not from #inkMemo)
+    let inkAhead = 0; // the pairs whose colour has been read ahead of their batch
     let inkFit = null; // (rect) => how line-like the ink under it is — overlap resolver
     const lowResSrc = (s) => s.csy < 1.5; // too coarse for reliable band metrics
     let overlapVeto = null; // candidates whose rects pile on another candidate
@@ -5610,6 +5732,7 @@ export class TypographyEngine {
       // worker, or if it fails, the block reads them here as it always did.
       if (!obstacleRects && holder.pixels === undefined) {
         holder.pixels = null; // in flight
+        holder.pixelsSettled = pageView.renderingState === 3; // the base canvas had finished painting (inkColor's memo)
         this.#prefetchPixels(pageView)
           .then((m) => { holder.pixels = m ?? false; }, () => { holder.pixels = false; })
           .finally(() => {
@@ -5643,7 +5766,9 @@ export class TypographyEngine {
             return o;
           };
           if (obstacleRects) for (let n = 0; n < obstacleRects.length; n++) obstacleRects[n] = moved(obstacleRects[n]);
+          obsN = 0;
           for (let n = 0; n < descenderZones.length; n++) descenderZones[n] = moved(descenderZones[n]);
+          zoneN = 0;
           for (const sn of snaps) sn.cr = moved(sn.cr);
           // The shades too: recorded in the first stage in client coordinates,
           // read by the mask pass against spans measured afresh (R55 review).
@@ -5752,6 +5877,15 @@ export class TypographyEngine {
             const detail = pageView.detailView?.renderingState === 3 ? readCanvas(pageView.detailView.canvas) : null;
             if (detail) snaps.add(detail);
             const useDetail = detail && detail.csx > base.csx * 1.2;
+            // The canvas each snapshot was read from, when it had finished
+            // painting before it was read (inkColor's memo). PDF.js paints
+            // every render into a canvas of its own and never draws on a
+            // finished one again, so such a canvas's pixels stay what they
+            // were; one read while still painting (a pass that stopped
+            // waiting for it) is not remembered.
+            const canvasOf = new Map();
+            if (pageView.renderingState === 3 && holder.pixelsSettled !== false) canvasOf.set(base, pageView.canvas);
+            if (detail) canvasOf.set(detail, pageView.detailView.canvas);
             const srcFor = (rect) => {
               if (useDetail) {
                 const c = detail.cr;
@@ -5832,14 +5966,22 @@ export class TypographyEngine {
               // says so: windows about an em wide along the span that disagree
               // (one coloured, one neutral, or two hues). Such a span is coloured
               // per character (inkRuns, after the width pass).
-              const inkOf = (rect, step, minPx, need, local, windows = true) => {
+              // The pixels inkOf reads for a rect: the snapshot, the columns,
+              // the core band's rows and the whole box's rows.
+              const windowOf = (rect) => {
                 const s = srcFor(rect);
-                const x0 = Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx));
-                const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
-                const y0 = Math.max(0, Math.floor((rect.top + rect.height * 0.3 - s.cr.top) * s.csy));
-                const y1 = Math.min(s.H, Math.ceil((rect.bottom - rect.height * 0.3 - s.cr.top) * s.csy));
-                const b0 = Math.max(0, Math.floor((rect.top - s.cr.top) * s.csy));
-                const b1 = Math.min(s.H, Math.ceil((rect.bottom - s.cr.top) * s.csy));
+                return {
+                  s,
+                  x0: Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx)),
+                  x1: Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx)),
+                  y0: Math.max(0, Math.floor((rect.top + rect.height * 0.3 - s.cr.top) * s.csy)),
+                  y1: Math.min(s.H, Math.ceil((rect.bottom - rect.height * 0.3 - s.cr.top) * s.csy)),
+                  b0: Math.max(0, Math.floor((rect.top - s.cr.top) * s.csy)),
+                  b1: Math.min(s.H, Math.ceil((rect.bottom - s.cr.top) * s.csy)),
+                };
+              };
+              const inkOf = (rect, step, minPx, need, local, windows = true) => {
+                const { s, x0, x1, y0, y1, b0, b1 } = windowOf(rect);
                 const all = darkness(s, x0, x1, y0, y1, step, b0, b1);
                 if (all.n < minPx) return { color: null, n: all.n, mixed: false, d: all.d };
                 const rgb = inkColour(all.d, need, local);
@@ -5883,10 +6025,29 @@ export class TypographyEngine {
               // leave over is still up to ~95, so under three ems a span must
               // show strong colour — but whole, it is judged as a span: a bright
               // orange category letter is ink, not a tint.
-              inkColor = (rect) => {
+              //
+              // The answer is a function of the pixels read and nothing else,
+              // so a span read again over the same pixels of the same
+              // finished canvas takes the answer it had (#inkMemo): every
+              // pass after a page's first — each page of a font switch —
+              // read its spans' colour afresh, 7-23 ms a batch on the page in
+              // view, whose detail canvas has the most pixels. The key is
+              // the window inkOf reads, in that canvas's pixels.
+              inkColor = (rect, span) => {
                 const pad = 2 / srcFor(rect).csx;
                 const wide = { left: rect.left - pad, right: rect.right + pad, top: rect.top, bottom: rect.bottom, width: rect.width + 2 * pad, height: rect.height };
-                return inkOf(wide, 2, 12, rect.width >= rect.height * 3 ? SPAN_CHROMA : LOCAL_CHROMA, false);
+                const need = rect.width >= rect.height * 3 ? SPAN_CHROMA : LOCAL_CHROMA;
+                const w = windowOf(wide);
+                const canvas = span ? canvasOf.get(w.s) : undefined;
+                const key = canvas
+                  ? `${w.x0} ${w.x1} ${w.y0} ${w.y1} ${w.b0} ${w.b1} ${need} ${Math.max(4, Math.round(wide.height * 0.6 * w.s.csx))}`
+                  : null;
+                const memo = key ? this.#inkMemo.get(span) : undefined;
+                if (memo && memo.canvas === canvas && memo.key === key) return memo.ink;
+                const ink = inkOf(wide, 2, 12, need, false);
+                inkReads++;
+                if (key) this.#inkMemo.set(span, { canvas, key, ink: { color: ink.color, mixed: ink.mixed } });
+                return ink;
               };
               // A mixed span's colour per character, measured where the width
               // pass left each glyph: over its own canvas ink in the original
@@ -6627,12 +6788,8 @@ export class TypographyEngine {
       const overlapsObstacle = (r) => {
         const area = (r.right - r.left) * (r.bottom - r.top);
         if (!(area > 0)) return false;
-        for (const o of obstacleRects) {
-          const w = Math.min(r.right, o.right) - Math.max(r.left, o.left);
-          const h = Math.min(r.bottom, o.bottom) - Math.max(r.top, o.top);
-          if (w > 0 && h > 0 && w * h > area * 0.35) return true;
-        }
-        return false;
+        syncObstacles();
+        return overlapsBox(obsBox, obsN, r.left, r.right, r.top, r.bottom, area);
       };
       if (tObs) timing.obstacles = Math.round(performance.now() - tObs);
       // The first stage — obstacles, rules, the ink checks, the overlap
@@ -6649,6 +6806,29 @@ export class TypographyEngine {
         }
       }
       while (i < pairs.length) {
+        // The batch's colours are read ahead of it, off the pristine boxes
+        // the read pass below measures again (#inkMemo, keyed on the
+        // pixels read, so the batch takes exactly these answers), and when
+        // that was real work the batch waits for an idle period with room
+        // for it. A page's first pass, and the page in view whose detail
+        // canvas a reader's scroll repainted, read every span's colour —
+        // 10-21 ms of the batch on the page in view — which the batch then
+        // carried on top of its own work.
+        if (inkColor && inkAhead < Math.min(i + CHUNK, pairs.length)) {
+          const until = Math.min(i + CHUNK, pairs.length);
+          const before = inkReads;
+          for (let j = Math.max(i, inkAhead); j < until; j++) {
+            const div = pairs[j].div;
+            if (zoneDrops?.has(div) || hiddenDrops?.has(div) || overlapVeto?.has(div)) continue;
+            const r = div.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) inkColor(r, div);
+          }
+          inkAhead = until;
+          if (inkReads > before && deadline && deadline.timeRemaining() < this.#batchBudget(until - i)) {
+            requestIdleCallback(work, { timeout: 200 });
+            return;
+          }
+        }
         const tBatch = performance.now();
         const end = Math.min(i + CHUNK, pairs.length);
         const batch = [];
@@ -6822,7 +7002,7 @@ export class TypographyEngine {
                 : 0;
           if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
           span.dataset.fxDone = "1";
-          const ink = inkColor?.(entry.rect);
+          const ink = inkColor?.(entry.rect, span);
           if (ink?.mixed) entry.mixedInk = true;
           else if (ink?.color) span.style.setProperty("--fx-ink", ink.color);
         }
@@ -6854,6 +7034,8 @@ export class TypographyEngine {
         // its HORIZONTAL extent comes from the pristine rect (the canvas glyph
         // width, which the width correction below restores). Every rendered span
         // sits in the text layer above the mask, so kept inline math survives.
+        syncObstacles();
+        syncZones();
         for (const { rect, rect2, targetW } of batch) {
           const r2 = rect2 || rect;
           if (!(rect.width > 0) || !(r2.height > 0)) continue;
@@ -6864,8 +7046,10 @@ export class TypographyEngine {
           let R = rect.left + (targetW || rect.width) + padX;
           let T = Math.min(rect.top, r2.top) - padY;
           let B = Math.max(rect.bottom, r2.bottom) + padY;
-          for (const o of obstacleRects) {
-            if (o.right <= L || o.left >= R || o.bottom <= T || o.top >= B) continue;
+          // Every obstacle reaching into the padded box as it stands — the
+          // edges move as each one clamps them (obstacleBoxes).
+          for (let k = nextBoxInto(obsBox, obsN, 0, L, R, T, B); k < obsN; k = nextBoxInto(obsBox, obsN, k + 1, L, R, T, B)) {
+            const o = obstacleRects[k];
             // Glyph art under this span's glyphs (a wavy underline) is cut out
             // of the mask exactly; clamped like text, its box — which reaches
             // up into the word — pulled the mask's END in, baring the canvas
@@ -6946,7 +7130,9 @@ export class TypographyEngine {
           // the tops of its own canvas capitals (a sliver beside the "T" of
           // "To" under a kept subscript).
           const ownTop = r2.top + h * 0.05;
-          for (const zone of descenderZones) {
+          const spanL = rect.left, spanR = rect.left + (targetW || rect.width);
+          for (let zk = nextZoneInto(zoneBox, zoneN, 0, L, R, T, B, spanL, spanR); zk < zoneN; zk = nextZoneInto(zoneBox, zoneN, zk + 1, L, R, T, B, spanL, spanR)) {
+            const zone = descenderZones[zk];
             let z = zone.top < r2.top ? { ...zone, bottom: Math.min(zone.bottom, ownTop) } : zone;
             // A glyph-art cut never bares this span's own glyph core: a wave
             // runs below the word, and a wordless run sitting ON the words (a
