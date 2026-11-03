@@ -1006,10 +1006,21 @@ export class TypographyEngine {
     const { near, far } = this.#byDistanceFromView(pages.filter(due));
     await Promise.all(near.map((pv) => this.#processPage(pv)));
     for (const pv of far) {
+      // Each page starts in an idle period of its own. The pass before it
+      // resolves in its last batch's callback, and the next page's start —
+      // its restore — ran on in that callback's microtasks, adding to a task
+      // already 40-50 ms long.
+      await this.#nextIdle();
       if (gen !== this.#allGen || !this.#enabled) return;
       if (!due(pv)) continue;
       await this.#processPage(pv);
     }
+  }
+
+  /** Resolves in the next idle callback (at once where there is none). */
+  #nextIdle() {
+    if (typeof requestIdleCallback !== "function") return Promise.resolve();
+    return new Promise((resolve) => requestIdleCallback(() => resolve(), { timeout: 200 }));
   }
 
   /**
