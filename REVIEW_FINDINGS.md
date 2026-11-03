@@ -7729,3 +7729,179 @@ classification run in one task, 54 ms of microtasks in every face; the
 garbage collection and the colour sampling are still in the first
 batch. The real display has not been measured since R64's first
 commit (a visible browser is not allowed on this machine for now).
+
+## R67 — the sheet R66 left, fixed by assigned subagents (2026-11-02)
+
+Two subagents, one headless browser each: the prose steps that carry
+an operator glyph and the capital that opens a faked small-caps word;
+the page handover, the colour sampling and the collection in the
+first batch.
+
+### A predicate after its symbol is no name
+
+The steps R66 left were kept as named equation rows because they
+carry "=": a numbered proof step "<symbol> <verb>s if <function>(…) =
+<constant>" (two rows, one private paper) and a protocol step
+"<symbol> <verb>s <symbol> <name> =" (another). Read from the dumps:
+"if" is a two-letter item, and the name-span list takes only items
+with three lowercase letters, so `FUNCTION_WORD` never sees it; and
+R66's object test needs "(" right after the verb, where these rows
+have the function word or a math-face symbol. A lone -s word whose
+previous item is not a word — its subject is a symbol — is a
+predicate, not a name, when the next item is a whole function word or
+a math-face item holding a letter (`predicate`); and a name span
+holds no possessive determiner (`DETERMINER`: an imperative step line
+on the same page, "<verb> <symbol> their <three nouns> <symbol> =").
+R66's -s class let -us words through against its own comment; closed,
+since an -ous adjective naming a quantity beside its index is exactly
+the word the new rule must not take (five equation rows of another
+private paper). Measured over a fresh trace of both corpora (680 rows,
+366 named): the first word of the row being an -s word misses the
+protocol step and takes equations, a plural and a public heading;
+any -s word after a non-word takes plurals ("<n> <noun>s ×") and a
+table header; the chosen shapes flip the four target rows and one
+prose row already released by its own function word, nothing else.
+After, span for span: the verbs, "if" and an acronym processed, the
+symbols `special-or-short`, operand names `math-name` or
+`script-attach` (the second step's verb sits after a subscript and
+stays kept as the script's base); 38 and 36 spans leave `row-eqn`,
+nothing else on either page moves.
+
+### A capital read with its small caps
+
+A full-height capital ending a prose span whose reduced capitals open
+the next item — a faked small-caps word, the tail kept as
+`smallcaps-tail` — was a one-letter word to the segmenter and went
+bold in front of plain small caps (public USENIX, a system's name on
+fourteen spans of page 10; a private paper's on sixteen). The
+all-capitals label test (`emphasizeParts`) now reads the span's last
+word with its continuation (`join.tail`, which the engine already
+passed): read whole the word is capitals, a label like any acronym. A
+capital continued in lowercase is a word split by a font change and
+keeps its emphasis; so do a bare "I" or "a" and a sentence-opening
+capital (unit test). Wordshot on such a span: emphasis runs
+`["sta","C"]` → `["sta"]`; settled captures in the original and serif
+faces at zoom 3 show the capital at body weight before its small caps
+and the preceding words emphasised as before.
+
+Left: a possessive "’s" span directly after a kept small-caps tail is
+processed with its "s" emphasised — the same continuation class, from
+the head side.
+
+### The last batch's 54 ms was the citations, the collection was the masks' garbage
+
+Timed headless with the per-phase patch (kept off the branch) and
+time stamps. The 54 ms after a page's last batch on the IEEE paper was
+not the next page: `applyEnabled` re-annotated the citations on every
+rendered page as soon as the engine's promise resolved — 54 ms on
+IEEE, 45 on ACM, 29 on USENIX, in the last batch's microtasks. A real
+page-to-page handover existed but was small (the next page's restore
+in six of seven pass-ending tasks, about 4 ms each). Colour sampling
+took 60–70 ms a switch, 7–23 ms a batch on the page in view. And the
+major collection was the pass's own garbage: 4–11 MB a batch in the
+mask pass, spread copies of every cut zone made for every span before
+testing whether any reached the mask, and boxed DOMRect reads in the
+obstacle scans. Five commits:
+
+- Each far page of a re-process starts in an idle period of its own
+  (`#nextIdle`): restores sharing a task 6/7 → 0/7.
+- The citations' `reannotateRendered` does one page per idle callback,
+  pages in view first, a newer call superseding an older one: IEEE's
+  longest task 66/61/66 → 53/48/35 ms (serif / sans / original),
+  blocked 18/20/16 → 3/0/0; ACM 48/45/46 → 41/39/35.
+- A span's colour read off a finished canvas is kept for the next
+  pass (`#inkMemo`, keyed on the canvas element and the exact pixel
+  window read; only canvases that had finished painting): colour time
+  IEEE 63/63/60 → 35/2/2 ms, USENIX 72/67/70 → 42/2/1.
+- The obstacle and cut-zone scans run over Float64Array stores with a
+  prefilter on bounds that contain every variant of a zone, and
+  allocate nothing: 4–11 MB → 0.5 MB a batch, collection inside idle
+  tasks 15/5/3 → about 1 ms on IEEE and 0 on ACM; longest task IEEE
+  50/45/46 → 25/20/22 ms, ACM 45/31/35 → 25/21/22.
+- A batch's colours are read ahead of it in an idle period of their
+  own when the read is real work (a first pass, the page in view
+  whose detail canvas a scroll repainted): USENIX's first-switch
+  longest task 46 → 24 ms.
+
+Branch tip against v1.4.6: every switch on the three papers has a
+longest task of 20–26 ms, 0 ms blocked and no task over 50 ms (v1.4.6:
+longest 40–68 ms, IEEE blocked 14–21). Tried and dropped: keeping the
+per-character colour runs of mixed-colour spans across faces — they
+are measured where the new face places each glyph (24–105 ms a switch
+remain, spread over the batches). DOM digests identical to v1.4.6 on
+every page in same-page-box runs (IEEE 3/3, USENIX 9/9, ACM 3/3
+switches), after every intermediate commit as well.
+
+### What the visual step added
+
+The whole-word capitals test read a following subscript as part of
+the word too: an all-capitals acronym ending a span, followed by a
+kept lowercase subscript at script size, was read with its index and
+was no longer capitals, so the acronym went bold whole where v1.4.6
+left it plain (two spans of a private paper; a scan of the public
+corpus found none). The continuation can only ever release: the test
+now holds when the word alone is capitals or the word read with its
+continuation is. Found by the mask digest and the fx-on tiles — every
+difference between the trees was glyph-sized and matched a DOM change
+one for one, and these two did not belong to any intended change —
+and confirmed at function level before the fix. The gate was stopped
+and re-run on the fixed tree.
+
+Also seen: the vendored PDF.js's "render must be called before
+injectLinkAnnotations" error in two of fourteen face-switch runs of
+the new tree (none of fourteen of v1.4.6, none of four repeats on
+either). The same message sits in R64/R65-era logs, so it is an
+upstream race, not a new one; it is not on the console allowlist,
+and the console lane of this gate did not meet it. Watch it.
+
+### Gate
+
+Run twice: once on the merged tree, stopped when the visual step's
+defect was confirmed, and in full on the fixed tree (the predicate
+and determiner rules, the capital read with its small caps and its
+subscript correction, the five scheduling commits merged), the corpus
+counted first (37 private files), lanes two at a time, headless:
+fontkeep, whyskip, eqkeep, refcolor, tables and citepoint PASS on
+49/49 documents, no retries, whyskip unreasoned 0 and trailing 0 on
+every page; console silent on 49/49 (47 upstream messages, all matched
+by the two-entry allowlist); option gate (`--line`) PASS 49/49, its
+diff against the plain run the same ten pages of the line model's own
+relabels as R64–R66; unit tests 339. Skip-reason diff against the
+v1.4.6 release tree, same harness, same zoom: 766/766 pages compared,
+none changed — the released words are one-word spans whyskip never
+counts, and the dumps show 38 and 36 spans leaving `row-eqn`.
+
+The visual step, v1.4.6 against this tree, headless, one browser:
+- The masks, after the obstacle and cut-zone scans were rewritten: on
+  eleven pages (six public, five private) every page captured in eight
+  tiles with emphasis off and on at zoom 2, every mask box recorded —
+  boxes identical in size, position and order on every page but the
+  two with released rows (their new boxes, and one mask 2 px taller on
+  the line above a released row); fx-off tiles byte-identical on every
+  page; fx-on tiles byte-identical where no intended change touched
+  the page and, where they differed, every difference glyph-sized and
+  matched to a DOM change one for one. Repeat runs on one tree
+  byte-identical. No canvas peeking, no whited-out words, no kept
+  glyph cut.
+- Colours, with the memo and the read-ahead: the ink colours of every
+  rendered page identical between the trees after every switch of
+  original → serif → sans → original on three public papers, the
+  citation colour throughout; captures byte-identical but the small-
+  caps capital in each face.
+- Citations, re-annotated one page per idle callback: coloured-citation
+  counts and the set of distinct hit-target rectangles identical at
+  every step; every coloured citation inside a hit target on both
+  trees (the raw hit-target totals vary between runs of either tree —
+  exact duplicates, existing timing noise, no target lost).
+- The small-caps capitals plain and the released rows emphasised at the
+  body's weight, on settled pairs; after the subscript correction, the
+  two acronyms plain again beside their subscripts with the preceding
+  words' emphasis kept, all 489 mask boxes of that page identical, and
+  against v1.4.6 only the released rows' eight spans differ.
+
+### Left for the next round
+
+The possessive span after a small-caps tail (above); the
+per-character colour runs of mixed-colour spans, still measured in
+every pass; the real display, not measured since R64's first commit
+(a visible browser is not allowed on this machine for now).
