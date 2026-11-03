@@ -13,6 +13,15 @@
 //      standalone notes), which the build ships behind a false-by-default pref.
 //   8. pdf.mjs     — carry an author name into saved annotations (/T), which
 //      the viewer otherwise never sets.
+//   9. viewer.mjs  — show the floating highlight / comment buttons on a
+//      selection, also behind a false-by-default pref.
+//   10a/10b. viewer.mjs — PDFPageView.draw's post-render continuation and
+//      #injectLinkAnnotations inject inferred links only into the annotation
+//      builder that draw rendered. A reset while the render awaited (a zoom
+//      just after a page's canvas finished) replaced the builder, and the
+//      stale continuation called injectLinkAnnotations on the unrendered new
+//      one: "`render` method must be called before `injectLinkAnnotations`"
+//      in the console. Upstream race; the newer draw injects the links.
 //
 // Patches use exact string anchors and fail loudly if PDF.js changes them,
 // so a version bump can never silently produce a broken viewer.
@@ -62,11 +71,14 @@ export function extract() {
   const extractTmp = join(tmpdir(), `pdfjs-extract-${PDFJS_VERSION}`);
   rmSync(extractTmp, { recursive: true, force: true });
   if (process.platform === "win32") {
+    // The paths go in through the environment, never into the command text.
+    // (Passed as trailing arguments to a `param(...)` block they were never
+    // bound — Windows PowerShell appends them to the -Command string — so
+    // -LiteralPath was empty and every extract on Windows failed.)
     execFileSync("powershell.exe", [
       "-NoProfile", "-Command",
-      "param($zip, $dest) Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force",
-      zipPath, extractTmp,
-    ]);
+      "Expand-Archive -LiteralPath $env:FX_PDFJS_ZIP -DestinationPath $env:FX_PDFJS_DEST -Force",
+    ], { env: { ...process.env, FX_PDFJS_ZIP: zipPath, FX_PDFJS_DEST: extractTmp } });
   } else {
     mkdirSync(extractTmp, { recursive: true });
     execFileSync("unzip", ["-q", zipPath, "-d", extractTmp]);

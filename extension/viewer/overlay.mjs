@@ -235,6 +235,9 @@ publishAuthor(settings);
 
 const engine = new TypographyEngine(app, settings);
 const references = new ReferencesFeature(app);
+// A page's colour runs still waiting for their idle period are written before
+// the citations wrap its text, so the citation wraps go inside them.
+references.beforeAnnotate = (pageView) => engine.flushInkRuns(pageView);
 
 // Copy a paragraph, get a paragraph. Two witnesses decide whether a line-break
 // hyphen belonged to the word or joined two: the DOCUMENT's own vocabulary,

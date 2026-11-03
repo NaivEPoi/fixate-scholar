@@ -572,6 +572,7 @@ export class TypographyEngine {
   #spanMs = 0; // how long the latest batch of a pass took, per span (#batchBudget)
   #faceWarm = new Map(); // font stack -> promise: the face used once, in an idle task of its own (#warmFace)
   #inkMemo = new WeakMap(); // span -> { canvas, key, ink }: its colour as last read off that canvas (inkColor)
+  #runsDue = new Map(); // pageNumber -> the pass's paintRuns, while a batch's colour runs wait for the next idle period
 
   constructor(app, settings) {
     this.#app = app;
@@ -654,6 +655,7 @@ export class TypographyEngine {
       holder.resolve();
     }
     this.#pending.clear();
+    this.#runsDue.clear();
   }
 
   /** Document-wide body-text height (char-weighted height mode over every
@@ -926,6 +928,18 @@ export class TypographyEngine {
   }
 
   /**
+   * Write now the colour runs a page's pass has left for its next idle
+   * period (paintRuns), before anything else wraps the page's text: the
+   * citations' wraps then go inside the runs' `<fx-ink>`, as they did when the
+   * runs were written with their batch. Wrapped the other way round, a run
+   * edge inside a citation split the citation's wrap and the digit after the
+   * edge took the run's colour, not the citation's. No-op when none wait.
+   */
+  flushInkRuns(pageView) {
+    this.#runsDue.get(pageView?.id)?.();
+  }
+
+  /**
    * Re-apply the emphasis markup on pages whose processed spans were rewritten
    * by PDF.js itself. Searching does exactly that: for every matched text div
    * TextHighlighter sets `div.textContent` — first to "" while rendering a
@@ -944,6 +958,7 @@ export class TypographyEngine {
     if (!this.#enabled) return 0;
     let n = 0;
     const one = (pv) => {
+      this.flushInkRuns(pv);
       const spans = pv.textLayer?.div?.querySelectorAll("span[data-fx-done]");
       for (const span of spans ?? []) {
         if (this.#reapplyEmphasisSpan(span)) n++;
@@ -1037,6 +1052,7 @@ export class TypographyEngine {
       holder.resolve();
     }
     this.#pending.clear();
+    this.#runsDue.clear();
   }
 
   #restoreAll() {
@@ -4810,6 +4826,7 @@ export class TypographyEngine {
       prev.cancelled = true;
       prev.resolve();
     }
+    this.#runsDue.delete(pageNumber);
     // A zoom/resize KEEPS the text-layer DOM and re-lays it out in place
     // (TextLayer.update): PDF.js overwrites --scale-x measuring the span's
     // plain text, while our pixel-unit word-spacing and mask geometry go
@@ -5556,6 +5573,31 @@ export class TypographyEngine {
     let inkRuns = null; // (span) => a mixed span's colours as character runs (see inkColor)
     let inkReads = 0; // colours inkColor read off the canvas (not from #inkMemo)
     let inkAhead = 0; // the pairs whose colour has been read ahead of their batch
+    // Colour pass, mixed spans only (inkColor): every rect read first, in the
+    // one layout the width pass left, then every wrap written. It runs at the
+    // start of the idle period after its batch's (runsDue), not at the end of
+    // the batch: there its first rect forced the style and layout of
+    // everything the batch had just written — 4-7 ms a batch, three quarters
+    // of what the runs cost, 24-105 ms a switch — work the frame between the
+    // two periods does anyway. Nothing writes to the batch's spans in
+    // between, and the rects are taken in the frame the pixels were read in
+    // (inkRuns), so the runs are the ones the batch would have measured.
+    let runsDue = [];
+    const paintRuns = () => {
+      const due = runsDue;
+      runsDue = [];
+      if (this.#runsDue.get(pageNumber) === paintRuns) this.#runsDue.delete(pageNumber);
+      if (holder.cancelled) return;
+      const runsFor = due.map((span) => [span, inkRuns(span)]);
+      for (const [span, runs] of runsFor) {
+        if (!runs) continue;
+        if (runs.uniform) span.style.setProperty("--fx-ink", runs.uniform);
+        else if (runs.length) {
+          this.#inkRuns.set(span, { runs, len: span.textContent.length });
+          wrapInk(span, runs);
+        }
+      }
+    };
     let inkFit = null; // (rect) => how line-like the ink under it is — overlap resolver
     const lowResSrc = (s) => s.csy < 1.5; // too coarse for reliable band metrics
     let overlapVeto = null; // candidates whose rects pile on another candidate
@@ -6806,6 +6848,7 @@ export class TypographyEngine {
         }
       }
       while (i < pairs.length) {
+        if (runsDue.length) paintRuns();
         // The batch's colours are read ahead of it, off the pristine boxes
         // the read pass below measures again (#inkMemo, keyed on the
         // pixels read, so the batch takes exactly these answers), and when
@@ -7267,24 +7310,26 @@ export class TypographyEngine {
             span.style.setProperty("--scale-x", targetW / natural);
           }
         }
-        // Colour pass, mixed spans only (inkColor): every rect read first, in
-        // the one layout the width pass left, then every wrap written.
-        const mixedInk = inkRuns ? batch.filter((e) => e.mixedInk) : [];
-        const runsFor = mixedInk.map((e) => [e.pair.div, inkRuns(e.pair.div)]);
-        for (const [span, runs] of runsFor) {
-          if (!runs) continue;
-          if (runs.uniform) span.style.setProperty("--fx-ink", runs.uniform);
-          else if (runs.length) {
-            this.#inkRuns.set(span, { runs, len: span.textContent.length });
-            wrapInk(span, runs);
-          }
-        }
+        // The mixed spans' colour pass is left to the start of the next idle
+        // period (paintRuns above), when nothing has been written since the
+        // frame laid the batch out.
+        if (inkRuns) for (const e of batch) if (e.mixedInk) runsDue.push(e.pair.div);
+        if (runsDue.length) this.#runsDue.set(pageNumber, paintRuns);
         this.#spanMs = (performance.now() - tBatch) / (end - i);
         i = end;
         if (deadline && deadline.timeRemaining() < this.#batchBudget(Math.min(CHUNK, pairs.length - i)) && i < pairs.length) {
           requestIdleCallback(work, { timeout: 200 });
           return;
         }
+      }
+      // The last batch's runs, in an idle period of their own.
+      if (runsDue.length) {
+        if (deadline && !holder.runsYielded) {
+          holder.runsYielded = true;
+          requestIdleCallback(work, { timeout: 200 });
+          return;
+        }
+        paintRuns();
       }
       this.#pending.delete(pageNumber);
       if (timing) (globalThis.__fxTiming ??= []).push({ ...timing, total: Math.round(performance.now() - timing.t0) }); // test introspection
