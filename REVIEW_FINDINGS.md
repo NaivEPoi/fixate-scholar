@@ -8035,10 +8035,40 @@ photographed one idle period before its last batch's runs are in):
   on three pages — a 9 × 13 px patch where the possessive's "s" lost
   its bold.
 
+### The real display, measured
+
+With a visible window allowed again (one at a time, closed after each
+run): the public USENIX paper R64 measured, a fresh profile each run,
+a 1400 × 1400 window at device pixel ratio 2 on the 175 % display,
+page-width zoom, the harness's sequence (load, reading mode on while
+scrolling pages 1–10, park on page 5, switch original → serif → sans
+→ original, each switch traced for 25 s), three runs on v1.4.8 and
+three on v1.4.3 in a worktree with the vendor those versions shipped.
+The switch no longer freezes the page: in nine switches at v1.4.8 no
+task over 50 ms, 0 ms blocked, no freeze, no second burst, the page
+in view in the new face after about 240 ms. Medians, v1.4.8 against
+v1.4.3 — serif: blocked 0 vs 199 ms, tasks over 50 ms 0 vs 19, longest
+task 34 vs 80 ms, longest freeze 0 vs 422 ms, worst frame gap 53 vs
+158 ms, visible 241 vs 589 ms; sans: 0 vs 157, 0 vs 14, 26 vs 77,
+0 vs 341, 35 vs 121, 239 vs 690; original: 0 vs 103, 0 vs 6, 29 vs
+83, 0 vs 95, 19 vs 87, 205 vs 808. The largest task left is one
+per-page chunk of the pass, 26–34 ms (about 5 ms of it restyle and
+layout), or a 26–29 ms major collection; the longest stretch of
+back-to-back work 65–160 ms in tasks of 30 ms or less.
+
+The v1.4.3 numbers are gentler than R64's "before" (20 passes, 44
+tasks, 1162 ms blocked, a 608 ms freeze, a second burst at 19 s):
+here the bundled face finished loading 0.3–0.4 s after every switch,
+so `refreshFonts` never re-ran every page — R64's second burst came
+from that load being held back — and R64's 330 ms paint-only tasks
+did not appear. Display, ratio, window and zoom were R64's; a warm
+disk cache (the vendor had just been copied) and a newer browser are
+what differ. The machine carried the user's own browser and desktop
+apps at 10–12 % CPU during the runs.
+
 ### Left for the next round
 
-The real display, not measured since R64's first commit (a visible
-browser is not allowed on this machine for now). Seen but invisible:
+Nothing on the sheet. Seen but invisible:
 on one public page a coloured citation's first digit sometimes falls
 outside the span's colour run, which splits the citation's wrap in
 two — both halves keep the citation colour, on either tree, so
