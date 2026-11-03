@@ -2229,16 +2229,49 @@ export class TypographyEngine {
       // rows, a lone -s word otherwise to a score of them (plurals, an
       // -ous adjective naming a quantity), and this shape to the two prose
       // rows alone.
-      const VERB_S = /^[a-z]{2,}[a-hj-rt-z]s$/;
+      // (The letter before the -s excludes i, s and u: R66 wrote "t-z",
+      // which let -us through, and an -ous adjective naming a quantity
+      // beside its index is just the word the next rule must not take.)
+      const VERB_S = /^[a-z]{2,}[a-hj-rtv-z]s$/;
       const takesObject = (p, row) => {
         if (!row || !VERB_S.test(p.item.str.trim())) return false;
         const i = row.indexOf(p);
         return i >= 0 && /^\(/.test(row[i + 1]?.item.str.trim() ?? "");
       };
+      // ...nor is it a PREDICATE: the same -s word standing between a
+      // symbol, its subject, and the clause it governs — a function word
+      // ("<symbol> <verb>s if <function>(…) = <constant>", a numbered
+      // step of a proof) or a math-face symbol, its object ("<symbol>
+      // <verb>s <symbol> =", a protocol step). Both shapes carry "=", so the
+      // glyph operated them, and the R66 test above needs "(" right after
+      // the verb (R67, two private papers). The symbol before it is what
+      // makes it a verb: a count before a plural ("<n> <noun>s ×") has a
+      // numeral there, but a numeral reads as a subscript too, so the
+      // AFTER side decides — an operator glyph, a word or the row's end
+      // follow a plural, and those stay names. Measured over both
+      // corpora's traced rows: these three rows and one prose row
+      // already released by its own function word, nothing else.
+      const wordish = (p) => !isMath(p) && /[a-zà-ÿ]{3,}/.test(p.item.str);
+      const predicate = (p, row) => {
+        if (!row || !VERB_S.test(p.item.str.trim())) return false;
+        const its = row.filter((q) => q.item.str.trim());
+        const i = its.indexOf(p);
+        const prev = its[i - 1], next = its[i + 1];
+        if (i <= 0 || !next || wordish(prev)) return false;
+        const nt = next.item.str.trim();
+        return (/^[A-Za-z]+$/.test(nt) && FUNCTION_WORD.test(nt)) || (isMath(next) && /\p{L}/u.test(nt));
+      };
+      // ...and no POSSESSIVE determiner: a name carries no article, and
+      // "their <noun phrase>" is the same determiner — an imperative step
+      // line "<verb> <symbol> their <three-word noun> <symbol> =" read as
+      // names around a glyph (R67, a private paper; the one traced row of
+      // both corpora with such a word in a name span).
+      const DETERMINER = /\b(?:their|its|our|his|her|my|your)\b/;
       const nameSpan = (p, row = null) => {
         const t = p.item.str.trim();
         return t.split(/\s+/).length <= 3 && !FUNCTION_WORD.test(t) && !ADVERB_LED.test(t) &&
-          !AUXILIARY.test(t) && !SENTENCE_BREAK.test(t) && !takesObject(p, row);
+          !AUXILIARY.test(t) && !SENTENCE_BREAK.test(t) && !DETERMINER.test(t) &&
+          !takesObject(p, row) && !predicate(p, row);
       };
       for (const b of blocks) {
         for (const r of b.rows) {

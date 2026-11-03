@@ -281,12 +281,20 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
     const after = segs.slice(segIndex + 1, segIndex + 3).map((x) => x.text).join("");
     const enumerator = seg.text.length === 1 && prevText.endsWith("(") && after.startsWith(")");
     const variable = seg.text.length <= 2 && /^\s*[=<>≤≥≠]/.test(after);
+    // The capitals test reads the word as READ: a span's last word that the
+    // next span continues (`join.tail`) is measured with that continuation.
+    // A faked small-caps word is a full-height capital ending one span and
+    // its reduced capitals opening the next, which the engine keeps as a
+    // fragment; alone, the capital was a one-letter word and went bold in
+    // front of plain small caps (R67, a public paper's system name). Read
+    // whole it is all capitals, a label like any acronym.
+    const asRead = segIndex === lastWord && tailJoin ? seg.text + tailJoin : seg.text;
     if (
       noEmphasis ||
       !seg.isWord ||
       inLink ||
       !PLAIN_WORD.test(seg.text) ||
-      /^[A-ZÀ-Þ]{2,}(?:['’]?s)?$/.test(seg.text) ||
+      /^[A-ZÀ-Þ]{2,}(?:['’]?s)?$/.test(asRead) ||
       enumerator || variable
     ) {
       parts.push({ text: seg.text, bold: false });

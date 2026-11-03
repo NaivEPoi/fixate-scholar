@@ -201,6 +201,26 @@ test("an acronym with a possessive or plural ending is the same label (R59)", ()
   assert.ok(mixed.parts.some((p) => p.bold && p.text === "A"));
 });
 
+test("a capital the next span continues in capitals is a label, read whole (R67)", () => {
+  // Faked small caps: the full-height capital ends this span, its reduced
+  // capitals open the next ("P" + "ROBE"). Read whole, the word is capitals.
+  const sc = emphasizeParts("Then we ran P", {}, 0, { tail: "ROBE" });
+  const bolded = sc.parts.filter((p) => p.bold).map((p) => p.text);
+  assert.ok(!bolded.includes("P"), JSON.stringify(bolded));
+  assert.ok(bolded.includes("Th") && bolded.includes("w")); // the prose before it keeps its emphasis
+  assert.equal(sc.parts.map((p) => p.text).join(""), "Then we ran P");
+  // A capital continued in lowercase is an ordinary word split by a font change.
+  const word = emphasizeParts("as noted by T", {}, 0, { tail: "here" });
+  assert.ok(word.parts.some((p) => p.bold && p.text === "T"));
+  // With no continuation, a one-letter word and a sentence-opening capital keep theirs.
+  const plain = emphasizeParts("I saw a C");
+  const plainBold = plain.parts.filter((p) => p.bold).map((p) => p.text);
+  assert.ok(["I", "a", "C"].every((w) => plainBold.includes(w)), JSON.stringify(plainBold));
+  // A continuation only applies to the LAST word.
+  const mid = emphasizeParts("A note", {}, 0, { tail: "S" });
+  assert.ok(mid.parts.some((p) => p.bold && p.text === "A"));
+});
+
 test('emphasisMode "none" bolds nothing but keeps the text intact', () => {
   const text = "reading with a swapped font only";
   const { parts } = emphasizeParts(text, { emphasisMode: "none" });
