@@ -25,7 +25,9 @@ export const PATCHES = [
     file: "web/viewer.mjs",
     anchor: `if (HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {`,
     replacement: `if (viewerOrigin.startsWith("chrome-extension:") /* fixate-scholar-patch-1: extension pages may load cross-origin PDFs */ || HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {`,
-    marker: "fixate-scholar-patch-1",
+    // With the colon: "fixate-scholar-patch-1" alone is a substring of the
+    // patch-10a/10b markers, and would pass for a tree missing this one.
+    marker: "fixate-scholar-patch-1:",
   },
   {
     // Load the overlay (typography engine, references, toolbar buttons).
@@ -150,6 +152,61 @@ export const PATCHES = [
     /* fixate-scholar-patch-9: floating highlight and comment buttons on selection */
     value: true,`,
     marker: "fixate-scholar-patch-9",
+  },
+  {
+    // Inject inferred links only into the annotation layer this draw rendered
+    // (PDFPageView.draw's post-render continuation, with 10b below). The
+    // continuation awaits the annotation layer's render — getAnnotations, a
+    // worker round trip — and then the text layer, and only then reads
+    // `this.annotationLayer` again. A scale change in between (update() →
+    // reset({ keepAnnotationLayer: true }), which keeps the builder only once
+    // its div exists) cancels a builder still fetching its annotations and the
+    // next draw puts a fresh, unrendered one in its place; the stale
+    // continuation then called injectLinkAnnotations on the fresh builder,
+    // which throws "`render` method must be called before
+    // `injectLinkAnnotations`" and is logged by #injectLinkAnnotations as a
+    // console error. Upstream race, reproduced with our overlay removed: a
+    // zoom 0 ms after page 1's canvas finishes throws 3 of 3 times. Skipping
+    // loses nothing — the newer draw injects into its own builder once it has
+    // rendered it (link counts identical with and without the reset).
+    file: "web/viewer.mjs",
+    anchor: `      if (this.annotationLayer) {
+        await this.#renderAnnotationLayer();
+        if (this.#enableAutoLinking && this.annotationLayer && this.textLayer) {
+          await this.#injectLinkAnnotations(textLayerPromise);
+        }
+      }`,
+    replacement: `      if (this.annotationLayer) {
+        /* fixate-scholar-patch-10a: inject only into the builder this draw
+           rendered; a reset may have replaced it while the render awaited */
+        const renderedAnnotationLayer = this.annotationLayer;
+        await this.#renderAnnotationLayer();
+        if (this.#enableAutoLinking && this.annotationLayer === renderedAnnotationLayer && this.textLayer) {
+          await this.#injectLinkAnnotations(textLayerPromise, renderedAnnotationLayer);
+        }
+      }`,
+    marker: "fixate-scholar-patch-10a:",
+  },
+  {
+    // ...and the same check after the text layer's promise, which is awaited
+    // inside #injectLinkAnnotations: the reset can land there too.
+    file: "web/viewer.mjs",
+    anchor: `  async #injectLinkAnnotations(textLayerPromise) {
+    let error = null;
+    try {
+      await textLayerPromise;
+      if (!this.annotationLayer) {
+        return;
+      }`,
+    replacement: `  async #injectLinkAnnotations(textLayerPromise, renderedAnnotationLayer = this.annotationLayer) {
+    let error = null;
+    try {
+      await textLayerPromise;
+      /* fixate-scholar-patch-10b: the builder may have been replaced meanwhile */
+      if (!this.annotationLayer || this.annotationLayer !== renderedAnnotationLayer) {
+        return;
+      }`,
+    marker: "fixate-scholar-patch-10b:",
   },
 ];
 
