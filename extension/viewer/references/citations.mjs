@@ -48,6 +48,9 @@ export class ReferencesFeature {
    *  want the same text and should not pay for a second pass over the PDF. */
   onLines = null;
 
+  /** Called with a page view before its text is wrapped (annotatePage). */
+  beforeAnnotate = null;
+
   /** Called before / after the four document-wide results above are handed
    *  over. They all land together, and each one re-processes rendered pages,
    *  so the consumer uses this pair to coalesce that into a single pass. */
@@ -269,6 +272,7 @@ export class ReferencesFeature {
   }
 
   annotatePage(pageView) {
+    this.beforeAnnotate?.(pageView);
     pageView.div.querySelector(".fx-cite-layer")?.remove();
     const textLayerDiv = pageView.textLayer?.div;
     if (!textLayerDiv) return;
