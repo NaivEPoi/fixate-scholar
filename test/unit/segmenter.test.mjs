@@ -227,6 +227,26 @@ test("a capital the next span continues in capitals is a label, read whole (R67)
     assert.ok(!subBold.some((t) => label.startsWith(t) && t.length >= 2) && !subBold.includes(label), JSON.stringify(subBold));
     assert.ok(sub.parts.some((p) => !p.bold && p.text === label), JSON.stringify(sub.parts));
   }
+  // The mirror from the head side (R68): a possessive or plural opening the
+  // span after a kept small-caps tail is that label's ending, not a word —
+  // the "s" stays plain, the prose after it keeps its emphasis.
+  for (const text of ["’s private key", "'s private key", "s private key"]) {
+    const poss = emphasizeParts(text, {}, 0, { head: "ROBE" });
+    const possBold = poss.parts.filter((p) => p.bold).map((p) => p.text);
+    assert.ok(poss.parts.some((p) => !p.bold && p.text.endsWith("s")) && !possBold.includes("s"), `${text}: ${JSON.stringify(poss.parts)}`);
+    assert.ok(possBold.includes("priv") && possBold.includes("ke"), `${text}: ${JSON.stringify(possBold)}`);
+    assert.equal(poss.parts.map((p) => p.text).join(""), text);
+    assert.equal(poss.wordIndex, 2, "the ending is not counted as a word");
+  }
+  // The same holds after a processed lowercase word ("user" + "’s key"): one
+  // word, one bold run, sized on the span that began it.
+  const own = emphasizeParts("’s key", {}, 0, { head: "user" });
+  assert.deepEqual(own.parts.filter((p) => p.bold).map((p) => p.text), ["ke"]);
+  // Without a join, or with a space before the first word, nothing carried
+  // over: a span opening on a real word keeps its prefix.
+  assert.ok(emphasizeParts("’s key").parts.some((p) => p.bold && p.text === "s"));
+  assert.ok(emphasizeParts("’ some key", {}, 0, { head: "ROBE" }).parts.some((p) => p.bold && p.text === "so"));
+  assert.ok(emphasizeParts("private key", {}, 0, { head: "" }).parts.some((p) => p.bold && p.text === "priv"));
 });
 
 test('emphasisMode "none" bolds nothing but keeps the text intact', () => {

@@ -258,10 +258,17 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
   let offset = 0;
   const segs = segment(text);
   // A join only applies when the fragment really is at the span's edge: a
-  // leading space means the word did not carry over.
+  // leading space means the word did not carry over. An apostrophe does not:
+  // the word segmenter splits a span opening "’s" into "’" and "s", so the
+  // possessive of a word the previous span ended was counted as a word of its
+  // own and its "s" went bold — after a processed word ("user" + "’s", a
+  // second bold run in one word) and after a kept small-caps tail (a lone
+  // bold "s" behind plain small caps, R68, a private paper). The engine's
+  // join reads the apostrophe as a word character, so the head is there.
   const firstWord = segs.findIndex((x) => x.isWord);
   const lastWord = segs.length - 1;
-  const headJoin = join?.head && firstWord === 0;
+  const headJoin =
+    join?.head && firstWord >= 0 && segs.slice(0, firstWord).every((x) => /^['’]+$/.test(x.text));
   const tailJoin = join?.tail && segs[lastWord]?.isWord ? join.tail : "";
   for (const [segIndex, seg] of segs.entries()) {
     const start = offset;
