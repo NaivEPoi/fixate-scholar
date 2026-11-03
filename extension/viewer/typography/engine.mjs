@@ -433,6 +433,94 @@ const SMALL_TEXT = 0.7;
 // touching a math glyph, is notation (the candidate filter's math-op).
 const MATH_OP_SPAN = /^(?:exp|log|ln|lg|cos|sin|tan|cot|sec|csc|sinh|cosh|tanh|arg|max|min|sup|inf|lim|det|dim|deg|gcd|lcm|mod|ker|hom|tr|diag|rank|span|sgn|sign|argmax|argmin|dist|supp|Pr|Var|Cov|s\.t\.)$/;
 
+// A pass's obstacles as plain numbers, four per rect (left, right, top,
+// bottom), for the two scans that test every obstacle against every span:
+// the read pass's duplicate check and the mask pass's clamp. Most of the
+// obstacles are DOMRects, and every read of a DOMRect's side boxed a
+// fresh number, as did every double read in the pass's own (too large to
+// optimize) function: those two scans allocated 4-11 MB a batch, and the
+// collections that followed — a full one of 11-14 ms in a session's first
+// font switch — landed in the batches. The values are the rects' own, so
+// every test below answers exactly as it did on the rects.
+// Appends rects[from..] to the store (grown as needed); returns the store.
+function obstacleBoxes(rects, from, store) {
+  const n = rects.length;
+  if (store.length < n * 4) {
+    const grown = new Float64Array(Math.max(n * 4, store.length * 2, 256));
+    grown.set(store.subarray(0, from * 4));
+    store = grown;
+  }
+  for (let k = from; k < n; k++) {
+    const o = rects[k];
+    store[k * 4] = o.left;
+    store[k * 4 + 1] = o.right;
+    store[k * 4 + 2] = o.top;
+    store[k * 4 + 3] = o.bottom;
+  }
+  return store;
+}
+
+// Whether a rect overlaps any of the first n boxes by more than 35% of its
+// area (the read pass's overlapsObstacle).
+function overlapsBox(box, n, left, right, top, bottom, area) {
+  for (let k = 0; k < n * 4; k += 4) {
+    const w = Math.min(right, box[k + 1]) - Math.max(left, box[k]);
+    const h = Math.min(bottom, box[k + 3]) - Math.max(top, box[k + 2]);
+    if (w > 0 && h > 0 && w * h > area * 0.35) return true;
+  }
+  return false;
+}
+
+// The first box at or after index k (of n) that reaches into L..R × T..B —
+// the mask clamp's quick test, negated — or n when none does.
+function nextBoxInto(box, n, k, L, R, T, B) {
+  for (; k < n; k++) {
+    const i = k * 4;
+    if (box[i + 1] <= L || box[i] >= R || box[i + 3] <= T || box[i + 2] >= B) continue;
+    return k;
+  }
+  return n;
+}
+
+// The mask cuts (descenderZones) the same way, five numbers per zone: its
+// sides and whether it carries a kept glyph's own box. The mask pass made
+// a cut's variants for this span (spread copies of the zone) before
+// testing whether any of them reached the mask at all, for every zone and
+// every span; this tests first, on bounds that hold every variant: none
+// is wider than the zone, except a kept glyph's sideways overhang, which
+// reaches no further than one px into this span's own glyph box (gL..gR).
+function zoneBoxes(zones, from, store) {
+  const n = zones.length;
+  if (store.length < n * 5) {
+    const grown = new Float64Array(Math.max(n * 5, store.length * 2, 320));
+    grown.set(store.subarray(0, from * 5));
+    store = grown;
+  }
+  for (let k = from; k < n; k++) {
+    const z = zones[k];
+    store[k * 5] = z.left;
+    store[k * 5 + 1] = z.right;
+    store[k * 5 + 2] = z.top;
+    store[k * 5 + 3] = z.bottom;
+    store[k * 5 + 4] = z.own ? 1 : 0;
+  }
+  return store;
+}
+
+// The first zone at or after index k (of n) any variant of which can reach
+// into L..R × T..B, or n.
+function nextZoneInto(box, n, k, L, R, T, B, gL, gR) {
+  for (; k < n; k++) {
+    const i = k * 5;
+    const own = box[i + 4] === 1;
+    const left = own ? Math.min(box[i], gR - 1) : box[i];
+    const right = own ? Math.max(box[i + 1], gL + 1) : box[i + 1];
+    if (right <= L || left >= R || box[i + 3] <= T || box[i + 2] >= B) continue;
+    return k;
+  }
+  return n;
+}
+
 
 // Key a font by its bare leading family name: the same face reaches spans as
 // both '"g_d0_f12", sans-serif' (our swap string) and 'g_d0_f12, sans-serif'
@@ -5402,6 +5490,26 @@ export class TypographyEngine {
       )
       .map((p) => p.div);
     let obstacleRects = null;
+    // obstacleRects as numbers (obstacleBoxes), its first obsN entries; the
+    // list only grows, except when the page moved and every entry was
+    // replaced (the frame shift below), which starts it over.
+    let obsBox = new Float64Array(0);
+    let obsN = 0;
+    const syncObstacles = () => {
+      if (obsN < obstacleRects.length) {
+        obsBox = obstacleBoxes(obstacleRects, obsN, obsBox);
+        obsN = obstacleRects.length;
+      }
+    };
+    // descenderZones the same way (zoneBoxes), for the mask pass.
+    let zoneBox = new Float64Array(0);
+    let zoneN = 0;
+    const syncZones = () => {
+      if (zoneN < descenderZones.length) {
+        zoneBox = zoneBoxes(descenderZones, zoneN, zoneBox);
+        zoneN = descenderZones.length;
+      }
+    };
     let frame = null; // the text layer's viewport position when the geometry below was recorded
     const snaps = new Set(); // canvas snapshots read by this pass (their `cr` is viewport geometry too)
     const artKept = new Set(); // spans kept for the vector art on them (work())
@@ -5623,7 +5731,9 @@ export class TypographyEngine {
             return o;
           };
           if (obstacleRects) for (let n = 0; n < obstacleRects.length; n++) obstacleRects[n] = moved(obstacleRects[n]);
+          obsN = 0;
           for (let n = 0; n < descenderZones.length; n++) descenderZones[n] = moved(descenderZones[n]);
+          zoneN = 0;
           for (const sn of snaps) sn.cr = moved(sn.cr);
           // The shades too: recorded in the first stage in client coordinates,
           // read by the mask pass against spans measured afresh (R55 review).
@@ -6642,12 +6752,8 @@ export class TypographyEngine {
       const overlapsObstacle = (r) => {
         const area = (r.right - r.left) * (r.bottom - r.top);
         if (!(area > 0)) return false;
-        for (const o of obstacleRects) {
-          const w = Math.min(r.right, o.right) - Math.max(r.left, o.left);
-          const h = Math.min(r.bottom, o.bottom) - Math.max(r.top, o.top);
-          if (w > 0 && h > 0 && w * h > area * 0.35) return true;
-        }
-        return false;
+        syncObstacles();
+        return overlapsBox(obsBox, obsN, r.left, r.right, r.top, r.bottom, area);
       };
       if (tObs) timing.obstacles = Math.round(performance.now() - tObs);
       // The first stage — obstacles, rules, the ink checks, the overlap
@@ -6869,6 +6975,8 @@ export class TypographyEngine {
         // its HORIZONTAL extent comes from the pristine rect (the canvas glyph
         // width, which the width correction below restores). Every rendered span
         // sits in the text layer above the mask, so kept inline math survives.
+        syncObstacles();
+        syncZones();
         for (const { rect, rect2, targetW } of batch) {
           const r2 = rect2 || rect;
           if (!(rect.width > 0) || !(r2.height > 0)) continue;
@@ -6879,8 +6987,10 @@ export class TypographyEngine {
           let R = rect.left + (targetW || rect.width) + padX;
           let T = Math.min(rect.top, r2.top) - padY;
           let B = Math.max(rect.bottom, r2.bottom) + padY;
-          for (const o of obstacleRects) {
-            if (o.right <= L || o.left >= R || o.bottom <= T || o.top >= B) continue;
+          // Every obstacle reaching into the padded box as it stands — the
+          // edges move as each one clamps them (obstacleBoxes).
+          for (let k = nextBoxInto(obsBox, obsN, 0, L, R, T, B); k < obsN; k = nextBoxInto(obsBox, obsN, k + 1, L, R, T, B)) {
+            const o = obstacleRects[k];
             // Glyph art under this span's glyphs (a wavy underline) is cut out
             // of the mask exactly; clamped like text, its box — which reaches
             // up into the word — pulled the mask's END in, baring the canvas
@@ -6961,7 +7071,9 @@ export class TypographyEngine {
           // the tops of its own canvas capitals (a sliver beside the "T" of
           // "To" under a kept subscript).
           const ownTop = r2.top + h * 0.05;
-          for (const zone of descenderZones) {
+          const spanL = rect.left, spanR = rect.left + (targetW || rect.width);
+          for (let zk = nextZoneInto(zoneBox, zoneN, 0, L, R, T, B, spanL, spanR); zk < zoneN; zk = nextZoneInto(zoneBox, zoneN, zk + 1, L, R, T, B, spanL, spanR)) {
+            const zone = descenderZones[zk];
             let z = zone.top < r2.top ? { ...zone, bottom: Math.min(zone.bottom, ownTop) } : zone;
             // A glyph-art cut never bares this span's own glyph core: a wave
             // runs below the word, and a wordless run sitting ON the words (a
