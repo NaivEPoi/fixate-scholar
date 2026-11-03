@@ -483,6 +483,7 @@ export class TypographyEngine {
   #faceLoads = new Map(); // fontMode -> promise: its bundled faces loaded, or waited for FACE_LOAD_MS
   #spanMs = 0; // how long the latest batch of a pass took, per span (#batchBudget)
   #faceWarm = new Map(); // font stack -> promise: the face used once, in an idle task of its own (#warmFace)
+  #inkMemo = new WeakMap(); // span -> { canvas, key, ink }: its colour as last read off that canvas (inkColor)
 
   constructor(app, settings) {
     this.#app = app;
@@ -5588,6 +5589,7 @@ export class TypographyEngine {
       // worker, or if it fails, the block reads them here as it always did.
       if (!obstacleRects && holder.pixels === undefined) {
         holder.pixels = null; // in flight
+        holder.pixelsSettled = pageView.renderingState === 3; // the base canvas had finished painting (inkColor's memo)
         this.#prefetchPixels(pageView)
           .then((m) => { holder.pixels = m ?? false; }, () => { holder.pixels = false; })
           .finally(() => {
@@ -5730,6 +5732,15 @@ export class TypographyEngine {
             const detail = pageView.detailView?.renderingState === 3 ? readCanvas(pageView.detailView.canvas) : null;
             if (detail) snaps.add(detail);
             const useDetail = detail && detail.csx > base.csx * 1.2;
+            // The canvas each snapshot was read from, when it had finished
+            // painting before it was read (inkColor's memo). PDF.js paints
+            // every render into a canvas of its own and never draws on a
+            // finished one again, so such a canvas's pixels stay what they
+            // were; one read while still painting (a pass that stopped
+            // waiting for it) is not remembered.
+            const canvasOf = new Map();
+            if (pageView.renderingState === 3 && holder.pixelsSettled !== false) canvasOf.set(base, pageView.canvas);
+            if (detail) canvasOf.set(detail, pageView.detailView.canvas);
             const srcFor = (rect) => {
               if (useDetail) {
                 const c = detail.cr;
@@ -5810,14 +5821,22 @@ export class TypographyEngine {
               // says so: windows about an em wide along the span that disagree
               // (one coloured, one neutral, or two hues). Such a span is coloured
               // per character (inkRuns, after the width pass).
-              const inkOf = (rect, step, minPx, need, local, windows = true) => {
+              // The pixels inkOf reads for a rect: the snapshot, the columns,
+              // the core band's rows and the whole box's rows.
+              const windowOf = (rect) => {
                 const s = srcFor(rect);
-                const x0 = Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx));
-                const x1 = Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx));
-                const y0 = Math.max(0, Math.floor((rect.top + rect.height * 0.3 - s.cr.top) * s.csy));
-                const y1 = Math.min(s.H, Math.ceil((rect.bottom - rect.height * 0.3 - s.cr.top) * s.csy));
-                const b0 = Math.max(0, Math.floor((rect.top - s.cr.top) * s.csy));
-                const b1 = Math.min(s.H, Math.ceil((rect.bottom - s.cr.top) * s.csy));
+                return {
+                  s,
+                  x0: Math.max(0, Math.floor((rect.left - s.cr.left) * s.csx)),
+                  x1: Math.min(s.W, Math.ceil((rect.right - s.cr.left) * s.csx)),
+                  y0: Math.max(0, Math.floor((rect.top + rect.height * 0.3 - s.cr.top) * s.csy)),
+                  y1: Math.min(s.H, Math.ceil((rect.bottom - rect.height * 0.3 - s.cr.top) * s.csy)),
+                  b0: Math.max(0, Math.floor((rect.top - s.cr.top) * s.csy)),
+                  b1: Math.min(s.H, Math.ceil((rect.bottom - s.cr.top) * s.csy)),
+                };
+              };
+              const inkOf = (rect, step, minPx, need, local, windows = true) => {
+                const { s, x0, x1, y0, y1, b0, b1 } = windowOf(rect);
                 const all = darkness(s, x0, x1, y0, y1, step, b0, b1);
                 if (all.n < minPx) return { color: null, n: all.n, mixed: false, d: all.d };
                 const rgb = inkColour(all.d, need, local);
@@ -5861,10 +5880,28 @@ export class TypographyEngine {
               // leave over is still up to ~95, so under three ems a span must
               // show strong colour — but whole, it is judged as a span: a bright
               // orange category letter is ink, not a tint.
-              inkColor = (rect) => {
+              //
+              // The answer is a function of the pixels read and nothing else,
+              // so a span read again over the same pixels of the same
+              // finished canvas takes the answer it had (#inkMemo): every
+              // pass after a page's first — each page of a font switch —
+              // read its spans' colour afresh, 7-23 ms a batch on the page in
+              // view, whose detail canvas has the most pixels. The key is
+              // the window inkOf reads, in that canvas's pixels.
+              inkColor = (rect, span) => {
                 const pad = 2 / srcFor(rect).csx;
                 const wide = { left: rect.left - pad, right: rect.right + pad, top: rect.top, bottom: rect.bottom, width: rect.width + 2 * pad, height: rect.height };
-                return inkOf(wide, 2, 12, rect.width >= rect.height * 3 ? SPAN_CHROMA : LOCAL_CHROMA, false);
+                const need = rect.width >= rect.height * 3 ? SPAN_CHROMA : LOCAL_CHROMA;
+                const w = windowOf(wide);
+                const canvas = span ? canvasOf.get(w.s) : undefined;
+                const key = canvas
+                  ? `${w.x0} ${w.x1} ${w.y0} ${w.y1} ${w.b0} ${w.b1} ${need} ${Math.max(4, Math.round(wide.height * 0.6 * w.s.csx))}`
+                  : null;
+                const memo = key ? this.#inkMemo.get(span) : undefined;
+                if (memo && memo.canvas === canvas && memo.key === key) return memo.ink;
+                const ink = inkOf(wide, 2, 12, need, false);
+                if (key) this.#inkMemo.set(span, { canvas, key, ink: { color: ink.color, mixed: ink.mixed } });
+                return ink;
               };
               // A mixed span's colour per character, measured where the width
               // pass left each glyph: over its own canvas ink in the original
@@ -6800,7 +6837,7 @@ export class TypographyEngine {
                 : 0;
           if (Math.abs(dEm) > 0.004) span.style.marginTop = `${dEm.toFixed(4)}em`;
           span.dataset.fxDone = "1";
-          const ink = inkColor?.(entry.rect);
+          const ink = inkColor?.(entry.rect, span);
           if (ink?.mixed) entry.mixedInk = true;
           else if (ink?.color) span.style.setProperty("--fx-ink", ink.color);
         }
