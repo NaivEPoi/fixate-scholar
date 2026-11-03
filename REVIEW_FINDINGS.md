@@ -7570,3 +7570,162 @@ opening a small-caps name (public USENIX, page 10) set in the bundled
 serif face overlapping the small-caps letters left on the canvas: the
 bundled capital is wider than the slot the original's gave it; the
 original face is fine.
+
+## R66 — the sheet R65 left, fixed by assigned subagents (2026-11-02)
+
+Three subagents, one headless browser each: the named rows no glyph
+operates, the capital overlapping a small-caps word, and the first
+batch in a newly chosen face.
+
+### A name span holds no verb
+
+The prose still kept as a named equation row with no operator glyph
+(three private papers, four rows): each row opened on math, carried
+no glyph the row-equation test knows (an arrow, a membership sign, a
+star), and was operated by count alone — its math items outnumbered
+its one name span — and that span passed `nameSpan`. Read from the
+dumps: an item of a displayed condition list, shaped "<math subject>
+<-s verb> (<operands>),", whose sibling items are processed; a game's
+numbered step, "(n) <adversary symbol> <-s verb> (<operands>)."; and
+two rows wrapped to open on an inline set formula, one "<small-caps
+name> will <verb> a <noun> <noun>", a modal verb phrase, the other
+holding a sentence break in its name span.
+
+A name span now refuses a lowercase modal or auxiliary verb
+(`AUXILIARY`), a sentence break — a lowercase word, a full stop and a
+capital (`SENTENCE_BREAK`) — and a single lowercase third-person -s
+word (not -ss, -is, -us) whose next item in the row opens a
+parenthesis, a verb with its object (`takesObject`; `nameSpan` takes
+the row, and its three callers pass it). Measured with a what-if over
+a fresh item-level trace of both corpora (684 rows, 370 with
+`allNamed`): the modal list releases one row, the sentence break one
+(loosened to three letters and any next word it took a table header
+too), the -s-before-"(" shape two — the four rows, nothing else. Any
+lowercase word before "(" would have released 26 rows, 24 of them
+function applications in real equations; a lone -s word whatever
+follows, 21 (plurals, an adjective naming a quantity). After, span
+for span: the verbs processed, the symbols `special-or-short`, two
+operand names `math-name`, the small-caps tails `smallcaps-tail`;
+nothing else on the three pages moved. Option-lane probes 49/49,
+unreasoned 0 everywhere; against the v1.4.5 option run one private
+page changed (the other two released rows carry no `row-eqn` count in
+line mode).
+
+Left, out of scope here because each row carries an operator glyph:
+two numbered steps shaped "<subject> <-s verb> if <function>(…) =
+<constant>" and a step line "<subject> <-s verb> <name> =", on two
+private papers.
+
+### The bundled face's base word-spacing was added after the fit
+
+The capital that opened a faked small-caps word on the public USENIX
+paper (page 10, the bundled serif) and overlapped the reduced letters
+kept on the canvas was not a classification call: the capital is the
+last letter of a processed prose span, and the reduced letters were
+already kept (`smallcaps-tail`). Measured at zoom 3, the span's right
+edge ran 4.5 to 7.7 px past the kept letters, and the overrun grew
+with the span's spaces: the width pass fitted each span to its canvas
+width and then wrote the face's base word-spacing (`FONT_BASE_WORD_SPACING`,
+0.04 em for the serif, 0.02 em for the other serif) on top, uncounted
+in the width it carried, so every such span ran 0.04 em per space past
+its slot — visible only where a kept item abuts the span's end. The
+base spacing is now the floor of the per-space widening (`minTrim` for
+a bundled face) and `--scale-x` takes back what it costs; a span
+already at its width still goes through the fit when it has spaces.
+The original face and the sans face have no base spacing and are
+unchanged. After: the gap is the canvas's own (−0.4 to −0.8 px), the
+same as in the original face; the page's dump in the original face is
+identical; the public corpus's probes PASS 12/12 with the skip-reason
+diff 180/180 pages unchanged, as a fix that touches no classification
+should.
+
+### The first batch in a new face, read phase by phase
+
+Timed headless with a per-phase patch kept off the branch. The face
+itself is a small part of the first batch: its first use — the
+baseline probe and the space-ink probe — costs 4–7 ms. Colour
+sampling on the in-view page's detail canvas costs 16–30 ms in every
+face, the original too. A major garbage collection of 12–21 ms lands
+in a session's first switch whichever face comes first. The page's
+stage shared the first batch's callback because the yield estimate
+came from the previous page's short last batch. And the 18–40 ms of
+layout on the first switch comes from the face's load, not its use:
+the first of the extension's faces to load makes the browser lay out
+every text object of every rendered page again (32,000 objects, 40–48
+ms on the ACM paper) and repaint (50–70 ms); a later face does not.
+
+- The two probes run in an idle task of their own (`#warmFace`), once
+  per face, only once the face has loaded, with the bold face laid out
+  once as well; the batch finds the answers cached. Probes inside the
+  first batch 5–6.6 → 1.1–1.7 ms.
+- The yield budget is the latest batch's time per span, times the next
+  batch's size, so a page's few-span last batch no longer lets the next
+  page's stage and first batch share a callback. Longest engine
+  callback in the serif face: USENIX 57 → 48 ms, ACM 48 → 46 ms.
+- One face is loaded when the viewer starts, before the pages have
+  text (`#primeFaces`): the reading font's regular face when it is a
+  bundled one, otherwise the smallest bundled file (14 KB). The 107 ms
+  relayout-and-repaint task after a switch is gone on ACM (render task
+  48 → 18 ms), USENIX 26 → 10 ms; IEEE never had it.
+
+Branch tip against v1.4.5, the serif switch, medians of three: blocked
+time USENIX 12 → 1 ms, ACM 18 → 0, IEEE 30 → 17; tasks over 50 ms 1 →
+1, 2 → 0, 2 → 2; longest task 62 → 51, 59 → 46, 66 → 63 ms. The sans
+and original faces block 0 ms on USENIX and ACM. Tried and dropped: a
+smaller first batch (a batch's masks clamp against obstacles its own
+read pass finds later in the batch, one such mask per paper on ACM and
+IEEE — the digests happened to match, the dependence is real); forcing
+the first layout in its own task (the read pass forces none; the
+remeasure is the batch's own spans). DOM digests identical to v1.4.5
+in every run with the same page-box state (9/9, 6/6, 9/9).
+
+### Gate
+
+Run on the final tree (the named-row fix, the width-fit fix and the
+three first-batch commits merged), the corpus counted first (37
+private files), lanes two at a time, headless: fontkeep, whyskip,
+eqkeep, refcolor, tables and citepoint PASS on 49/49 documents, no
+retries, whyskip unreasoned 0 and trailing 0 on every page; console
+silent on 49/49 (47 upstream messages, all matched by the two-entry
+allowlist); option gate (`--line`) PASS 49/49, its diff against the
+plain run the same ten pages of the line model's own relabels as R64
+and R65; unit tests 338. Skip-reason diff against the v1.4.5 release
+tree, same harness, same zoom: 766/766 pages compared, one changed —
+the condition-list item's verb released from `row-eqn` (the other
+three released rows are one-word spans whyskip never counts; their
+dumps show them processed).
+
+The visual step, v1.4.5 against this tree, headless, one browser:
+- The width fit, measured with a harness that records every span's
+  box with emphasis off (the canvas slot) and on, in both spaced faces
+  on six pages (public USENIX pages 3 and 10, ACM page 2, IEEE page 2,
+  two private pages): on v1.4.5 spaced processed spans ran past their
+  slot by 4.6–7.6 px on average in the first serif (max 12.1) and
+  2.2–3.9 px in the second — exactly 0.04 and 0.02 em per space — with
+  up to twelve overlaps onto a kept item per page, the worst 6.3 px;
+  on this tree 0.2–0.6 px, word-spacing never under the face's base,
+  no overlap on any page, spans without spaces unchanged. In the
+  pictures the lines end at the margin the canvas shows and the gaps
+  that had jammed shut are open; the small-caps capital clears its
+  kept letters by 0.8 px in both faces. No clipped glyph, baseline
+  drift or canvas peeking; the sans face unchanged.
+- The released rows on settled fx-on/fx-off pairs: each verb carries
+  emphasis on its leading letters at the body's weight, the formulas
+  and operand tuples identical with emphasis off and on.
+- The face switch (original → serif → sans → original) on two public
+  pages at zoom 1.6, two emphasis weights: every rendered page carries
+  the right face, weight and shadow after every switch, identical to
+  v1.4.5, console clean.
+- A harness trap found on the way: the capture harnesses hid the
+  outline panel by an id this PDF.js no longer uses, so on papers whose
+  outline opens the panel covered the left 75 px of every clip, the
+  same on both trees. Fixed in the width harness; the others still
+  carry the old selector.
+
+### Left for the next round
+
+On the IEEE paper a page's last batch and the next page's restore and
+classification run in one task, 54 ms of microtasks in every face; the
+garbage collection and the colour sampling are still in the first
+batch. The real display has not been measured since R64's first
+commit (a visible browser is not allowed on this machine for now).
