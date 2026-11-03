@@ -219,6 +219,14 @@ test("a capital the next span continues in capitals is a label, read whole (R67)
   // A continuation only applies to the LAST word.
   const mid = emphasizeParts("A note", {}, 0, { tail: "S" });
   assert.ok(mid.parts.some((p) => p.bold && p.text === "A"));
+  // ...and can only ever release: an acronym that is a label on its own stays
+  // one when a kept lowercase subscript continues the span ("UE" + "i").
+  for (const [text, tail, label] of [["the key of UE", "i", "UE"], ["sent by the AMF", "j", "AMF"]]) {
+    const sub = emphasizeParts(text, {}, 0, { tail });
+    const subBold = sub.parts.filter((p) => p.bold).map((p) => p.text);
+    assert.ok(!subBold.some((t) => label.startsWith(t) && t.length >= 2) && !subBold.includes(label), JSON.stringify(subBold));
+    assert.ok(sub.parts.some((p) => !p.bold && p.text === label), JSON.stringify(sub.parts));
+  }
 });
 
 test('emphasisMode "none" bolds nothing but keeps the text intact', () => {

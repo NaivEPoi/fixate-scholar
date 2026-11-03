@@ -287,14 +287,19 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
     // its reduced capitals opening the next, which the engine keeps as a
     // fragment; alone, the capital was a one-letter word and went bold in
     // front of plain small caps (R67, a public paper's system name). Read
-    // whole it is all capitals, a label like any acronym.
+    // whole it is all capitals, a label like any acronym. The continuation
+    // can only ever RELEASE: an acronym that is a label on its own stays one
+    // when a kept lowercase subscript follows it (R67's visual step, two
+    // spans of a private paper — the acronym read with its index was no
+    // longer capitals and went bold whole).
     const asRead = segIndex === lastWord && tailJoin ? seg.text + tailJoin : seg.text;
+    const CAPITALS = /^[A-ZÀ-Þ]{2,}(?:['’]?s)?$/;
     if (
       noEmphasis ||
       !seg.isWord ||
       inLink ||
       !PLAIN_WORD.test(seg.text) ||
-      /^[A-ZÀ-Þ]{2,}(?:['’]?s)?$/.test(asRead) ||
+      CAPITALS.test(seg.text) || CAPITALS.test(asRead) ||
       enumerator || variable
     ) {
       parts.push({ text: seg.text, bold: false });
