@@ -7905,3 +7905,141 @@ The possessive span after a small-caps tail (above); the
 per-character colour runs of mixed-colour spans, still measured in
 every pass; the real display, not measured since R64's first commit
 (a visible browser is not allowed on this machine for now).
+
+## R68 — the sheet R67 left, fixed by assigned subagents (2026-11-03)
+
+Two subagents, one headless browser each: the possessive after a
+small-caps name; the colour runs still measured in every pass, and
+the vendored viewer's own race.
+
+### A span opening on an apostrophe continues the word before it
+
+The mirror of R67's capital, from the head side: a possessive "’s"
+span directly after a kept small-caps tail — the word is "<capital>
+<small caps>’s" across three items — was processed with its "s"
+emphasised, a lone bold "s" behind plain small caps (one private
+paper; the public USENIX paper has one before a hyphenated word).
+The engine's join already held the head: `joinRuns` reads the
+apostrophe as a word character, so the kept tail's capitals were
+there. The segmenter did not use it: the word segmenter splits "’s"
+into "’" and "s", the head join required the first word to be the
+span's first segment, and the "s" was counted as a one-letter word of
+its own. The same bug put a second bold run inside one word after a
+processed word ("user" + "’s"), which the brief had taken for handled.
+A head join now applies when everything before the first word is
+apostrophes; the "s" is a continuation and advances no word count.
+Dumps of the private page differ on the one span (`b1` → none);
+wordshot emph 1 → 0 there, 3 → 2 on the public page, the prose after
+emphasised as before on settled pairs; unit cases with invented text
+for the possessive after a capitals head and a lowercase one, the
+ASCII apostrophe, a bare "s", and the negatives.
+
+### The colour pass's cost was the layout it forced, not the runs
+
+Timed by part: of the colour pass's 67–111 ms a switch, the runs
+themselves took under a millisecond and the pixel reads 11–13 ms;
+54–87 ms was the style recalculation and layout its first rect
+forced over everything the width pass had just written, 4–7 ms a
+batch. The pass now runs at the start of the next idle period
+(`paintRuns`, `#runsDue`), after the frame has laid the batch out,
+with the last batch's runs in an idle period of their own before the
+pass resolves; `inkRuns` maps rects into the frame the pixels came
+from, so the runs are the ones the batch would have measured. A first
+version changed two spans on one public page: a citation
+re-annotation landing mid-pass put its wraps in before the runs, and
+the digit after a run edge took the run's colour, not the citation's;
+`annotatePage` (`beforeAnnotate`) and `reapplyEmphasis` now write any
+waiting runs first (`flushInkRuns`). Colour-run time a switch, serif /
+sans / original: USENIX 75/66/81 → 28/29/30 ms, ACM 97/86/111 →
+16/15/16, IEEE 24/23/41 → 3/3/4; time inside idle callbacks down
+15–30%; blocked 0, no task over 50 ms; DOM digests identical to v1.4.7
+on every page in same-page-box runs. Dropped: measuring the runs once
+in the original face and mapping them by character index — run
+colours are pixel averages where the new face places each glyph, and
+on USENIX 40 of 47 spans differed, 22 of them in a run edge.
+
+### The viewer's own race, run down
+
+The "render must be called before injectLinkAnnotations" error R67
+flagged is thrown in the vendored viewer's `AnnotationLayerBuilder`
+when a page's first draw, having finished its canvas and waited for
+the page's annotations, resumes after a scale change reset the page
+and replaced its annotation builder, and injects links into the new,
+unrendered builder. Reproduced with the overlay removed from a scratch
+copy of the viewer: zooming right after page 1 renders throws three
+times in three. In twenty-run loops every hit was on page 1 at the
+load zoom before reading mode was on; the engine is idle at that
+point, nothing of ours is on the failing path, and the counts between
+trees (0/20, 1/60, 6/60 on the natural sequence) follow where the
+harness's zoom happened to land. Not allowlisted: fixed at the source
+as vendored-viewer patches 10a/10b (`scripts/pdfjs-patches.mjs`) —
+the draw's continuation remembers the builder it rendered and
+`#injectLinkAnnotations` injects only into that one, skipping when a
+reset has replaced it, both after the render and after the text-layer
+wait; the newer draw injects into its own builder once rendered.
+Unpatched → patched on the same branch: the natural sequence 6/60 →
+0/60 runs with the error, a zoom 0 ms after page 1's canvas 5/5 →
+0/20, 0–40 ms after 1/20 → 0/20, with the patched runs landing in the
+window (page 1 finished, its annotation layer not yet built) and
+throwing nothing; link counts after the reset sequence identical
+with and without the patch (page 1 one link, page 2 thirteen);
+`check-vendor` 11/11, console silent, digests identical to v1.4.7.
+Found on the way: patch 1's marker was a substring of the new ones
+(it gains its colon, so a tree missing patch 1 can no longer pass),
+and `npm run fetch-pdfjs` had failed on Windows since v1.1.1 — the
+archive paths were passed as trailing arguments to a `param(...)`
+block, which Windows PowerShell never binds — after deleting the
+vendored tree; the paths now go in through the environment, and the
+re-fetched tree differs from the old one in `web/viewer.mjs` only.
+
+### Gate
+
+Run on the final tree (the apostrophe continuation, the colour pass
+moved off the batch, the vendored-viewer patches merged and the
+vendor re-fetched with them — the Windows fetch repaired on the way),
+the corpus counted first (37 private files), lanes two at a time,
+headless: fontkeep, whyskip, eqkeep, refcolor, tables and citepoint
+PASS on 49/49 documents, no retries, whyskip unreasoned 0 and trailing
+0 on every page; console silent on 49/49 (47 upstream messages, all
+matched by the two-entry allowlist, re-read this release — and none of
+the viewer's race, now patched rather than excused); option gate
+(`--line`) PASS 49/49, its diff against the plain run the same ten
+pages of the line model's own relabels as R64–R67; unit tests 339,
+vendor patches 11/11. Skip-reason diff against the v1.4.7 release
+tree, same harness, same zoom: 766/766 pages compared, none changed.
+
+The visual step, v1.4.7 (with the pre-patch vendor) against this
+tree, headless, one browser, with the settle condition widened to the
+`<fx-ink>` runs and the `--fx-ink` colours (a page can now be
+photographed one idle period before its last batch's runs are in):
+- Colours and runs after each face of original → serif → sans →
+  original on three public papers, every inked span compared by
+  position, text, colour and run list: no structural difference, a
+  colour delta of 0; the twenty-four region captures byte-identical.
+- Citation digits beside run edges, with scrolls during each switch
+  so re-annotations land mid-pass: every digit of every coloured
+  citation in the citation colour on both trees; a first digit that
+  sometimes falls outside its span's colour run splits the wrap with
+  no visible effect, on either tree.
+- The possessive after a small-caps name: emphasis runs 3 → 2 on the
+  public page and 1 → 0 on the private one, the "s" at body weight on
+  settled pairs, the small caps plain, the prose after unchanged.
+- The viewer's patch: links per rendered page equal on both trees
+  after a zoom at load and after the face run (USENIX 1, 13, 11, 14,
+  7, 14, 17; ACM 19, 25, 11, 6, 8, 4), the anchor and section counts
+  agreeing; over twelve runs capturing the viewer and the service
+  worker, zero errors and zero warnings.
+- Masks on five pages, eight tiles each with emphasis off and on,
+  every mask box recorded: boxes identical in content and order (309,
+  476, 194, 241 and 376), every tile byte-identical but one per page
+  on three pages — a 9 × 13 px patch where the possessive's "s" lost
+  its bold.
+
+### Left for the next round
+
+The real display, not measured since R64's first commit (a visible
+browser is not allowed on this machine for now). Seen but invisible:
+on one public page a coloured citation's first digit sometimes falls
+outside the span's colour run, which splits the citation's wrap in
+two — both halves keep the citation colour, on either tree, so
+nothing shows; it is pixel-measurement noise at a run edge.
