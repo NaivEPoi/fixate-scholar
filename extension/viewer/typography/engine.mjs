@@ -5521,6 +5521,8 @@ export class TypographyEngine {
     let inkCheck = null; // (rect) => canvas has ink under it — hidden-text veto
     let inkColor = null; // (rect) => { color: the glyphs' own colour unless black/grey, mixed: several }
     let inkRuns = null; // (span) => a mixed span's colours as character runs (see inkColor)
+    let inkReads = 0; // colours inkColor read off the canvas (not from #inkMemo)
+    let inkAhead = 0; // the pairs whose colour has been read ahead of their batch
     let inkFit = null; // (rect) => how line-like the ink under it is — overlap resolver
     const lowResSrc = (s) => s.csy < 1.5; // too coarse for reliable band metrics
     let overlapVeto = null; // candidates whose rects pile on another candidate
@@ -6010,6 +6012,7 @@ export class TypographyEngine {
                 const memo = key ? this.#inkMemo.get(span) : undefined;
                 if (memo && memo.canvas === canvas && memo.key === key) return memo.ink;
                 const ink = inkOf(wide, 2, 12, need, false);
+                inkReads++;
                 if (key) this.#inkMemo.set(span, { canvas, key, ink: { color: ink.color, mixed: ink.mixed } });
                 return ink;
               };
@@ -6770,6 +6773,29 @@ export class TypographyEngine {
         }
       }
       while (i < pairs.length) {
+        // The batch's colours are read ahead of it, off the pristine boxes
+        // the read pass below measures again (#inkMemo, keyed on the
+        // pixels read, so the batch takes exactly these answers), and when
+        // that was real work the batch waits for an idle period with room
+        // for it. A page's first pass, and the page in view whose detail
+        // canvas a reader's scroll repainted, read every span's colour —
+        // 10-21 ms of the batch on the page in view — which the batch then
+        // carried on top of its own work.
+        if (inkColor && inkAhead < Math.min(i + CHUNK, pairs.length)) {
+          const until = Math.min(i + CHUNK, pairs.length);
+          const before = inkReads;
+          for (let j = Math.max(i, inkAhead); j < until; j++) {
+            const div = pairs[j].div;
+            if (zoneDrops?.has(div) || hiddenDrops?.has(div) || overlapVeto?.has(div)) continue;
+            const r = div.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) inkColor(r, div);
+          }
+          inkAhead = until;
+          if (inkReads > before && deadline && deadline.timeRemaining() < this.#batchBudget(until - i)) {
+            requestIdleCallback(work, { timeout: 200 });
+            return;
+          }
+        }
         const tBatch = performance.now();
         const end = Math.min(i + CHUNK, pairs.length);
         const batch = [];
