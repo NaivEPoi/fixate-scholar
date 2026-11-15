@@ -8542,3 +8542,37 @@ variable in an inline hexadecimal expression; a five-word span kept as
 `split-word`; two formula-led lines above displays.
 
 Final tree: 34/34 pass `allprobes` in 6.7 min; `npm test` 344 pass.
+
+### R69, the last open cases (2026-11-15)
+
+The open list on the new papers, closed, each confirmed by a reader on the
+committed tree:
+
+- **A span that ends on its own space** is not a word's first piece: "… the
+  value of " reaches to the math letter after it, the two were joined, the
+  letter was kept and five words stayed with it (`split-word`). `joinRuns`
+  does not join across a space either span carries.
+- **Notation in the body's face**: a capitalised word that opens its line
+  before an equals sign (the label of an example row); the letters of a
+  hexadecimal number set as items between its digits.
+- **An abbreviation's period ends no sentence** for the paragraph-tail test
+  (a line closing on "w.r.t.").
+- **A paragraph's first line under a display**, taken into the run that kept
+  the display as a table, is given back: four lowercase words, a relation in
+  the rows above, an inline symbol's gap allowed. Not a numbered line of a
+  listing — the first version gave back a step of an algorithm, and the
+  sweep diff and a look at the page showed it.
+- **A short last line kept as a heading's block** at the head of a column.
+- The two-letter name in a derivative's numerator is processed with no
+  emphasis run at all (an acronym): nothing is drawn differently, and it
+  was never a defect — a reader's tint, not a mark.
+
+Nothing reported on the sixteen new papers is open now. On the original and
+regression papers, left for a round of their own (each identical at v1.4.8
+where checked): the items listed above under "the original papers read",
+the green lines of one algorithm listing, and a "where … is the collection
+of all …" line under a display whose words stand between formulas.
+
+Final tree: 34/34 pass `allprobes` in 6.9 min; `npm test` 344 pass. The
+real-display measurement of the stall change is still owed: it needs a
+visible window, which this round was not given.
