@@ -221,6 +221,7 @@ function linkRanges(text) {
  * LAST word that continues into the next span — the prefix is sized against
  * the whole word, not the fragment.
  */
+const MATH_OPERATOR = /^(?:log|ln|exp|sin|cos|tan|arg|argmax|argmin|sup|lim|det|dim|ker|sgn|diag|rank|poly|polylog)$/;
 export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
   if (!text || MATHY(text)) return null;
   // A space-free fragment containing a path/address separator is the
@@ -291,6 +292,11 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
     const after = segs.slice(segIndex + 1, segIndex + 3).map((x) => x.text).join("");
     const enumerator = seg.text.length === 1 && prevText.endsWith("(") && after.startsWith(")");
     const variable = seg.text.length <= 2 && /^\s*[=<>≤≥≠]/.test(after);
+    // An operator's name set in the text face inside an inline formula
+    // ("exp(", "log log n"): the name directly on its bracket, or doubled.
+    const opName = MATH_OPERATOR.test(seg.text) &&
+      (after.startsWith("(") || MATH_OPERATOR.test(segs[segIndex + 2]?.text ?? "") && /^\s$/.test(segs[segIndex + 1]?.text ?? "") ||
+        MATH_OPERATOR.test(segs[segIndex - 2]?.text ?? "") && /^\s$/.test(prevText));
     // The capitals test reads the word as READ: a span's last word that the
     // next span continues (`join.tail`) is measured with that continuation.
     // A faked small-caps word is a full-height capital ending one span and
@@ -311,7 +317,7 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
       inLink ||
       !PLAIN_WORD.test(seg.text) ||
       CAPITALS.test(seg.text) || CAPITALS.test(asRead) ||
-      enumerator || variable
+      enumerator || variable || opName
     ) {
       parts.push({ text: seg.text, bold: false });
       continue;

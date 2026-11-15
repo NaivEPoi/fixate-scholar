@@ -266,3 +266,10 @@ test("emphasizeParts leaves a run-in lead's words plain when it shares the span 
   assert.ok(bold(led).length > 0 && bold(led).every((o) => o >= lead));
   assert.equal(led.parts.map((p) => p.text).join(""), text);
 });
+
+test("emphasizeParts leaves an operator's name in an inline formula plain", () => {
+  const boldWords = (text) => { const r = emphasizeParts(text, FRACTION); const out = []; let w = ""; let b = false; for (const p of r.parts) { if (/^\s+$/.test(p.text)) { if (b) out.push(w); w = ""; b = false; } else { w += p.text; b = b || p.bold; } } if (b) out.push(w); return out.join("|"); };
+  assert.ok(!/log|exp/.test(boldWords("a bound of log log n rounds and exp(x) growth")));
+  assert.ok(/log/.test(boldWords("we keep a log of every event")));
+  assert.ok(/rank/.test(boldWords("we rank the candidates by score")));
+});

@@ -8620,3 +8620,37 @@ Still as they were at v1.4.8, with the reason each is not a one-rule fix:
   formulas ("log log", "exp(").
 
 Final tree: 34/34 pass `allprobes` in 7.1 min; `npm test` 344 pass.
+
+#### The structural cases on the original papers (after the list above)
+
+Five of the cases listed as "still as they were" are closed; each was
+checked with `wordshot`/`dump-page`, by a full sweep read through
+`sweep-diff`, and the changed pages captured and read.
+
+- **Wordy cells in a table without vertical rules.** A line inside a rule
+  zone is prose between two frames only when it starts at the zone's left
+  edge (a lead the classifier already kept counts as the line's start) and
+  has no gap wider than a word space between its items. A wrapped cell line
+  starts a label column in, or shares its baseline with the label across a
+  column gap. Sweep diff: the two table pages only (8 spans).
+- **Two columns under a full-width table.** The column vote is also taken
+  over body-height lines alone (eight gutter rows, 40% of body lines, under
+  20% crossing). Three pages of three papers are newly read as two-column;
+  on each the table is kept whole and the right column's leads are kept.
+- **A run-in lead in one text item with its sentence.** The lead's character
+  count rides the span's join to the segmenter, which gives those words no
+  emphasis; the span is still processed whole and the underline stays. Two
+  leads of one paper; no skip reason moves, so `wordshot` is the check.
+- **A paragraph's first line under a figure's caption** kept as the figure's:
+  given back when a caption stands right above it in its column and the
+  paragraph's next line, processed, right below.
+- **Operator names in inline formulas** ("exp(", a doubled "log"): plain
+  when the name sits on its bracket or beside another operator name.
+
+Still open, each a single instance: one algorithm's lines set as prose
+inside a ruled box and italic identifiers in two pseudocode listings; a
+caption's second line with no closing period; a paragraph's last line above
+a run-in heading; two lines of a first-page note; list items beside a table
+on one appendix page.
+
+Final tree: 34/34 pass `allprobes` in 6.9 min; `npm test` 346 pass.

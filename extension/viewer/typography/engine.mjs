@@ -4598,6 +4598,29 @@ export class TypographyEngine {
           !lines.some((l) => l !== ln && l.y > ln.y && l.y - ln.y <= (widest.item.height || 8) * 3 &&
             l.items.some((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1));
         if (colTop) { for (const p of words) { if (skip.has(p.div)) { skip.delete(p.div); protect.delete(p.div); blockWhy.delete(p.div); if (globalThis.__fxDebug) delete p.div.dataset.fxWhy; } } continue; }
+        // ...or it is the column's first line under a figure's CAPTION, kept
+        // as the figure's: at the body's size, three lowercase words, a
+        // caption right above it in its column and the paragraph's next line,
+        // processed, right below.
+        if (bodyH > 0 && (widest.item.height || 0) >= bodyH * 0.95 && lowers >= 3 && !wideGaps &&
+            words.every((p) => !skip.has(p.div) || blockWhy.get(p.div) === "fig-body")) {
+          const hh = widest.item.height || 8;
+          const inBand = (l) => l.items.filter((p) => p.item?.transform && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str) && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+          let up = null, down = null;
+          for (const l of lines) {
+            if (l === ln) continue;
+            const b2 = inBand(l);
+            if (!b2.length) continue;
+            if (l.y > ln.y && l.y - ln.y <= hh * 2.6 && (!up || l.y < up.y)) up = { y: l.y, b: b2 };
+            if (l.y < ln.y && ln.y - l.y <= hh * 1.6 && (!down || l.y > down.y)) down = { y: l.y, b: b2 };
+          }
+          if (up && down && up.b.every((p) => blockWhy.get(p.div) === "caption") &&
+              down.b.every((p) => !skip.has(p.div)) && Math.abs((down.b[0].item.height || 0) - hh) < 0.6 &&
+              Math.abs(Math.min(...down.b.map((p) => p.item.transform[4])) - left.item.transform[4]) < hh * 2) {
+            for (const p of words) { if (skip.has(p.div)) { skip.delete(p.div); protect.delete(p.div); blockWhy.delete(p.div); if (globalThis.__fxDebug) delete p.div.dataset.fxWhy; } }
+            continue;
+          }
+        }
         // ...or it is the first line of the paragraph UNDER a display, taken
         // into the run that kept the display as a table ("Note that … is only
         // applied to …", "where P ∈ … is the collection of all …"): a row of
