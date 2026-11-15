@@ -3323,6 +3323,17 @@ export class TypographyEngine {
         /^[A-ZÀ-Ý]/.test(italText) && !ABBREVIATION.test(italText) &&
         italDivs.every((p) => its.includes(p)) &&
         ((italWords.length <= 6 && lowerHalf) || (italWords.length <= 8 && opensParagraph(ln, its[a], bx0, bx1)));
+      // ...or with no period at all, where the paper left it out: one of
+      // six sibling leads, "<Three Title-Case Words>" then "While …" (a
+      // public paper, ICML layout). Every word capitalised, two to six of
+      // them, opening a paragraph, and the roman text after it opens a
+      // sentence — an italic term at a paragraph's start is followed by a
+      // lowercase verb.
+      const afterItal = last && its.includes(last) ? its.slice(its.indexOf(last) + 1).find((p) => !isItalic(p) && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str)) : null;
+      const titleRun = italDivs.length > 0 && italWords.length >= 2 && italWords.length <= 6 &&
+        italWords.every((w) => /^[A-ZÀ-Ý0-9]/.test(w)) && !/[.,;:]$/.test(italText) &&
+        italDivs.every((p) => its.includes(p)) && !!afterItal && /^[A-ZÀ-Ý][a-zà-ÿ]/.test(afterItal.item.str.trim()) &&
+        opensParagraph(ln, its[a], bx0, bx1);
       // A colon-ended run that OPENS LOWERCASE is a sentence's end, not a
       // lead-in: an italic lemma statement's last lines ("… there exists a
       // PPT reduction B satisfying:", "… are incompat- / ible:") before
@@ -3330,8 +3341,23 @@ export class TypographyEngine {
       // in opens with a capital or a label.
       if (ended && runDivs.length && (colonNext || /:\s*$/.test(runDivs.at(-1).item.str.trim())) && !/^[a-zà-ÿ]/.test(runDivs[0].item.str.trim())) {
         for (const p of runDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-ital"); }
-      } else if (periodHead) {
+      } else if (periodHead || titleRun) {
         for (const p of italDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-ital"); }
+      } else {
+        // A theorem environment's lead — "Proof.", "Remark.", "Proof of the
+        // claim." — by its WORD, where the shapes above miss it: the run
+        // proper ran on through an italic math letter ("Proof. If h …" lost
+        // its period), stood alone on its line above a display, or was mostly
+        // lowercase (a mathematics paper: nine leads emphasised beside thirty
+        // kept). Italic items up to the first that ends in a period, six
+        // words at most, opening on the environment's name.
+        const dot = runDivs.findIndex((p) => /\.$/.test(p.item.str.trim()));
+        const env = dot >= 0 ? runDivs.slice(0, dot + 1) : [];
+        const envText = env.map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim();
+        if (env.length && env.every((p) => isItalic(p) && its.includes(p)) && envText.split(" ").length <= 6 &&
+            /^(?:Proof|Remarks?|Note|Examples?|Definition|Claim|Lemma|Theorem|Corollary|Proposition|Sketch)\b/.test(envText)) {
+          for (const p of env) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-ital"); }
+        }
       }
     };
     // Does this line open a paragraph? Indented from the column's text edge,
@@ -3441,7 +3467,12 @@ export class TypographyEngine {
       const starts = [0];
       if (twoColumn) {
         const r = its.findIndex((p) => p.item.transform[4] >= centerX);
-        if (r > 0) starts.push(r);
+        // ...across a gutter: a line set over both columns (an abstract
+        // above them) has no start at the centre, and the number that
+        // happened to stand there ("… strain of 1.0 × 10⁻²¹. It matches …")
+        // read as a heading's label with three words after it.
+        const gutter = r > 0 ? its[r].item.transform[4] - (its[r - 1].item.transform[4] + (its[r - 1].item.width ?? 0)) : 0;
+        if (r > 0 && gutter > (its[r].item.height || 8) * 0.8) starts.push(r);
       }
       for (const a of starts) {
         const lead = its[a];
@@ -3469,6 +3500,11 @@ export class TypographyEngine {
         if (globalThis.__fxDebug && globalThis.__fxTitleProbe && leadStr.includes(globalThis.__fxTitleProbe)) {
           (globalThis.__fxTitleTrace ??= []).push({ text: leadStr.slice(0, 40), why: "chain", special: isSpecial(lead), italic: isItalic(lead), bold: isBold(lead), anchor: !!atHeadingAnchor, algo: isAlgoLead(leadStr), head: HEAD_LEAD.test(leadStr), band: band.length, its: its.length });
         }
+        // An italic lead after a bare section number: "1.3" kept, its
+        // "Remark." in italic after it — the lead of the same paragraph.
+        // Before the chain below, and no part of it.
+        const afterNum = /^\d+(?:\.\d+)*\.?$/.test(leadStr) ? its.slice(a + 1).find((p) => p.item.str.trim()) : null;
+        if (afterNum && isItalic(afterNum) && afterNum.item.transform[4] < bx1) skipItalicLead(ln, its, its.indexOf(afterNum), bx0, bx1);
         if (isAlgoLead(leadStr)) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
@@ -4340,7 +4376,8 @@ export class TypographyEngine {
         const words = band.filter((p) => !isMath(p) && !isSpecial(p) && !isBold(p) && /[a-zà-ÿ]{2}/.test(p.item.str));
         if (!words.length || !words.some((p) => skip.has(p.div))) continue;
         if (words.some((p) => skip.has(p.div) && !TAIL_RELEASE.has(blockWhy.get(p.div)))) continue;
-        if (lowerWords(words) < 2 || maxCells([{ items: words }]) >= 2) continue; // between its WORDS: a formula on the line spaces its own glyphs
+        const lowers = words.flatMap((p) => p.item.str.trim().split(/\s+/)).filter((w) => /^[a-zà-ÿ]{2,}[.,;:]?$/.test(w)).length; // "as follows:" is two
+        if (lowers < 2 || maxCells([{ items: words }]) >= 2) continue; // between its WORDS: a formula on the line spaces its own glyphs
         const widest = words.reduce((a, b) => ((b.item.width || 0) > (a.item.width || 0) ? b : a));
         const left = band.reduce((a, b) => (b.item.transform[4] < a.item.transform[4] ? b : a));
         if (!continuesAbove(ln, { item: { height: widest.item.height, transform: left.item.transform } }, bx0, bx1)) continue;
