@@ -3503,7 +3503,21 @@ export class TypographyEngine {
       const firstWord = nextStr.trim().split(/\s+/)[0] || "";
       const firstW = nextStr.length ? (nextBand[0].item.width || 0) * (firstWord.length / nextStr.length) : 0;
       if (!/[A-Za-zÀ-ɏ]-$/.test(last.item.str.trim()) && right(head) + firstW + h * 0.3 < measure) return; // the heading did not wrap
-      if (nextBand.some((p) => p.item.fontName !== last.item.fontName)) return;
+      // A RUN-IN heading that wraps: its last words open the next line, in
+      // the heading's face, close on the heading's period, and the paragraph
+      // starts after them in the body's face ("5.2.1 Integration of … Protocol"
+      // / "with 5G AKA. This section shows …" — a public paper; the second
+      // line's three words were emphasised). The leading items in the
+      // heading's face, six words at most, ending the heading.
+      if (nextBand.some((p) => p.item.fontName !== last.item.fontName)) {
+        const lead = [];
+        for (const p of nextBand.slice().sort((a, b) => a.item.transform[4] - b.item.transform[4])) { if (p.item.fontName !== last.item.fontName) break; lead.push(p); }
+        const leadText = lead.map((p) => p.item.str).join(" ").replace(/\s+/g, " ").trim();
+        if (lead.length && Math.abs(next.y - ln.y) <= h * 1.6 && /[.:]$/.test(leadText) && leadText.split(" ").length <= 6 && !/[.:]\s+\S/.test(leadText)) {
+          for (const p of lead) { skip.add(p.div); dbg(p.div, "head-wrap"); if (isItalic(p)) protect.add(p.div); }
+        }
+        return;
+      }
       if (right(nextBand) > measure - h * 3) return; // a full line: the paragraph
       if (Math.abs(next.y - ln.y) > h * 1.6) return; // a gap: not the same heading
       for (const p of nextBand) {
@@ -4492,7 +4506,7 @@ export class TypographyEngine {
     // this face, its sentence unfinished), starts at the column's edge, holds
     // two lowercase words and no cell's gap. Only its words are given back;
     // the mathematics on it stays where it was.
-    const TAIL_RELEASE = new Set(["row-eqn", "blk-eqn", "blk-figlabel", "table-aligned", "line-formula", "line-cells", "line-cells-wide", "table-region", "blk-heading"]);
+    const TAIL_RELEASE = new Set(["row-eqn", "blk-eqn", "blk-figlabel", "table-aligned", "line-formula", "line-cells", "line-cells-wide", "table-region", "blk-heading", "fig-body"]);
     for (const ln of lines) {
       const sides = twoColumn ? [[vx0, centerX], [centerX, vx0 + pageW]] : [[vx0, vx0 + pageW]];
       for (const [bx0, bx1] of sides) {
@@ -4561,7 +4575,21 @@ export class TypographyEngine {
         const numbered = band.some((p) => /^\d{1,3}:?$/.test(p.item.str.trim()) && p.item.transform[4] < sortedW[0].item.transform[4]);
         if (underDisplay && !wideGaps && !numbered) { for (const p of words) { if (skip.has(p.div)) { skip.delete(p.div); protect.delete(p.div); blockWhy.delete(p.div); if (globalThis.__fxDebug) delete p.div.dataset.fxWhy; } } continue; }
         if (cellGaps) continue;
-        if (!opensDisplay && lowers < 2) continue;
+        // A FIGURE's reason is given up only for body text under body text: at
+        // the body's size, the line above it processed. Inside a figure a
+        // line of its text sits under a full line of its text too (a
+        // full-page figure's listing lost a line to the first version).
+        if (words.some((p) => skip.has(p.div) && blockWhy.get(p.div) === "fig-body")) {
+          if (!(bodyH > 0) || (widest.item.height || 0) < bodyH * 0.95) continue;
+          let prev = null;
+          for (let m = lines.indexOf(ln) - 1; m >= 0 && !prev; m--) {
+            const b2 = lines[m].items.filter((p) => p.item?.transform && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str) && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+            if (b2.length) prev = b2;
+          }
+          if (!prev || prev.some((p) => skip.has(p.div))) continue;
+        }
+        // (Two capitalised words closing a sentence count as its tail: "… scattered across multiple / Technical Specifications (TS).")
+        if (!opensDisplay && lowers < 2 && !(anyWords >= 2 && /[.!?]\s*$/.test(lineText(band)))) continue;
         if (!opensDisplay && !continuesAbove(ln, { item: { height: widest.item.height, transform: left.item.transform } }, bx0, bx1)) continue;
         // A TABLE's reason is given up only above a display: a wordy cell's
         // second line sits under a full first line too (a prompt quoted in a
@@ -4723,19 +4751,21 @@ export class TypographyEngine {
         for (const ln of lines) {
           const band = ln.items.filter((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
           const wordy = band.filter((p) => /[A-Za-zÀ-ɏ]{2}/.test(p.item.str));
-          if (wordy.length) colLines.push({ ln, band, wordy, h: Math.max(...wordy.map((p) => p.item.height || 0)) });
+          // The line's size is its WIDEST item's: one taller token in a note (an
+          // address in another face) is not a body line.
+          if (wordy.length) colLines.push({ ln, band, wordy, h: wordy.reduce((a, b) => ((b.item.width || 0) > (a.item.width || 0) ? b : a)).item.height || 0 });
         }
         colLines.sort((a, b) => a.ln.y - b.ln.y); // bottom of the page first
         // Furniture at the very foot (a folio, a running foot) is stepped over.
         let s = 0;
         while (s < colLines.length && colLines[s].wordy.every((p) => skip.has(p.div)) && lowerWords(colLines[s].band) < 3) s++;
         const tail = [];
-        for (let k = s; k < colLines.length && tail.length < 14; k++) {
+        for (let k = s; k < colLines.length && tail.length < 26; k++) { // an IEEE first page's note runs to twenty lines
           const c = colLines[k];
           if (c.h > dominant * 0.93 || c.h < dominant * 0.6) break;
           tail.push(c);
         }
-        if (!tail.length || tail.length >= 14) continue;
+        if (!tail.length || tail.length >= 26) continue;
         const first = tail.at(-1), above = colLines[s + tail.length];
         if (!above || above.h < dominant * 0.95 || lowerWords(above.band) < 3) continue;
         if (first.ln.y - vy0 > pageH * 0.3) continue;

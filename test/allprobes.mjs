@@ -399,7 +399,11 @@ try {
   process.exitCode = failed ? 1 : blind ? 75 : 0;
 } catch (e) {
   console.error(`${LABEL} allprobes error: ${e.message || e}`);
-  process.exitCode = 1;
+  // A browser or a document that never came up, a tab that went hidden, a
+  // viewer that stopped answering: nothing was measured, so it is no verdict
+  // (75, which the sweep runs again) — one document in a full sweep came back
+  // FAIL on "document never loaded" and passed when run again.
+  process.exitCode = /never loaded|did not load|never came up|no verdict|timed out after|socket closed/.test(String(e?.message || e)) ? 75 : 1;
 } finally {
   cdp?.close();
   killBrowser(browser);
