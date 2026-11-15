@@ -2192,7 +2192,13 @@ export class TypographyEngine {
         // "Lowest": no body prose under it — a folio ("11") or a running
         // footer below it is not body.
         const bodyProse = (o) => o.h >= dominant * 0.95 && lowerWords(o.items) >= 4;
-        const lowest = !blocks.some((o) => o !== b && o.yTop < b.yBot && bodyProse(o));
+        // ...under it IN ITS COLUMN: the other column's text running lower
+        // than a note at the foot of this one said nothing about it, and a
+        // copyright note with no marker was emphasised (a public paper).
+        const xRange = (o) => { let x0 = Infinity, x1 = -Infinity; for (const p of o.items) { const x = p.item.transform[4]; x0 = Math.min(x0, x); x1 = Math.max(x1, x + (p.item.width ?? 0)); } return [x0, x1]; };
+        const [fnX0, fnX1] = xRange(b);
+        const sameColumn = (o) => { const [x0, x1] = xRange(o); return Math.min(x1, fnX1) - Math.max(x0, fnX0) > (fnX1 - fnX0) * 0.3; };
+        const lowest = !blocks.some((o) => o !== b && o.yTop < b.yBot && bodyProse(o) && sameColumn(o));
         const bodyAbove = blocks.some((o) => o !== b && o.yBot > b.yTop && bodyProse(o));
         // Not the bibliography's last entries (small, under the body, at the
         // column's foot — the shape exactly) nor a small table: those have
@@ -2207,8 +2213,24 @@ export class TypographyEngine {
         // note quoting two URLs has cells enough to fail the markerless test —
         // two notes of one page were emphasised (a public paper, JMLR layout).
         const numMark = /^\d{1,3}\.\s/.test(b.lead) && lowest && bodyAbove && !inRefs;
+        // ...or a marker set as an item of its OWN just left of the note's
+        // first word, raised and smaller — "∗" before "Corresponding
+        // authors: …", a superscript "2" — which falls to another block and
+        // was not the note's lead (three public papers).
+        const fnFirst = b.rows[0]?.items[0]?.item;
+        const sideMark = !!fnFirst?.transform && items.some((p) => {
+          const q = p.item, t = (q?.str || "").trim();
+          if (!q?.transform || !/^(?:[•†‡§¶*∗⁎]|\d{1,2})$/.test(t)) return false;
+          const fh = fnFirst.height || b.h;
+          if ((q.height || fh) > fh * 0.85) return false;
+          const gap = fnFirst.transform[4] - (q.transform[4] + (q.width ?? 0));
+          return gap >= -1 && gap <= fh * 1.5 && q.transform[5] - fnFirst.transform[5] >= -1 && q.transform[5] - fnFirst.transform[5] <= fh;
+        }) && lowest && bodyAbove && !inRefs;
+        if (globalThis.__fxDebug && globalThis.__fxTitleProbe && b.items.some((p) => p.item.str.includes(globalThis.__fxTitleProbe))) {
+          (globalThis.__fxCapTrace ??= []).push({ why: "footnote?", lead: b.lead.slice(0, 30), rows: b.rows.length, h: +b.h.toFixed(2), dominant, foot: +((b.yBot - vy0) / pageH).toFixed(2), lc, cells, lowest, bodyAbove, inRefs, supMark: !!supMark, markerless, numMark, sideMark });
+        }
         if (b.h < dominant * 0.92 && b.yBot - vy0 < pageH * 0.3 &&
-            (/^[•†‡§¶*∗⁎]/.test(b.lead) || supMark || markerless || numMark)) {
+            (/^[•†‡§¶*∗⁎]/.test(b.lead) || supMark || markerless || numMark || sideMark)) {
           // ...sparing its BODY-SIZE rows. `b.h` is an average over the
           // rows, so a body paragraph's lines dense with inline mathematics
           // — each with a row of sub- and superscripts beside it — average
@@ -3515,6 +3537,39 @@ export class TypographyEngine {
         const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol && !/^[a-zà-ÿ]+(?:[\s.,;:]|$)/.test(leadStr);
         const contAbove = continuesAbove(ln, lead, bx0, bx1); // whatever the lead's face
         const paraTail = contAbove && !isBold(lead) && !isSpecial(lead);
+        const listSibling = (() => {
+          const m = /^(\d+)[.)](?:\s|$)/.exec(leadStr);
+          if (!m) return false;
+          const n = Number(m[1]), h = lead.item.height || 8, li = lines.indexOf(ln);
+          // A list's items are in the body's weight and size; a numbered heading two lines from the next is not.
+          if (band.some((p) => isBold(p)) || (bodyH > 0 && h > bodyH * 1.05)) return false;
+          // ...nor is a line in Title Case: IEEE's numbered italic subsubsections
+          // ("1) <Two Capitalised Words>", "2) <Word> on") stand two to a page as
+          // list items do. An item is a sentence: most of its words are lowercase.
+          const sig = band.flatMap((p) => p.item.str.match(/[A-Za-zÀ-ɏ][A-Za-zÀ-ɏ-]{2,}/g) ?? []).filter((w) => !/^(?:and|the|for|with|from|into|over|under|via)$/i.test(w));
+          if (!sig.length || sig.filter((w) => /^[A-ZÀ-Ý]/.test(w)).length >= sig.length * 0.7) return false;
+          for (let k = Math.max(0, li - 20); k <= Math.min(lines.length - 1, li + 20); k++) {
+            if (k === li || Math.abs(lines[k].y - ln.y) > h * 26) continue;
+            const first = lines[k].items.filter((p) => p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1)
+              .reduce((a, b) => (!a || b.item.transform[4] < a.item.transform[4] ? b : a), null);
+            const mm = first ? /^(\d+)[.)](?:\s|$)/.exec(first.item.str.trim()) : null;
+            if (mm && Math.abs(Number(mm[1]) - n) === 1 && Math.abs(first.item.transform[4] - ax) <= 1.5 && Math.abs((first.item.height || h) - h) <= h * 0.05) return true;
+          }
+          // ...or across the column break: item 1 at the foot of one column,
+          // item 2 at the head of the other, each as far in from its own
+          // column's edge.
+          if (twoColumn) {
+            const [ox0, ox1] = ax < centerX ? [centerX, vx0 + pageW] : [vx0, centerX];
+            const inset = ax - Math.max(bx0, bandLeft(bx0, bx1)), oLeft = Math.max(ox0, bandLeft(ox0, ox1));
+            for (const l of lines) {
+              const first = l.items.filter((p) => p.item.str.trim() && p.item.transform[4] >= ox0 && p.item.transform[4] < ox1)
+                .reduce((a, b) => (!a || b.item.transform[4] < a.item.transform[4] ? b : a), null);
+              const mm = first ? /^(\d+)[.)](?:\s|$)/.exec(first.item.str.trim()) : null;
+              if (mm && Math.abs(Number(mm[1]) - n) === 1 && Math.abs(first.item.transform[4] - oLeft - inset) <= h * 0.8 && Math.abs((first.item.height || h) - h) <= h * 0.05 && !isBold(first)) return true;
+            }
+          }
+          return false;
+        })();
         if (globalThis.__fxDebug && globalThis.__fxTitleProbe && leadStr.includes(globalThis.__fxTitleProbe)) {
           (globalThis.__fxTitleTrace ??= []).push({ text: leadStr.slice(0, 40), why: "chain", special: isSpecial(lead), italic: isItalic(lead), bold: isBold(lead), anchor: !!atHeadingAnchor, algo: isAlgoLead(leadStr), head: HEAD_LEAD.test(leadStr), band: band.length, its: its.length, paraTail: !isSpecial(lead) && !isBold(lead) && continuesAbove(ln, lead, bx0, bx1), above: (() => { const h = lead.item.height || 8, out = []; for (let m = lines.indexOf(ln) - 1; m >= 0 && out.length < 3; m--) { const bp = lines[m].items.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1); if (bp.length) out.push({ dy: +(lines[m].y - ln.y).toFixed(1), n: bp.length, end: Math.round(Math.max(...bp.map((p) => p.item.transform[4] + (p.item.width ?? 0)))), t: lineText(bp).slice(-30), hmax: Math.max(...bp.map((p) => p.item.height || 0)) }); } return { h, measure: Math.round(bandMeasure(bx0, bx1)), out }; })(), title: titleCaseHead(ln, band, bx0, bx1) });
         }
@@ -3586,7 +3641,9 @@ export class TypographyEngine {
           // paper, R55). A heading in the body face carries a label or a
           // few lowercase words ("Limitations and future work").
           if (!head) {
-            const proseA = lowerWords(band) >= 4 && !isSpecial(lead) && !isBold(lead) && !isItalic(lead);
+            // (an italic line too, when it is a sentence to its period: a
+            // paragraph's closing remark set in italic above the next heading.)
+            const proseA = lowerWords(band) >= 4 && !isSpecial(lead) && !isBold(lead) && (!isItalic(lead) || /[a-zà-ÿ0-9][.!?]\s*$/.test(lineText(band)));
             // ...or a paragraph's short LAST line: two words, an acronym and
             // a noun, in the body face under a line that ended on "the", at
             // the body's pitch, with the heading's anchor a skip above the
@@ -3601,7 +3658,8 @@ export class TypographyEngine {
               }
               return false;
             })();
-            if (!proseA && !tailA && !paraTail) head = band;
+            if (globalThis.__fxDebug && globalThis.__fxTitleProbe && lineText(band).includes(globalThis.__fxTitleProbe)) (globalThis.__fxTitleTrace ??= []).push({ text: lineText(band).slice(0, 40), why: "anchor-head", proseA, tailA, paraTail, listSibling, leadStr });
+            if (!proseA && !tailA && !paraTail && !listSibling) head = band; // (an enumerated item carries an anchor too)
           }
           if (head) {
             for (const p of head) {
@@ -3650,6 +3708,12 @@ export class TypographyEngine {
           // its wrap as the heading's second line, and the first of three
           // contribution items was kept while the other two were emphasised
           // (R62, a private paper).
+          // ...or by its NEIGHBOUR: "2. Fit a density estimator …", "2)
+          // Iterate over … until convergence." are one line each, short of
+          // the measure, with few lowercase words — headings by every test
+          // above, and the second of five steps was kept while the other four
+          // were emphasised (three public papers). The item numbered one less
+          // or one more starts at the same x within a few lines.
           const listItem = /^\d+[.)]$/.test(leadStr.split(/\s+/)[0] || "") && measureH > 0 &&
             lineEndH >= measureH - (measureH - bandLeft(bx0, bx1)) * 0.15 &&
             (runsOn(band) || /[,;]\s*$/.test(bandText)) &&
@@ -3670,7 +3734,7 @@ export class TypographyEngine {
             for (const p of labelRun) { skip.add(p.div); dbg(p.div, "line-head"); }
           } else
           if (paraTail && !/^(?:[A-Z]|[IVX]{1,5})\.(?:\s|$)/.test(leadStr)) { /* the paragraph's own last line (continuesAbove) */ }
-          else if ((lowerWords(band) <= 3 && !listItem) || italicHead || shortNumbered) {
+          else if (((lowerWords(band) <= 3 && !listItem) || italicHead || shortNumbered) && !listSibling) {
             // A NUMBERED RUN-IN heading shares its line with the paragraph it
             // opens ("2.3.1. Latency overhead.  Table 5 shows the measured …").
             // HEAD_LEAD fires on the line's lead, and skipping the
@@ -4080,14 +4144,35 @@ export class TypographyEngine {
         // ICML page) is still its column's, and read as page-wide it took
         // the OTHER column's caption line for "the prose above" and was
         // emphasised whole as a paragraph's continuation (a public paper).
-        const capCrosses = lines[k].items.some((p) => {
-          const x0 = p.item.transform[4];
+        // ...or its WORDS do: the caption's items either side of the centre
+        // stand a word's space apart, where two columns' lines stand a
+        // gutter apart ("… Focal Loss (FL)." ending 6 units left of the
+        // centre and "All models are trained on" opening 4 left of it: no
+        // item crossed by the slack, and the caption's right half was
+        // emphasised).
+        const capRow = lines[k].items.filter((p) => p.item.str.trim()).sort((p, q) => p.item.transform[4] - q.item.transform[4]);
+        const capCrosses = capRow.some((p, n) => {
+          const x0 = p.item.transform[4], x1 = x0 + (p.item.width ?? 0);
           const slack = Math.max(4, (p.item.height || 8) * 0.5);
-          return x0 < centerX - slack && x0 + (p.item.width ?? 0) > centerX + slack;
+          if (x0 < centerX - slack && x1 > centerX + slack) return true;
+          const nx = capRow[n + 1];
+          return !!nx && x1 <= centerX + slack && nx.item.transform[4] + (nx.item.width ?? 0) > centerX + slack &&
+            nx.item.transform[4] - x1 < (p.item.height || 8) * 0.8 && x0 >= lead.item.transform[4] - 1;
         });
         const wide = !twoColumn || capCrosses;
-        const bx0 = wide ? vx0 : ax < centerX ? vx0 : centerX;
         const bx1 = wide ? vx0 + pageW : ax < centerX ? centerX : vx0 + pageW;
+        // A caption set BESIDE its table — a narrow block in the right third
+        // of the column, the table's rows on its baselines — is followed in
+        // its own strip: read across the column, its second line opened on
+        // the table's bold row label and ended the caption there (a public
+        // paper, NeurIPS layout: lines three and four emphasised).
+        const col0 = wide ? vx0 : ax < centerX ? vx0 : centerX;
+        // (Something stands LEFT of it on its own lines — the table. A centred
+        // caption starts as far in with nothing beside it, and its second line
+        // starts further left.)
+        const leftBusy = [lines[k], lines[k + 1], lines[k + 2]].filter(Boolean).filter((l) => l.items.some((p) => p.item.str.trim() && p.item.transform[4] >= col0 && p.item.transform[4] + (p.item.width ?? 0) < ax - (lead.item.height || 8))).length >= 2;
+        const sideCap = leftBusy && ax > Math.max(col0, bandLeft(col0, bx1)) + (bx1 - col0) * 0.3;
+        const bx0 = sideCap ? ax - Math.max(lead.item.height || 8, 8) : col0;
         const inBand = (p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1;
         // The caption's own height — the tallest item of its row IN THIS
         // COLUMN, not the row's over both columns (the other column's
@@ -4416,7 +4501,9 @@ export class TypographyEngine {
           }
           return null;
         })();
-        const opensDisplay = !!belowBand && band.length - words.length <= 2 && words.flatMap((p) => p.item.str.trim().split(/\s+/)).length >= 2 &&
+        const opensDisplay = !!belowBand && band.length - words.length <= 2 &&
+          // (no operator of its own: "<name> − <name>" over a fraction bar is the display)
+          !band.some((p) => !words.includes(p) && /[=+−×·∑∫≤≥<>/]/.test(p.item.str)) && words.flatMap((p) => p.item.str.trim().split(/\s+/)).length >= 2 &&
           /[=≤≥∑∫∈<>≈]/.test(belowBand.map((p) => p.item.str).join("")) &&
           belowBand.filter((p) => isMath(p) || isSpecial(p) || !/[A-Za-zÀ-ɏ]{2}/.test(p.item.str)).length >= belowBand.length * 0.6 &&
           !words.some((p) => /^(?:table-|line-cells)/.test(blockWhy.get(p.div) || "") && blockWhy.get(p.div) !== "table-region");
@@ -4470,8 +4557,24 @@ export class TypographyEngine {
       for (let n = 0; n < row.length; n++) {
         const p = row[n];
         if (skip.has(p.div) || numeric(p)) continue;
-        if (p.item.str.trim().split(/\s+/).length > 4) continue;
+        if (p.item.str.trim().split(/\s+/).length > 6) continue; // "<Method> w <variant> [20]" is five
+        // A label names; three lowercase words running are a sentence's.
+        if ((p.item.str.match(/(?:^|\s)[a-zà-ÿ]{2,}(?=[\s.,;:]|$)/g) ?? []).length >= 3) continue;
         if ((n > 0 && !wide(row[n - 1], p)) || (n < row.length - 1 && !wide(p, row[n + 1]))) continue;
+        // ...and not the other column's paragraph ending on this baseline:
+        // "lion FLOPs)." and "achieves almost", a sentence's last words under
+        // a full line of it, were kept as labels of the table beside them.
+        if (globalThis.__fxDebug && globalThis.__fxTitleProbe && p.item.str.includes(globalThis.__fxTitleProbe)) {
+          (globalThis.__fxCapTrace ??= []).push({ why: "row-numeric", text: p.item.str.slice(0, 30), cells, n, row: row.map((q) => q.item.str.slice(0, 10)) });
+        }
+        const px = p.item.transform[4];
+        const [sx0, sx1] = twoColumn ? (px < centerX ? [vx0, centerX] : [centerX, vx0 + pageW]) : [vx0, vx0 + pageW];
+        if (/[.;:][”’"')\]]*\s*$/.test(p.item.str.trim()) || continuesAbove(ln, p, sx0, sx1)) continue;
+        // ...nor words of a sentence with a subscript between them and the
+        // next: clear of EVERY item on the row, the small ones too.
+        const every = ln.items.filter((q) => q !== p && q.item?.transform && q.item.str.trim());
+        const pEnd = px + (p.item.width ?? 0), ph = p.item.height || 8;
+        if (every.some((q) => { const qx = q.item.transform[4], qEnd = qx + (q.item.width ?? 0); return (qx >= pEnd ? qx - pEnd : px - qEnd) < ph * 1.0 && Math.abs(q.item.transform[5] - p.item.transform[5]) < ph; })) continue;
         skip.add(p.div);
         dbg(p.div, "row-numeric");
       }
@@ -4515,7 +4618,7 @@ export class TypographyEngine {
           const band = lines[k].items.filter((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1)
             .sort((a, b) => a.item.transform[4] - b.item.transform[4]);
           if (band.length < 4) continue;
-          const wordy = band.filter((p) => !isMath(p) && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str) && !MATH_OP.test(p.item.str.trim().replace(/[()]/g, "")));
+          const wordy = band.filter((p) => !isMath(p) && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str) && !MATH_OP_SPAN.test(p.item.str.trim().replace(/[()]/g, "")));
           if (wordy.length !== 1 || skip.has(wordy[0].div) || !CONNECTIVE.test(wordy[0].item.str.trim())) continue;
           // ...or anywhere on a row whose other items the display already holds ("… , where z ∼ p(z|x)").
           const others = band.filter((p) => p !== wordy[0]);
@@ -4540,6 +4643,58 @@ export class TypographyEngine {
           skip.add(wordy[0].div);
           dbg(wordy[0].div, "row-eqn");
         }
+      }
+    }
+    // A footnote the block grouping JOINED to the paragraph above it. The
+    // block rule above reads a block's average size, and a note set a point
+    // under the body at the body's leading falls into the body's block:
+    // thirteen rows averaging 9.7 on 10, no footnote to that rule — a
+    // starred "Corresponding authors", a copyright note, a superscripted
+    // remark, all emphasised (four public papers). By rows instead: the
+    // small lines at the foot of a column, up to the first body-size line
+    // above them, within the page's last 30%, under body text. A note
+    // announces itself — a marker of its own before its first word, a
+    // number, "Copyright" — or stands a wider skip under the text.
+    if (dominant > 0) {
+      const sides = twoColumn ? [[vx0, centerX], [centerX, vx0 + pageW]] : [[vx0, vx0 + pageW]];
+      const refsHere = this.#refsBoxes?.get(pageNumber);
+      for (const [bx0, bx1] of sides) {
+        const colLines = [];
+        for (const ln of lines) {
+          const band = ln.items.filter((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+          const wordy = band.filter((p) => /[A-Za-zÀ-ɏ]{2}/.test(p.item.str));
+          if (wordy.length) colLines.push({ ln, band, wordy, h: Math.max(...wordy.map((p) => p.item.height || 0)) });
+        }
+        colLines.sort((a, b) => a.ln.y - b.ln.y); // bottom of the page first
+        // Furniture at the very foot (a folio, a running foot) is stepped over.
+        let s = 0;
+        while (s < colLines.length && colLines[s].wordy.every((p) => skip.has(p.div)) && lowerWords(colLines[s].band) < 3) s++;
+        const tail = [];
+        for (let k = s; k < colLines.length && tail.length < 14; k++) {
+          const c = colLines[k];
+          if (c.h > dominant * 0.93 || c.h < dominant * 0.6) break;
+          tail.push(c);
+        }
+        if (!tail.length || tail.length >= 14) continue;
+        const first = tail.at(-1), above = colLines[s + tail.length];
+        if (!above || above.h < dominant * 0.95 || lowerWords(above.band) < 3) continue;
+        if (first.ln.y - vy0 > pageH * 0.3) continue;
+        const f0 = first.band.reduce((a, b) => (b.item.transform[4] < a.item.transform[4] ? b : a)).item;
+        if (refsHere?.some((bx) => f0.transform[5] >= bx.y0 && f0.transform[5] <= bx.y1 && f0.transform[4] >= bx.x0 - 2 && f0.transform[4] <= bx.x1 + 2)) continue;
+        const tailWords = tail.reduce((n, c) => n + lowerWords(c.band), 0);
+        const firstWord = first.wordy.reduce((a, b) => (b.item.transform[4] < a.item.transform[4] ? b : a)).item;
+        const fh = firstWord.height || first.h;
+        const marker = items.some((p) => {
+          const q = p.item, t = (q?.str || "").trim();
+          if (!q?.transform || !/^(?:[•†‡§¶*∗⁎]|\d{1,2})$/.test(t) || (q.height || fh) > fh * 0.9) return false;
+          const gap = firstWord.transform[4] - (q.transform[4] + (q.width ?? 0));
+          return gap >= -1 && gap <= fh * 1.5 && q.transform[5] - firstWord.transform[5] >= -1 && q.transform[5] - firstWord.transform[5] <= fh;
+        });
+        const firstText = lineText(first.band);
+        const announced = marker || /^(?:[•†‡§¶*∗⁎]|\d{1,3}\.?\s|Copyright\b|©)/.test(firstText);
+        const skipAbove = above.ln.y - first.ln.y > Math.max(above.h, first.h) * 1.45;
+        if (!announced && (!skipAbove || tailWords < 4)) continue; // unannounced: prose, under a skip
+        for (const c of tail) for (const p of c.band) if (!skip.has(p.div)) { skip.add(p.div); dbg(p.div, "blk-footnote"); }
       }
     }
     // A panel's sub-caption: "(d) <bold lead> baselines (with …)" set under a
