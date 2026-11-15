@@ -379,6 +379,11 @@ function joinRuns(allPairs) {
     // A TeX accent sits over the letter after it, so a continuation may start
     // a little behind; never a line height behind.
     if (gap >= h * 0.15 || gap < -h) continue;
+    // ...and a space the span itself carries is a space: "… the value of "
+    // ends on one, its box reaches to the math letter after it, and the two
+    // were joined as one word — the letter was kept, and five words of the
+    // sentence stayed with it (a public paper).
+    if (/\s$/.test(a.div.textContent ?? "") || /^\s/.test(bText)) continue;
     // A one- or two-character head wholly in Latin Extended-B or IPA is a
     // glyph of a font with no usable ToUnicode map (a fullwidth paren read as
     // U+022A on a Japanese paper, R55), not a word's first letters: joined,
@@ -3454,7 +3459,8 @@ export class TypographyEngine {
         // papers, found by the read of the final tree, not by the probes).
         if (bandPrev.some((p) => skip.has(p.div) && /^(?:line-head|head-wrap|blk-heading|runin)/.test(blockWhy.get(p.div) || ""))) return false;
         const prevText = lineText(bandPrev);
-        if (/[.!?:][”’"')\]]*\s*$/.test(prevText)) return false;
+        // (An abbreviation's period ends no sentence: a line closing on "w.r.t.")
+        if (/[.!?:][”’"')\]]*\s*$/.test(prevText) && !/(?:^|\s)(?:w\.r\.t|e\.g|i\.e|cf|vs|etc|et al|resp)\.\s*$/.test(prevText)) return false;
         // Prose by its words — or, where names and years leave it few ("…
         // (2005); … and … (2009);"), by ending on a comma, a semicolon or a
         // broken word.
@@ -4486,7 +4492,7 @@ export class TypographyEngine {
     // this face, its sentence unfinished), starts at the column's edge, holds
     // two lowercase words and no cell's gap. Only its words are given back;
     // the mathematics on it stays where it was.
-    const TAIL_RELEASE = new Set(["row-eqn", "blk-eqn", "blk-figlabel", "table-aligned", "line-formula", "line-cells", "line-cells-wide", "table-region"]);
+    const TAIL_RELEASE = new Set(["row-eqn", "blk-eqn", "blk-figlabel", "table-aligned", "line-formula", "line-cells", "line-cells-wide", "table-region", "blk-heading"]);
     for (const ln of lines) {
       const sides = twoColumn ? [[vx0, centerX], [centerX, vx0 + pageW]] : [[vx0, vx0 + pageW]];
       for (const [bx0, bx1] of sides) {
@@ -4496,7 +4502,14 @@ export class TypographyEngine {
         if (words.some((p) => skip.has(p.div) && !TAIL_RELEASE.has(blockWhy.get(p.div)))) continue;
         const lowers = words.flatMap((p) => p.item.str.trim().split(/\s+/)).filter((w) => /^[a-zà-ÿ]{2,}[.,;:]?$/.test(w)).length; // "as follows:" is two
         const anyWords = words.flatMap((p) => p.item.str.trim().split(/\s+/)).filter((w) => /^[A-Za-zÀ-ɏ][a-zà-ÿ]{2,}[.,;:]?$/.test(w)).length;
-        if ((lowers < 1 && anyWords < 2) || maxCells([{ items: words }]) >= 2) continue; // one, for "We compute" over its display; two for a paragraph's tail (below) // between its WORDS: a formula on the line spaces its own glyphs
+        if (lowers < 1 && anyWords < 2) continue;
+        // A cell's gap between its words rules the line out — except under a
+        // display, where an inline symbol between two runs of words opens one
+        // ("Note that L is only applied to …"); there, four heights.
+        const cellGaps = maxCells([{ items: words }]) >= 2;
+        const sortedW = words.slice().sort((p, q) => p.item.transform[4] - q.item.transform[4]);
+        const wideGaps = sortedW.some((p, n) => n > 0 && p.item.transform[4] - (sortedW[n - 1].item.transform[4] + (sortedW[n - 1].item.width ?? 0)) > (p.item.height || 8) * 4);
+        if (cellGaps && wideGaps) continue; // one, for "We compute" over its display; two for a paragraph's tail (below) // between its WORDS: a formula on the line spaces its own glyphs
         const widest = words.reduce((a, b) => ((b.item.width || 0) > (a.item.width || 0) ? b : a));
         const left = band.reduce((a, b) => (b.item.transform[4] < a.item.transform[4] ? b : a));
         // ...or it OPENS on the display: a short clause of its own, "Now we
@@ -4520,10 +4533,34 @@ export class TypographyEngine {
         // before: the first line of its column, opening lowercase and closing
         // its sentence ("…jority class." under nothing, kept as a figure's
         // label). Nothing stands above it within three heights.
-        const colTop = /^[a-zà-ÿ]/.test(lineText(words)) && /[a-zà-ÿ][.!?]\s*$/.test(lineText(words)) && lowers >= 1 &&
+        const colTop = /^[a-zà-ÿ]/.test(lineText(words)) && /[a-zà-ÿ0-9)][.!?]\s*$/.test(lineText(band)) && lowers >= 1 &&
           !lines.some((l) => l !== ln && l.y > ln.y && l.y - ln.y <= (widest.item.height || 8) * 3 &&
             l.items.some((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1));
         if (colTop) { for (const p of words) { if (skip.has(p.div)) { skip.delete(p.div); protect.delete(p.div); blockWhy.delete(p.div); if (globalThis.__fxDebug) delete p.div.dataset.fxWhy; } } continue; }
+        // ...or it is the first line of the paragraph UNDER a display, taken
+        // into the run that kept the display as a table ("Note that … is only
+        // applied to …", "where P ∈ … is the collection of all …"): a row of
+        // mathematics with a relation right above it, four lowercase words,
+        // no cell's gap between its words.
+        // (Every row within three heights above: a display's last row may be
+        // a limit or an index set with no relation of its own.)
+        const aboveBand = (() => {
+          const out = [];
+          for (let m = lines.indexOf(ln) - 1; m >= 0; m--) {
+            if (lines[m].y <= ln.y) continue;
+            if (lines[m].y - ln.y > (widest.item.height || 8) * 3.2) break;
+            out.push(...lines[m].items.filter((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1 && (p.item.height || 0) >= (widest.item.height || 8) * 0.75));
+          }
+          return out.length ? out : null;
+        })();
+        const underDisplay = !!aboveBand && lowers >= 4 && /[=≤≥∑∫∈<>≈]/.test(aboveBand.map((p) => p.item.str).join("")) &&
+          aboveBand.filter((p) => isMath(p) || isSpecial(p) || !/[A-Za-zÀ-ɏ]{2}/.test(p.item.str)).length >= aboveBand.length * 0.7 &&
+          words.every((p) => !skip.has(p.div) || /^table-aligned$|^row-eqn$/.test(blockWhy.get(p.div) || ""));
+        // (Not a numbered line of a listing: "4  Compute … on labeled" under
+        // "for t = 1 to T do" is an algorithm's step — the first version gave one back.)
+        const numbered = band.some((p) => /^\d{1,3}:?$/.test(p.item.str.trim()) && p.item.transform[4] < sortedW[0].item.transform[4]);
+        if (underDisplay && !wideGaps && !numbered) { for (const p of words) { if (skip.has(p.div)) { skip.delete(p.div); protect.delete(p.div); blockWhy.delete(p.div); if (globalThis.__fxDebug) delete p.div.dataset.fxWhy; } } continue; }
+        if (cellGaps) continue;
         if (!opensDisplay && lowers < 2) continue;
         if (!opensDisplay && !continuesAbove(ln, { item: { height: widest.item.height, transform: left.item.transform } }, bx0, bx1)) continue;
         // A TABLE's reason is given up only above a display: a wordy cell's
@@ -5923,6 +5960,34 @@ export class TypographyEngine {
         /^[A-Za-z][A-Za-z0-9-]*$/.test(trimmed) &&
         !this.#isItalicFont(pageView, item.fontName, italicCache2) && besideMath(true);
       if (mathName()) return reject(div, "math-name");
+      // Two more names that are notation in the body's own face. A single
+      // capitalised word that OPENS its line before an equals sign — the
+      // label of an example row, "Input = [CLS] the man …", beside a "Label"
+      // kept under it (a public paper). And the letters of a number: "BE"
+      // and "BDh" between the digits of a hexadecimal constant, set as items
+      // of their own hard against the digits either side.
+      const neighbours = () => {
+        if (!item?.transform || !(item?.height > 0)) return null;
+        const h = item.height, x0 = item.transform[4], x1 = x0 + (item.width ?? 0), y = item.transform[5];
+        let left = null, right = null;
+        for (const q0 of allPairs) {
+          const q = q0.item;
+          if (!q || q === item || !q.transform || !q.str.trim() || Math.abs(q.transform[5] - y) > h * 0.3) continue;
+          const qx0 = q.transform[4], qx1 = qx0 + (q.width ?? 0);
+          if (qx0 >= x1 - h * 0.1 && (!right || qx0 < right.x0)) right = { x0: qx0, gap: qx0 - x1, t: q.str.trim() };
+          if (qx1 <= x0 + h * 0.1 && (!left || qx1 > left.x1)) left = { x1: qx1, gap: x0 - qx1, t: q.str.trim() };
+        }
+        return { h, left, right };
+      };
+      if (/^[A-Z][A-Za-z]{1,15}$/.test(trimmed)) {
+        const n = neighbours();
+        if (n?.right && n.right.gap <= n.h * 1.2 && /^(?:=|:=|←)$/.test(n.right.t) && (!n.left || n.left.gap > n.h * 3)) return reject(div, "math-name");
+      }
+      if (/^[0-9A-Fa-f]{1,4}h?$/.test(trimmed) && /[A-Fa-f]/.test(trimmed)) {
+        const n = neighbours();
+        const digits = (s) => !!s && s.gap < n.h * 0.2 && /^[0-9A-Fa-f]*\d[0-9A-Fa-f]*$/.test(s.t);
+        if (n && (digits(n.left) || digits(n.right))) return reject(div, "math-name");
+      }
       // An IDENTIFIER set in another family than the body's: a command or
       // a channel name in the sans companion of a serif body (\textsf), one
       // token, upright, in a face carrying a tenth of the page's characters
