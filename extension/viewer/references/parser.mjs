@@ -18,7 +18,10 @@ const DOTTED_MARKER = /^(\d{1,3})\.\s+(?=\D)/;
 // ...or no year at all: amsalpha-style initials ("[P]", "[RY]", "[BCD]") label
 // a bibliography too (R55, a mathematics paper), and its citations stayed
 // black. Three such lines make a list; one bracketed word does not.
-const ALPHA_MARKER = /^\[([A-Z][A-Za-z]{0,6}\+?(?:\d{2}[a-z]?)?)\]\s*/;
+// ...and the labels an author writes by hand (a mathematics paper's "[B-Em]",
+// "[C-Chu 2]", "[H 10]"): a second capitalised part after a hyphen, and an
+// ordinal after a space. ALPHA_CITE_KEY below is the same grammar.
+const ALPHA_MARKER = /^\[([A-Z][A-Za-z]{0,6}(?:-[A-Z][A-Za-z]{0,5})?\+?(?:\d{2}[a-z]?| \d{1,2})?)\]\s*/;
 const YEAR = /\b(19|20)\d{2}[a-z]?\b/;
 
 /**
@@ -320,26 +323,35 @@ export function findReferenceSections(lines) {
 /**
  * The first line of a bibliography set WITHOUT a heading: a "[1]" line in the
  * document's second half followed, within a few lines each, by "[2]" and
- * "[3]" at the same size. An enumerated list in the body is excluded by the
+ * "[3]" at the same size — or earlier, followed so by every number to "[8]".
+ * An enumerated list in the body is excluded by the
  * position; a list of figures or a numbered proof by the markers' order and
  * closeness; a single bracketed number in prose by needing three. -1 if none.
  */
 function numberedRunStart(lines) {
   const n = lines.length;
-  for (let i = Math.floor(n / 2); i < n; i++) {
+  // The second half is counted in lines, and a collaboration paper prints its
+  // members and their institutions AFTER the list — six pages of them behind
+  // a list that starts on page nine of sixteen, so its "[1]" fell in the first
+  // half and all 215 citations went unresolved. Before the half a list still
+  // qualifies, by a run no enumerated list in the text reaches: "[1]" to
+  // "[8]", in order and each within a few lines of the last.
+  const half = Math.floor(n / 2);
+  for (let i = Math.floor(n * 0.15); i < n; i++) {
     const m = NUMERIC_MARKER.exec(lines[i].text);
     if (!m || m[1] !== "1") continue;
+    const need = i >= half ? 3 : 8;
     const h = lines[i].h;
     let want = 2;
     let last = i;
-    for (let j = i + 1; j < n && j <= last + 8 && want <= 3; j++) {
+    for (let j = i + 1; j < n && j <= last + 8 && want <= need; j++) {
       const mm = NUMERIC_MARKER.exec(lines[j].text);
       if (!mm) continue;
       if (Number(mm[1]) !== want || Math.abs(lines[j].h - h) > h * 0.15) break;
       want++;
       last = j;
     }
-    if (want > 3) return i;
+    if (want > need) return i;
   }
   return -1;
 }
@@ -435,6 +447,22 @@ function sectionBody(lines, start, heading = lines[start], first = start + 1) {
     }
     const num = numberOf(line.text);
     if (num !== null) lastNum = num;
+    // Text set LARGER than the entries, a full line of it, inside a numbered
+    // list: not an entry's own line. A collaboration paper prints its member
+    // list after the bibliography at a size between the entries' and a
+    // heading's (10.5 on 9.5), across the page under the list's two columns —
+    // so in column order it sits between one entry and the next, and after the
+    // last. Where the numbering carries on further down, the lines up to it
+    // are left out; where it does not, the list has ended.
+    if (lastNum !== null && num === null && line.h >= entryH * 1.08 && line.h < entryH * 1.15 && line.text.trim().length >= 30) {
+      let resumes = false;
+      for (let j = i + 1; j < Math.min(lines.length, i + 400) && !resumes; j++) {
+        resumes = numberOf(lines[j].text) === lastNum + 1 && Math.abs(lines[j].h - entryH) <= entryH * 0.15;
+      }
+      if (!resumes) break;
+      toMarker = true;
+      continue;
+    }
     // Heading-SIZED alone is not enough: a stray oversized glyph (a lone
     // quotation mark split onto its own line by the font-size line rule)
     // must not end the bibliography — a real section heading carries at
@@ -519,6 +547,28 @@ function splitByIndent(body) {
   return groups;
 }
 
+/**
+ * The year an entry is cited by. Not simply the first year-shaped number:
+ * a style that ends its entries with the year prints the volume and pages
+ * before it ("6:1971-80, 2010" - the entry was filed under 1971), and one that
+ * disambiguates an author's years prints the conference's date before its own
+ * ("September 12-15, 2016, 2016a" - filed under 2016, so "(... 2016a)" in the
+ * text resolved to nothing). A year carrying its letter is the citation's own
+ * year; otherwise the first one that is not part of a page or volume range;
+ * otherwise the first, as before.
+ */
+function entryYear(raw) {
+  const all = [...raw.matchAll(new RegExp(YEAR.source, "g"))];
+  if (!all.length) return null;
+  const lettered = all.find((m) => /[a-z]$/.test(m[0]));
+  if (lettered) return lettered[0];
+  const DASH = "[\\u2010-\\u2015\\u2212-]";
+  const inRange = (m) =>
+    new RegExp(`(?::|\\bpp?\\.|\\d\\s?${DASH})\\s?$`).test(raw.slice(Math.max(0, m.index - 6), m.index)) ||
+    new RegExp(`^\\s?${DASH}{1,2}\\s?\\d`).test(raw.slice(m.index + m[0].length, m.index + m[0].length + 4));
+  return (all.find((m) => !inRange(m)) ?? all[0])[0];
+}
+
 function buildEntry(group) {
   if (!group?.length) return null;
   const first = group[0];
@@ -546,7 +596,7 @@ function buildEntry(group) {
     firstAuthorSurname(authors) ??
     /\p{Lu}[\p{L}'’-]+/u.exec(raw)?.[0] ??
     null;
-  const year = YEAR.exec(raw)?.[0] ?? null;
+  const year = entryYear(raw);
   const doi =
     /\b10\.\d{4,9}\/[^\s"',;]+/.exec(raw)?.[0].replace(/[).,;]+$/, "") ?? null;
   return {
@@ -880,7 +930,11 @@ export function findInternalRefsAcrossBreaks(text) {
       // the intervening lines may follow hard breaks.
       // An intervening line never opens lowercase: that is the
       // continuation itself ("Algo-" / "rithm 2." was skipped as one).
-      const m = /^(?:\u0000?\n(?![a-z])[^\n\u0000]{0,8}){0,3}\n(?=[a-z])/.exec(text.slice(i + 1));
+      // ...unless it is ONE lowercase letter: a subscript ("p" set over its
+      // "t", twice in the formula on the line above "Fig-" / "ure 1" — a
+      // public paper, ICCV layout). No hyphenation leaves a single letter
+      // for the next line, so that is never the continuation.
+      const m = /^(?:\u0000?\n(?:(?![a-z])[^\n\u0000]{0,8}|[a-z](?=\n))){0,3}\n(?=[a-z])/.exec(text.slice(i + 1));
       if (m) {
         if (m[0].length > 1) gaps.push([i + 1, i + 1 + m[0].length]);
         i += m[0].length; // drop the hyphen, the breaks and the short lines
@@ -1041,7 +1095,7 @@ const CITE_PREFIX = /^(?:See|Cf|Compare|Also|But|And|In|E\.g|I\.e|Viz|Following|
 // ordinary bracketed word or a numeric list (NUMERIC_CITE already owns those).
 // ...and, since R55, a label with no year ("[P]", "[RY]"), matching the
 // year-less ALPHA_MARKER; such a key colours only when an entry carries it.
-const ALPHA_CITE_KEY = "[A-Z][A-Za-z]{0,6}\\+?(?:\\d{2}[a-z]?)?";
+const ALPHA_CITE_KEY = "[A-Z][A-Za-z]{0,6}(?:-[A-Z][A-Za-z]{0,5})?\\+?(?:\\d{2}[a-z]?| \\d{1,2})?";
 const ALPHA_CITE = new RegExp(
   `\\[(${ALPHA_CITE_KEY}(?:\\s*,\\s*${ALPHA_CITE_KEY})*)(?:\\s*,\\s*(?:§|¶|pp?\\.|Section|Theorem|Lemma|Chapter|Prop)[^\\]]{0,55})?\\]`,
   "g",

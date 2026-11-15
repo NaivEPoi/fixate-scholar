@@ -1241,6 +1241,9 @@ test("findInternalRefsAcrossBreaks: a reference hyphenated across a line break",
   // ...but not a long line, nor a hard break right before the continuation.
   assert.deepEqual(findInternalRefsAcrossBreaks("in Appen-\nthe other column's text\ndix B"), []);
   assert.deepEqual(findInternalRefsAcrossBreaks("in Appen-\u0000\ndix B"), []);
+  // One-letter lowercase lines between the halves are a formula's subscripts.
+  const t7 = "curve in Fig-\u0000\nt\nt\nure 1. One";
+  assert.deepEqual(findInternalRefsAcrossBreaks(t7).map((r) => cut(t7, r)), ["Fig-\u0000\nt\nt\nure 1"]);
   // The continuation is never taken for an intervening line, whatever follows it.
   const t6 = "see Algo-\nrithm 2.\nthe next line";
   assert.deepEqual(findInternalRefsAcrossBreaks(t6).map((r) => cut(t6, r)), ["Algo-\nrithm 2"]);
@@ -1320,4 +1323,76 @@ test("a bibliography resumes after an acknowledgments block set between its colu
   assert.ok(body.some((l) => /^\[3\]/.test(l.text)), "the list continues past the block");
   assert.ok(!body.some((l) => /supported in part/.test(l.text)), "the block's own lines are left out");
   assert.equal(parseReferences(doc).length, 3);
+});
+
+test("a headless bibliography before the halfway line is found by a run to [8]", () => {
+  // A list followed by more lines than precede it (a member list, say): its
+  // "[1]" is in the first half, and eight markers in order still name it.
+  const entries = [];
+  for (let n = 1; n <= 9; n++) entries.push(`[${n}] A. Author${n} and B. Other, Journal of Examples ${n}, 10${n} (200${n}).`);
+  const before = Array.from({ length: 6 }, (_, i) => `Body prose line ${i} of the paper, citing [1] and [2] in passing.`);
+  const after = Array.from({ length: 30 }, (_, i) => `M. Member${i}, N. Member${i}, O. Member${i}, P. Member${i}, Q. Member${i},`);
+  const doc = lines([...before, ...entries, ...after]);
+  // The member list is set a little larger than the entries, as such lists are.
+  for (const l of doc.slice(before.length + entries.length)) l.h = 11;
+  const { heading, body } = findReferencesBody(doc);
+  assert.equal(heading.synthetic, true);
+  assert.equal(body.length, 9); // the list, and none of what follows it
+  assert.equal(parseReferences(doc).length, 9);
+});
+
+test("a short numbered list in the first half is still not a bibliography", () => {
+  const doc = lines([
+    "Body prose.", "Body prose.",
+    "[1] the first step.", "[2] the second step.", "[3] the third step.", "[4] the fourth step.",
+    ...Array.from({ length: 20 }, () => "Body prose follows for the rest of the document."),
+  ]);
+  assert.deepEqual(parseReferences(doc), []);
+});
+
+test("a larger-set block between two entries is left out when the numbering carries on", () => {
+  const doc = lines([
+    "Body prose citing [1], [2] and [3].", "More body prose.", "More body prose.", "More body prose.",
+    "References",
+    "[1] A. Author, Journal of Examples 1, 101 (2001).",
+    "[2] B. Author, Journal of Examples 2, 102 (2002).",
+    "C. Member, D. Member, E. Member, F. Member, G. Member, H. Member,",
+    "I. Member, J. Member, K. Member, L. Member, M. Member, N. Member,",
+    "[3] C. Author, Journal of Examples 3, 103 (2003).",
+  ]);
+  doc[7].h = doc[8].h = 11;
+  const { body } = findReferencesBody(doc);
+  assert.deepEqual(body.map((l) => l.text.slice(0, 3)), ["[1]", "[2]", "[3]"]);
+});
+
+test("hand-written alphabetic labels: a hyphenated pair and an ordinal after a space", () => {
+  const doc = lines([
+    "Body prose citing [B-Em], [Ha 2] and [Ha 10, §3], and the token [SEP].",
+    "More body prose.", "More body prose.", "More body prose.",
+    "References",
+    "[B-Em] D. Bakerson, M. Emeryn Some diffusions. Seminar notes 1123 (1985), 177-206.",
+    "[Ha 2] R. Hamilson Four examples with positive curvature. Jour. Ex. Geom. 24 (1986), 153-179.",
+    "[Ha 10] R. Hamilson The flow on surfaces. Contemp. Ex. 71 (1988), 237-261.",
+    "[Lo] J. Lottman Some properties of a tensor. A preprint (2002).",
+  ]);
+  const entries = parseReferences(doc);
+  assert.deepEqual(entries.map((e) => e.label), ["B-Em", "Ha 2", "Ha 10", "Lo"]);
+  const cites = findCitations(doc[0].text);
+  const resolved = cites.map((c) => resolveCitation(c.keys, entries).map((e) => e.label));
+  assert.deepEqual(resolved, [["B-Em"], ["Ha 2"], ["Ha 10"], []]); // "[SEP]" is no entry's label
+});
+
+test("an entry's year: its lettered year, and never a page or volume number", () => {
+  const doc = lines([
+    "Body prose citing (Ekman et al., 2010) and (Bayden et al., 2016b).", "More body prose.", "More body prose.", "More body prose.",
+    "References",
+    "Ulf Ekman, Lars Visser, and Ken Ruud. Arbitrary-order examples from differentiation.",
+    { text: "Journal of Example Theory, 6:1971–80, 2010." },
+    "Atil Bayden, Barak Pearl, and Jeff Sisk. An example library. In 7th Conference on",
+    { text: "Examples, Oxford, UK, September 12–15, 2016, 2016b." },
+    "Carl Doe. A third example. In Proceedings of Examples, pp. 1989–1996, 2004.",
+  ]);
+  const entries = parseReferences(doc);
+  assert.deepEqual(entries.map((e) => e.year), ["2010", "2016b", "2004"]);
+  for (const c of findCitations(doc[0].text)) assert.equal(resolveCitation(c.keys, entries).length, 1, c.keys.join());
 });

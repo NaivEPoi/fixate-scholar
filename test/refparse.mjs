@@ -31,7 +31,7 @@ const args = process.argv.slice(2);
 const LINES = args.find((a) => a.startsWith("--lines="))?.slice(8);
 const targets = args.filter((a) => !a.startsWith("--"));
 if (!targets.length) {
-  console.error("usage: node test/refparse.mjs <pdf|dir|url> [more…] [--lines=<regex>]");
+  console.error("usage: node test/refparse.mjs <pdf|dir|url> [more…] [--lines=<regex>] [--unresolved] [--entries]");
   process.exit(2);
 }
 
@@ -49,10 +49,16 @@ for (const { path, name } of files) {
     const { heading, body } = findReferencesBody(lines);
     let cites = 0;
     let resolved = 0;
+    const misses = [];
     for (const l of lines) {
       for (const c of findCitations(l.text)) {
+        // A bracketed word with no digit ("[SEP]") is a citation only where an
+        // entry carries that label — the product annotates it on that condition
+        // alone — so one that resolves to nothing is text, not a miss.
+        if (c.keys.every((k) => /^[A-Za-z+-]+$/.test(k)) && !resolveCitation(c.keys, entries).length) continue;
         cites++;
         if (resolveCitation(c.keys, entries).length) resolved++;
+        else misses.push(`p${l.page} ${JSON.stringify(l.text.slice(c.start, c.end))} keys=${c.keys.join("|")}`);
       }
     }
     // ZERO: a bibliography that produced nothing — the whole feature is off on
@@ -66,6 +72,8 @@ for (const { path, name } of files) {
         `body=${body.length} entries=${entries.length} cites=${cites} resolved=${resolved} ` +
         `mode=${globalThis.__fxRefDebug?.mode ?? "-"}`,
     );
+    if (args.includes("--unresolved")) for (const m of misses) console.log(`       MISS ${m}`);
+    if (args.includes("--entries")) for (const e of entries) console.log(`       ENTRY ${e.label} | ${(e.raw || "").slice(0, 90)}`);
     if (LINES) {
       const re = new RegExp(LINES, "i");
       for (const l of lines) {

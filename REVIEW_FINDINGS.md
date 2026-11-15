@@ -8073,3 +8073,192 @@ on one public page a coloured citation's first digit sometimes falls
 outside the span's colour run, which splits the citation's wrap in
 two — both halves keep the citation colour, on either tree, so
 nothing shows; it is pixel-measurement noise at a run edge.
+
+## R69 — sixteen papers of other layouts, the defects they showed, and a gate five times faster (2026-11-14)
+
+The public corpus had fourteen papers of five templates, most of them one
+research group's. Sixteen more were taken from arXiv for the layouts those
+cannot show — CVPR and ICCV, ICML (2015 and 2019), ICLR (two), Springer LNCS,
+AAAI, IEEE Computer Society (conference and journal), a Physical Review
+Letters article, NAACL, NeurIPS 2020 with a long appendix, a two-column
+whitepaper, JMLR, a mathematics article — and listed with the others in one
+place, `test/lib/corpus.mjs` (`set: "wide"`). The private corpus was not
+opened in this round.
+
+### Found by the probes (allprobes over all sixteen: 13 passed, 3 failed)
+
+- **A bibliography with no heading, before the halfway line.** The list is
+  found by its shape (R55) only in the document's second half, counted in
+  lines; a collaboration paper prints six pages of members and institutions
+  after it, so its "[1]" fell in the first half and 215 of 217 citations
+  resolved to nothing. Before the half a list now qualifies by a run no
+  enumerated list reaches, "[1]" to "[8]" in order. The member list, set a
+  size between the entries' and a heading's and laid across the page under
+  the list's two columns, sits between two entries in column order and after
+  the last: text larger than the entries inside a numbered list is left out
+  where the numbering carries on, and ends the list where it does not
+  (body 1607 lines to 275, 118 entries, 215 citations resolved).
+- **A table between two double rules.** A journal's table opens and closes
+  on `\hline\hline` and has no third rule inside; the engine needs three
+  chained rules for a zone, so the cells the text rules missed were
+  emphasised. A rule pair one of which is doubled (two hairlines a couple of
+  px apart across one extent) bounds a zone.
+- **A fraction of named quantities.** `<name>_<sub> = (<name> − <name>) /
+  (<name> − <name>)  (5)`: the tag row is two-fifths words, one of them five
+  letters, and all three rows kept their emphasis. A numbered row whose words
+  are all name spans around a relation qualifies at half symbols; a
+  neighbouring row of nothing but names around an operator may open
+  lowercase.
+- **"Fig-" / "ure 1" with a formula's subscripts between.** The reading order
+  laid two one-letter subscript lines between the halves; the matcher saw
+  through short lines only when they did not open lowercase. One lowercase
+  letter is never a word's continuation, and is seen through.
+
+### Found by the parser sweep (`refparse.mjs` over all 34, no browser)
+
+- **Hand-written labels.** "[B-Em]", "[C-Chu 2]", "[H 10]": a second
+  capitalised part after a hyphen and an ordinal after a space were no label
+  to `ALPHA_MARKER`, and a mathematics paper's 27 entries were read as 8.
+  Same grammar for the citation key; a label still colours only where an
+  entry carries it.
+- **An entry's year.** The first year-shaped number was taken: "6:1971–80,
+  2010" was filed under 1971, and "September 12–15, 2016, 2016a" under 2016,
+  so "(… 2016a)" resolved to nothing. Now the lettered year, else the first
+  that is not part of a page or volume range, else the first as before.
+- `refparse.mjs` counted "[SEP]" and "[CLS]" (a paper's own tokens) as
+  unresolved citations and flagged the paper LOW; the product annotates a
+  digit-less bracket only where an entry carries the label, and the tool now
+  counts the same way. `--unresolved` and `--entries` print what the summary
+  line counts.
+
+### Found by reading every page (classification overlays, 330 pages, seven readers)
+
+Fixed, each read to its mechanism from `test/dump-page.mjs` first:
+
+- **A whole page kept as boilerplate.** The CCS-concepts rule (an arrow
+  between letters, two semicolons) fired on page 37 of the mathematics
+  article, whose five paragraphs form one block and write maps with the same
+  arrow: 186 spans, zero processed. The rule is front matter's — pages 1–2,
+  ten rows at most.
+- **A paragraph's short last line kept as a heading** (ten lines on four
+  papers): a journal layout sets its headings at body size and its outline
+  anchors a skip above them, on the paragraph's last line; a citation's
+  closing "2013) (…)." read as a list label. No heading opens under a full
+  line of prose in its own face that does not end its sentence
+  (`continuesAbove`), in the anchor, label and Title-Case branches alike.
+- **Caption continuation lines emphasised**, four mechanisms. Bold panel
+  labels inside a caption ("Left:", "Middle:", "Right:") ended it as run-in
+  headings: a bold lead is the caption's own when the line above broke a word
+  onto it, or when the caption is set clearly smaller than the body. A
+  caption ending a point past the page's centre line was read as page-wide
+  and took the other column's caption for "the prose above" (`capCrosses`
+  now needs to cross, not touch). A hanging caption (text in a block right of
+  the label) was ended by an inline fraction's gap after three of eleven
+  lines: a line on the hanging edge is the caption's through a gap of up to
+  2.6 heights, to twenty lines.
+- **Table cells emphasised.** A table centred on a two-column page's centre
+  line kept its numbers and lost its label column to the gutter split (38 of
+  49 names): what the run's rows leave on the far side is a column when it is
+  a word or a few on most rows at one x. And a row of four or more numeric
+  cells, whatever kept it, keeps the short items standing a cell's gap clear
+  on its baseline (`row-numeric`), header rows by their kept cells.
+- **Operator names with their bracket.** "log(" and "(mod" reach the text
+  layer as one item in the text face; the `math-op` test strips the bracket.
+  On the single-column Computer Modern article this keeps 61 "(mod" spans
+  that were emphasised inside formulas.
+- **Constraint rows that open on a name** ("<Name>(N) ≤ <target name>"):
+  an inequality or membership glyph, up to three name spans, no function word.
+
+### Left for the next round (seen, verified only by the reader, not fixed)
+
+- The Physical Review Letters article: front matter (title, collaboration
+  line, received dates) and one roman-numeral heading processed — it has no
+  "Abstract" heading for the content start; a handful of member-list and
+  affiliation continuation lines processed on its last five pages.
+- Prose line directly above a displayed equation kept with the equation
+  (`row-eqn`, `blk-eqn`, `table-aligned`): about a dozen lines over the
+  IEEE journal, ICLR and mathematics papers ("…, we define", "yielding
+  objective", "Now we compute").
+- Italic run-in leads processed where their siblings are kept: "Remark."
+  after a kept number (six), three "Proof of the claim." leads, one of six
+  list leads on an ICML page; the first line of italic list-item sentences
+  kept as a heading while their continuation is processed (a whitepaper, an
+  ACL-style appendix).
+- A group label alone on a table row ("Two-stage methods"), two table
+  sub-caption fragments after a bold lead, a rotated table's caption, two
+  footnotes of one page processed where the rest are kept.
+- One-word leftovers: "where" inside three displays, a bold mid-sentence
+  phrase at a line start kept as a run-in (four), a paragraph's opening
+  surname kept as `runin-short` (three).
+- Pages the readers could not certify (images evicted before the write-up):
+  the IEEE Computer Society conference paper, pages 1–6 of the Physical
+  Review one, 1–3 of the NAACL and NeurIPS 2020 ones, 1–5 of the JMLR one.
+  Their DOM probes pass; they have not been looked at.
+
+### The gate's wait
+
+`allprobes.mjs` waited for a page by watching five counts hold still: a fixed
+1.2–2.2 s after asking for the page, five equal reads 500 ms apart, a second
+loop while prose was undecided, and up to 12 s for a hit-target on pages that
+cite nothing — about 9.7 s a page. The engine now says where a page's pass
+stands on the text layer itself (`data-fx-pass`: run, done) and the
+annotation pass marks a page it has annotated after a finished pass
+(`data-fx-ann`); a new pass clears both. The harness takes a page as settled
+when it says so, its canvases have finished and no font is loading, and its
+counts are the same 300 ms later (longer than the overlay's 250 ms font-
+refresh delay, the one re-process that starts after a pass ends). Without
+the page's word it falls back to the old wait unchanged; `--settle=legacy`
+forces that.
+
+| 34 papers, 2 at a time | old wait | page's own signal |
+|---|---|---|
+| wall | 50.8 min (24.0 + 26.8) | 6.1 min |
+| harness time | 5986 s | 718 s |
+
+Nothing lost: on the final tree the mathematics-heavy article and one
+regression paper give line-for-line identical logs under both waits
+(`sweep-diff` — every page's skip reasons and every check's totals), and the
+CVPR paper's log matches its old-wait run line for line. 572 of the 575 pages settled
+on the signal and 3 on the fallback hold. Also new: `test/sweep.mjs` (any `--url=` harness over the
+corpus from a local copy — each PDF downloaded once, served from 127.0.0.1
+with byte ranges, N at a time, exit 75 retried), `test/sweep-diff.mjs` (two
+sweeps compared per page and per check), `test/dump-page.mjs` (every span of
+a page with its reason, the caption and heading traces, the annotator's
+joined text).
+
+### Regression check
+
+v1.4.8 in a worktree against the final tree, the eighteen papers of the
+core and regression sets, 275 pages: 28 pages changed. Twenty-two are
+reference-list lines moving from `line-head` to `refs-region` (kept either
+way); four are a paragraph's last line now processed; one `row-numeric`
+cell, one named-constraint row; and the 61 "(mod" spans above, which no
+page's prose count shows. One paper that failed `whyskip` on v1.4.8 (52
+unreasoned spans on a page of a 44 MB document, read before its pass
+finished) passes. `npm test`: 344 pass.
+
+### Performance
+
+Measured with `diag-perf.mjs --cold --pages=8` on a two-column paper,
+headless. At this machine's speed the engine's batches were already 11–23 ms
+and the change below does not show; the long tasks there (7–12 a scroll,
+75–160 ms) are the browser's own rendering frames — in the trace, layout
+with EVERY object of the document dirty (20–32 thousand) plus paint and
+pre-paint, once per page reached, three elements restyled: what a newly
+loaded font face does to a document whose text is drawn in embedded faces.
+With reading mode off the same scroll has none. `content-visibility: auto` on
+the text and mask layers was tried through `--css=`: the dirty count stopped
+growing with the document (17 thousand), but long-task totals over three
+runs each overlapped (454–524 ms against 536–1037 ms), too noisy to ship a
+rendering change on. Left measured, not changed.
+
+Under `--throttle=4` (new: CDP CPU throttling, a slower machine's
+conditions) a 60-span batch took 82–253 ms. A batch is now sized to 22 ms at
+the latest cost per span and to the idle period's remaining time (10–60
+spans), a page's first batch is 20 spans (the cost on hand is the previous
+page's), colours are read ahead for the coming batch only, and a batch waits
+70 ms, not 200, for an idle period. Throttled, two runs each: long-task time
+9.0–9.2 s to 6.8–7.2 s, long tasks 72–74 to 54–66, typical batch 17–20 ms,
+the largest callback of a page 36–170 ms (the first stage is still one
+piece). Unthrottled: unchanged (long tasks 7–8, 525–603 ms before and
+after).

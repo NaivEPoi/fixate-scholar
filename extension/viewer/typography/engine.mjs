@@ -163,6 +163,16 @@ function smallCapsByMeasure(family) {
 // 140–170 ms on a 2x display, a skipped frame on every page while scrolling.
 // 60 trades a couple of layouts a page for tasks under ~60 ms (R55).
 const CHUNK = 60;
+// ...and what a batch is sized to. Sixty spans cost 25-50 ms, one task: the
+// frames a reader loses while a page is being processed under the pointer.
+// A batch now takes as many spans as fit BATCH_MS at the latest batch's cost
+// per span — and the idle period's own remaining time, which is a few ms
+// while the page scrolls — MIN_CHUNK at least (a batch pays one layout
+// whatever its size), CHUNK at most. One batch to a callback once it has
+// used most of that: two that each fit made one task of twice the length.
+const BATCH_MS = 22;
+const MIN_CHUNK = 10;
+const BATCH_WAIT_MS = 70;
 const ABSTRACT = /^\s*abstract\s*$/i;
 // Words that end in a period WITHOUT ending a sentence. A run-in heading is cut
 // at its first terminator, and an abbreviation inside the title — "Model vs.
@@ -1705,6 +1715,29 @@ export class TypographyEngine {
               gutterX: gutterX == null ? null : Math.round(gutterX),
             });
           }
+          // A table centred on a two-column page's centre line has its LABEL
+          // column on the far side of it: the run keeps only the band's
+          // side of each row (splitX), so the numbers were kept and the row
+          // labels beside them emphasised — 38 of a 49-row appendix table's
+          // names (a public paper, AAAI layout). What the rows leave on the
+          // other side is that column when it is a word or a few on most of
+          // them, all starting at one x: a column of body text there is full
+          // lines, and a paragraph's short last line is one row, not most.
+          if (splitX != null) {
+            const rests = [];
+            for (let k = i; k <= bestLast; k++) {
+              const seg = segItems(sorted[k], bestBand);
+              const rest = sorted[k].items.filter((p) => !seg.includes(p) && p.item.str.trim());
+              if (rest.length && rest.map((p) => p.item.str).join(" ").trim().split(/\s+/).length <= 4) rests.push(rest);
+            }
+            if (rests.length >= Math.max(3, (bestLast - i + 1) * 0.6)) {
+              const xs = rests.map((r) => Math.min(...r.map((p) => p.item.transform[4])));
+              const x0 = xs.slice().sort((a, b) => a - b)[xs.length >> 1];
+              if (xs.filter((x) => Math.abs(x - x0) <= 1.5).length >= rests.length * 0.8) {
+                for (const r of rests) for (const p of r) { skip.add(p.div); dbg(p.div, "table-aligned"); }
+              }
+            }
+          }
           for (let k = i; k <= bestLast; k++) {
             const seg = segItems(sorted[k], bestBand);
             for (const p of seg) { skip.add(p.div); dbg(p.div, "table-aligned"); }
@@ -2131,7 +2164,13 @@ export class TypographyEngine {
         // separate clauses, so arrow-plus-two-semicolons is not the CCS shape on
         // its own. A real CCS line always joins TERMS ("… and privacy → Mobile
         // and wireless security; Network security"), never digits.
-        if (/[A-Za-z]\s*→\s*[A-Za-z]/.test(btext) && (btext.match(/;/g) || []).length >= 2) { skipBlock(b, "blk-ccs"); continue; }
+        // ...and it is front matter, a few lines of it: a mathematics paper
+        // writes maps with the same arrow ("f : M → N; …"), and one page of
+        // five paragraphs set as a single block — 186 spans, the theorem's
+        // statement and the open questions after it — was skipped whole as
+        // boilerplate on its thirty-seventh page (a public paper).
+        if ((!pageNumber || pageNumber <= 2) && b.rows.length <= 10 &&
+            /[A-Za-z]\s*→\s*[A-Za-z]/.test(btext) && (btext.match(/;/g) || []).length >= 2) { skipBlock(b, "blk-ccs"); continue; }
         // Footnotes: a smaller-than-body block in the page's bottom band that
         // OPENS with a footnote marker — a symbol (•†‡§¶*) or a superscript
         // numeral (a tiny leading item). A plain smaller-than-body cut would
@@ -2489,7 +2528,14 @@ export class TypographyEngine {
           const names = r.items.filter((p, i) => wordy(p) && !(labelled && i === li));
           const operated = /[+=×·∑∫√∂−/≤≥≈]/.test(rowText) || r.items.filter((p) => isMath(p)).length > names.length;
           const allNamed = prose > 0 && opensMath && operated && names.every((p) => nameSpan(p, r.items));
-          if (prose > 0 && !eqBase && !numberedDisplay && !allNamed) continue;
+          // ...or the row opens on a NAME and compares it: a constraint
+          // "<Name>(N) ≤ <target name>" under an objective (a public paper,
+          // ICML layout — two such rows emphasised inside equation (2)). An
+          // inequality or membership glyph, which no sentence carries, a few
+          // name spans and not one function word.
+          const relNamed = prose > 0 && /[≤≥≈∈≠]/.test(rowText) && names.length > 0 && names.length <= 3 &&
+            names.every((p) => nameSpan(p, r.items)) && !FUNCTION_WORD.test(rowTrim);
+          if (prose > 0 && !eqBase && !numberedDisplay && !allNamed && !relNamed) continue;
           let symbolish = 0;
           for (const p of r.items) {
             const t = p.item.str.trim();
@@ -2511,9 +2557,17 @@ export class TypographyEngine {
           // AND is still mostly symbols. Both are needed: a relation such as
           // `≤`/`∈`/`∀` is what no English sentence has, and the ratio is what
           // keeps a prose line with one inline relation from qualifying.
+          // ...or when the words are the equation's own NAMED quantities: a
+          // normalised score defined as a fraction of score differences reads
+          // "<name> <subscript> = . (5)" on its tag row — two of five items are
+          // words, one of them five letters long, and all three rows of the
+          // fraction kept their emphasis (a public paper, AAAI layout). Name
+          // spans only (nameSpan: no function word, no verb), a relation, and
+          // still half symbols.
           const eqNumbered = eqBase &&
-            (!words.some((w) => w.length >= 5) || (mathSignal && ratio >= 0.7));
-          const namedRow = allNamed && ratio >= 0.5;
+            (!words.some((w) => w.length >= 5) || (mathSignal && ratio >= 0.7) ||
+              (mathSignal && ratio >= 0.5 && names.length > 0 && names.every((p) => nameSpan(p, r.items))));
+          const namedRow = (allNamed || relNamed) && ratio >= 0.5;
           if (prose > 0 && !eqNumbered && !numberedDisplay && !namedRow) continue;
           // For an UNNUMBERED row MATH_SIGNAL is the clearest tell, but it
           // lists relations and carries neither the `+` nor the `∣` that
@@ -2577,7 +2631,10 @@ export class TypographyEngine {
               // A row opening lowercase is a sentence's ("where x is …") —
               // unless the word is an operator's name (a "max" over its
               // objective).
-              if (/^[a-zà-ÿ]/.test(nText) && nItems[0] && !isMath(nItems[0]) && !MATH_OP.test(nItems[0].item.str.trim())) continue;
+              // ...or a named quantity's, in a row of nothing but names
+              // around an operator: the fraction's numerator, "<name> − <name>".
+              const namesOnly = named && /[+=×·∑∫√∂−/]/.test(nText);
+              if (/^[a-zà-ÿ]/.test(nText) && nItems[0] && !isMath(nItems[0]) && !MATH_OP.test(nItems[0].item.str.trim()) && !namesOnly) continue;
               for (const p of nItems) { if (!skip.has(p.div)) { skip.add(p.div); dbg(p.div, "row-eqn"); } }
             }
           }
@@ -3296,6 +3353,37 @@ export class TypographyEngine {
       }
       return true;
     };
+    // Is this line the rest of the paragraph above it? The line above, in
+    // this column and at the line pitch, is prose in this line's own face,
+    // runs to the column's measure and does not end its sentence there: it
+    // can only go on here. A paragraph's short last line under such a line —
+    // "example).", a citation's closing "2013) (Sec. 9.4)." read as a list
+    // label, an italic closing sentence above the next heading — was kept as
+    // a heading on a journal layout whose headings are set at body size and
+    // whose outline anchors sit a skip above them (six lines of one public
+    // paper, IEEE Computer Society layout; more on CVPR and ICML ones).
+    // No heading opens under an unfinished full line.
+    const continuesAbove = (ln, lead, bx0, bx1) => {
+      const h = lead.item.height || 8;
+      const measure = bandMeasure(bx0, bx1);
+      if (!(measure > 0)) return false;
+      for (let m = lines.indexOf(ln) - 1; m >= 0; m--) {
+        const bandPrev = lines[m].items.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+        if (!bandPrev.length) continue;
+        if (lines[m].y - ln.y > h * 1.7 || lines[m].y - ln.y <= 0) return false;
+        const prevEnd = Math.max(...bandPrev.map((p) => p.item.transform[4] + (p.item.width ?? 0)));
+        if (prevEnd < measure - h * 1.5) return false;
+        const prevText = lineText(bandPrev);
+        if (/[.!?:][”’"')\]]*\s*$/.test(prevText)) return false;
+        // Prose by its words — or, where names and years leave it few ("…
+        // (2005); … and … (2009);"), by ending on a comma, a semicolon or a
+        // broken word.
+        if (lowerWords(bandPrev) < 3 && !/[,;]\s*$|[A-Za-zÀ-ɏ]-\s*$/.test(prevText)) return false;
+        const widest = bandPrev.reduce((a, b) => ((b.item.width || 0) > (a.item.width || 0) ? b : a));
+        return !isBold(widest) && !isSpecial(widest) && Math.abs((widest.item.height || h) - h) <= h * 0.05;
+      }
+      return false;
+    };
     // A heading HYPHENATED across two lines ("D. A2: No Channel Availability
     // Attack Using a Foreign Lo- / cation"): its tail opens the next line, in
     // the heading's own face, and was emphasized as body. Follow it while the
@@ -3368,6 +3456,7 @@ export class TypographyEngine {
         // starts, and that line — a paragraph's last — took the heading's place.
         // Only an ALL-lowercase first word: "iOS", "eBPF", "mmWave" do open headings.
         const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol && !/^[a-zà-ÿ]+(?:[\s.,;:]|$)/.test(leadStr);
+        const paraTail = !isSpecial(lead) && !isBold(lead) && continuesAbove(ln, lead, bx0, bx1);
         if (globalThis.__fxDebug && globalThis.__fxTitleProbe && leadStr.includes(globalThis.__fxTitleProbe)) {
           (globalThis.__fxTitleTrace ??= []).push({ text: leadStr.slice(0, 40), why: "chain", special: isSpecial(lead), italic: isItalic(lead), bold: isBold(lead), anchor: !!atHeadingAnchor, algo: isAlgoLead(leadStr), head: HEAD_LEAD.test(leadStr), band: band.length, its: its.length });
         }
@@ -3449,7 +3538,7 @@ export class TypographyEngine {
               }
               return false;
             })();
-            if (!proseA && !tailA) head = band;
+            if (!proseA && !tailA && !paraTail) head = band;
           }
           if (head) {
             for (const p of head) {
@@ -3502,7 +3591,8 @@ export class TypographyEngine {
             lineEndH >= measureH - (measureH - bandLeft(bx0, bx1)) * 0.15 &&
             (runsOn(band) || /[,;]\s*$/.test(bandText)) &&
             !band.some((p) => isBold(p) || isItalic(p) || isSpecial(p));
-          if ((lowerWords(band) <= 3 && !listItem) || italicHead || shortNumbered) {
+          if (paraTail && !/^(?:[A-Z]|[IVX]{1,5})\.$/.test(leadStr)) { /* the paragraph's own last line (continuesAbove) */ }
+          else if ((lowerWords(band) <= 3 && !listItem) || italicHead || shortNumbered) {
             // A NUMBERED RUN-IN heading shares its line with the paragraph it
             // opens ("2.3.1. Latency overhead.  Table 5 shows the measured …").
             // HEAD_LEAD fires on the line's lead, and skipping the
@@ -3530,7 +3620,7 @@ export class TypographyEngine {
           // ("P1: Preventing identity exposure: During both …") — skip the
           // underlined italic lead run, process the rest as body.
           else if (isItalic(lead)) skipItalicLead(ln, its, a, bx0, bx1);
-        } else if (titleCaseHead(ln, band, bx0, bx1)) {
+        } else if (!paraTail && titleCaseHead(ln, band, bx0, bx1)) {
           // A Title-Case line with no label to vouch for it (titleCaseHead).
           for (const p of band) { skip.add(p.div); dbg(p.div, "line-head"); }
         } else if (maxCells([{ items: band }]) >= 4 && lowerWords(band) < 4) {
@@ -3900,9 +3990,15 @@ export class TypographyEngine {
         // Full-width (spanning legend) only when an item actually crosses the
         // centre; a column caption merely reaching the gutter stays in-column,
         // so the opposite column's body on that baseline isn't swept up.
+        // ...crosses it, not touches it: a caption whose line ends a point
+        // past the page's centre line (306.6 against 306 on a two-column
+        // ICML page) is still its column's, and read as page-wide it took
+        // the OTHER column's caption line for "the prose above" and was
+        // emphasised whole as a paragraph's continuation (a public paper).
         const capCrosses = lines[k].items.some((p) => {
           const x0 = p.item.transform[4];
-          return x0 < centerX && x0 + (p.item.width ?? 0) > centerX;
+          const slack = Math.max(4, (p.item.height || 8) * 0.5);
+          return x0 < centerX - slack && x0 + (p.item.width ?? 0) > centerX + slack;
         });
         const wide = !twoColumn || capCrosses;
         const bx0 = wide ? vx0 : ax < centerX ? vx0 : centerX;
@@ -4053,6 +4149,32 @@ export class TypographyEngine {
           (globalThis.__fxCapTrace ??= []).push({ why: "lead", text: lineText(first).slice(0, 60), right: rightOf(first), fullTo: fullTo(first), capL, capR, measure, short: short(first), runs: runsOn(first), items: lines[k].items.filter(inBand).map((p) => [p.item.str.slice(0, 12), p.item.fontName, Math.round(p.item.transform[4]), Math.round(p.item.width || 0), foreign(p)]) });
         }
         let nextToFirst = true;
+        // A bold lead INSIDE a caption: the panel labels of a figure
+        // ("Left:", "Middle:", "Right:" — a public paper, CVPR layout, whose
+        // five-line caption was kept for two lines and emphasised for three).
+        // Two tells that the line is still the caption's. The line above
+        // broke a word onto it ("Mid-" / "dle:"), whatever the face. Or the
+        // caption is set clearly SMALLER than the body and this line is at
+        // the caption's size: the paragraph a run-in heading opens under a
+        // float is at the body's. A caption at body size keeps the old stop.
+        let prevText = lineText(first);
+        const captionPart = (its, lineH, above) =>
+          /[A-Za-zÀ-ɏ]-\s*$/.test(above) ||
+          (bodyH > 0 && leadH <= bodyH * 0.93 && lineH <= bodyH * 0.93);
+        // A HANGING caption: its text is set in a block of its own to the
+        // right of the label ("Figure 5:" at the margin, every line after
+        // the first starting where the first line's text did — a journal's
+        // caption style). That left edge is no paragraph's, so a line on it
+        // is the caption's whatever the line above looked like: an inline
+        // fraction three rows tall opened a gap wider than the leading and
+        // ended an eleven-line caption after three, the other eight
+        // emphasised (a public paper, JMLR layout). Known from the second
+        // line; null when the caption does not hang.
+        let hangX;
+        const hangs = (its) => hangX != null && Math.abs(leftOf(its) - hangX) <= 1.5;
+        const noteHang = (its) => {
+          if (hangX === undefined) hangX = leftOf(its) > lead.item.transform[4] + leadH * 2 ? leftOf(its) : null;
+        };
         const endsParagraph = (its) => {
           capL = Math.min(capL, leftOf(its));
           capR = Math.max(capR, rightOf(its));
@@ -4095,23 +4217,27 @@ export class TypographyEngine {
             // A line that ran on ("… at RHIC. The") cannot have ended the
             // caption, so a wider pitch after it is still the caption's own
             // leading (R55, a REVTeX caption set at 1.36).
-            if (prevY - curY <= 0 || prevY - curY > Math.max(leadH, lineH) * (ranOn ? 1.5 : 1.35)) break; // gap
+            const hung = hangs(bandM.filter((p) => (p.item.height || 0) >= leadH * 0.75)) && prevY - curY <= Math.max(leadH, lineH) * 2.6;
+            if (prevY - curY <= 0 || (prevY - curY > Math.max(leadH, lineH) * (ranOn ? 1.5 : 1.35) && !hung)) break; // gap
             if (Math.abs(lineH - leadH) > leadH * 0.2) break; // size change
             if (isCaptionLead(bandT[0].item.str.trim()) && !ranOn) break; // next caption
             // A new in-text reference sentence ("Figure 8 shows …") is body
             // prose, not caption continuation.
             if (REF_PROSE.test(bandT.map((p) => p.item.str).join(" ")) && !ranOn) break;
             // A bold run-in heading opens a new body paragraph below the
-            // caption — stop before swallowing it.
-            if (isBold(bandT[0])) break;
-            if (!lastFull) break; // the previous line ended the caption
-            if (lastShort && brokeOff(lastShort, bandT)) break;
+            // caption — stop before swallowing it (captionPart: unless the
+            // bold lead is the caption's own).
+            if (isBold(bandT[0]) && !captionPart(bandT, lineH, prevText)) break;
+            if (!lastFull && !hung) break; // the previous line ended the caption
+            if (lastShort && brokeOff(lastShort, bandT) && !hung) break;
             if (nextToFirst && !ranOn && bodyUnder(bandT)) break; // the paragraph under a centred caption
             nextToFirst = false;
+            noteHang(bandT);
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
             lastShort = endsParagraph(bandT) ? bandT : null;
             lastFull = !lastShort || runsOn(bandT);
             ranOn = runsOn(bandT);
+            prevText = lineText(bandT);
             prevY = curY;
           }
         } else {
@@ -4123,7 +4249,7 @@ export class TypographyEngine {
           // Absorb the caption's own continuation lines only. A tighter gap
           // and the short-last-line end (above) stop the sweep before the body
           // paragraph that follows; never past twelve lines.
-          for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < 12; m++) {
+          for (let m = k + 1, absorbed = 0; m < lines.length && absorbed < (hangX != null ? 20 : 12); m++) {
             const bandM = lines[m].items.filter(inBand);
             if (!bandM.length) continue;
             // A paragraph break (the body paragraph after the caption) shows a
@@ -4146,27 +4272,64 @@ export class TypographyEngine {
               (globalThis.__fxCapTrace ??= []).push({ text: lineText(bandT).slice(0, 50), prevY, curY, leadH, lineH, ranOn, lastFull, lastShort: !!lastShort, nextToFirst, capLead: isCaptionLead(bandT[0].item.str.trim()), ref: REF_PROSE.test(bandT.map((p) => p.item.str).join(" ")), bold: isBold(bandT[0]), broke: !!(lastShort && brokeOff(lastShort, bandT)), under: bodyUnder(bandT) });
             }
             // ...wider after a line that ran on, as in the anchored branch.
-            if (prevY - curY > Math.max(leadH, lineH) * (ranOn ? 1.5 : 1.3)) break; // gap
+            const hung = hangs(bandM.filter((p) => (p.item.height || 0) >= leadH * 0.75)) && prevY - curY <= Math.max(leadH, lineH) * 2.6;
+            if (prevY - curY > Math.max(leadH, lineH) * (ranOn ? 1.5 : 1.3) && !hung) break; // gap
             if (Math.abs(lineH - leadH) > leadH * 0.2) break; // size change
             if (isCaptionLead(bandT[0].item.str.trim()) && !ranOn) break; // next caption
             // A new in-text reference sentence ("Figure 8 shows …") is body prose,
             // not caption continuation — stop absorbing here.
             if (REF_PROSE.test(bandT.map((p) => p.item.str).join(" ")) && !ranOn) break;
             // A bold run-in heading ("Evaluating collaborative learning.") opens a
-            // new body paragraph below the caption — stop before swallowing it.
-            if (isBold(bandT[0])) break;
-            if (!lastFull) break; // the previous line ended the caption
-            if (lastShort && brokeOff(lastShort, bandT)) break;
+            // new body paragraph below the caption — stop before swallowing it
+            // (captionPart: unless the bold lead is the caption's own).
+            if (isBold(bandT[0]) && !captionPart(bandT, lineH, prevText)) break;
+            if (!lastFull && !hung) break; // the previous line ended the caption
+            if (lastShort && brokeOff(lastShort, bandT) && !hung) break;
             if (nextToFirst && !ranOn && bodyUnder(bandT)) break; // the paragraph under a centred caption
             nextToFirst = false;
+            noteHang(bandT);
             for (const p of bandM) { skip.add(p.div); dbg(p.div, "caption-absorb"); }
             lastShort = endsParagraph(bandT) ? bandT : null;
             lastFull = !lastShort || runsOn(bandT);
             ranOn = runsOn(bandT);
+            prevText = lineText(bandT);
             prevY = curY;
             absorbed++;
           }
         }
+      }
+    }
+    // The rest of a row of NUMBERS. Four or more purely numeric items on one
+    // baseline, each a cell's width from the next, are a table's data row
+    // whatever kept them (a results table at the head of a page had its six
+    // score columns kept as a heading's line and the method and backbone
+    // names beside them emphasised — a public paper, ICCV layout). A short
+    // item on that baseline standing a cell's gap clear of its neighbours is
+    // the row's label. A body line of the other column sharing the baseline
+    // is longer than a label, or touches its neighbours.
+    for (const ln of lines) {
+      // Full-height items only: a header's subscripts ("AP" over "50") stand
+      // against their cell and would close its gap.
+      const rowH = Math.max(...ln.items.map((p) => p.item?.height || 0));
+      const row = ln.items.filter((p) => p.item?.transform && p.item.str.trim() && (p.item.height || 0) >= rowH * 0.8).sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+      if (row.length < 5) continue;
+      const numeric = (p) => /^[\d.,%+\-−–±()\s]*\d[\d.,%+\-−–±()\s]*$/.test(p.item.str);
+      const gapTo = (a, b) => b.item.transform[4] - (a.item.transform[4] + (a.item.width ?? 0));
+      const wide = (a, b) => gapTo(a, b) > Math.max(a.item.height || 8, b.item.height || 8) * 1.4;
+      let cells = 0;
+      for (let n = 0; n < row.length; n++) {
+        // ...or kept already and a word or two long: a header row's "AP" six times over.
+        const cell = numeric(row[n]) || (skip.has(row[n].div) && row[n].item.str.trim().split(/\s+/).length <= 2);
+        if (cell && (n === 0 || wide(row[n - 1], row[n])) && (n === row.length - 1 || wide(row[n], row[n + 1]))) cells++;
+      }
+      if (cells < 4) continue;
+      for (let n = 0; n < row.length; n++) {
+        const p = row[n];
+        if (skip.has(p.div) || numeric(p)) continue;
+        if (p.item.str.trim().split(/\s+/).length > 4) continue;
+        if ((n > 0 && !wide(row[n - 1], p)) || (n < row.length - 1 && !wide(p, row[n + 1]))) continue;
+        skip.add(p.div);
+        dbg(p.div, "row-numeric");
       }
     }
     return { skip, protect, why: blockWhy };
@@ -4842,16 +5005,31 @@ export class TypographyEngine {
     if (pageView.textLayer?.div) {
       pageView.textLayer.div.dataset.fxFace = this.#settings.fontMode ?? "original";
     }
+    // Where the page's pass stands, on the text layer it belongs to: "run"
+    // from here, "done" when the last batch has resolved it (test
+    // introspection). A harness that waits for a page reads this instead of
+    // watching counts hold still for seconds; the annotation pass adds its
+    // own mark once it has run over a finished page (citations.mjs fxAnn),
+    // and a new pass clears it. On the element, not in a table by page
+    // number: a page evicted and rendered again gets a new text layer, and
+    // must not inherit the old one's "done".
+    const passDiv = pageView.textLayer?.div ?? null;
+    if (passDiv) {
+      passDiv.dataset.fxPass = "run";
+      delete passDiv.dataset.fxAnn;
+    }
     // Font-only mode with the ORIGINAL font changes nothing visually — leave
     // the page pristine (no masks, no re-render, no drift risk).
     if (
       this.#settings.emphasisMode === "none" &&
       (this.#settings.fontMode ?? "original") === "original"
     ) {
+      if (passDiv) passDiv.dataset.fxPass = "done";
       return Promise.resolve();
     }
     const holder = { cancelled: false };
     holder.promise = new Promise((resolve) => (holder.resolve = resolve));
+    holder.promise.then(() => { if (!holder.cancelled && passDiv) passDiv.dataset.fxPass = "done"; });
     this.#pending.set(pageNumber, holder);
     // Font families this page's processed spans render with, where the face
     // had not loaded when the pass laid them out — refreshFonts() uses it to
@@ -5307,7 +5485,12 @@ export class TypographyEngine {
         }
         return false;
       };
-      if (MATH_OP_SPAN.test(trimmed) && besideMath(false)) return reject(div, "math-op");
+      // ...with the bracket of its argument, when both are set in the text
+      // face and reach the text layer as one item: "log(" before a math-face
+      // "p" in an inline "− log(p)" was no operator's name to the test, and
+      // "lo" went bold inside the formula (a public paper, ICCV layout).
+      const opName = trimmed.replace(/^[([{]+|[([{)\]}]+$/g, "");
+      if (MATH_OP_SPAN.test(opName) && besideMath(false)) return reject(div, "math-op");
       // A NAME set in a face other than the body's, one token, touching a
       // kept glyph on its baseline — an "accept" after "=", a "negl" before
       // its argument, a sans-face game name beside the bracket of a
@@ -5624,6 +5807,23 @@ export class TypographyEngine {
       }
     };
     const workBody = (deadline) => {
+      const tCallback = performance.now();
+      // The next batch's size (BATCH_MS): CHUNK without a deadline or a cost
+      // to go by, as before.
+      const chunkNow = () => {
+        if (!deadline) return CHUNK;
+        // A page's first batch is a small one: the cost per span on hand is
+        // the page before's, and a cover page's few light spans said nothing
+        // about a body page's — its first sixty took 170 ms at a quarter of
+        // this machine's speed, where the batches after it took 45.
+        if (i === 0 || !(this.#spanMs > 0)) return Math.min(CHUNK, MIN_CHUNK * 2);
+        // A callback run on its timeout has no idle time at all (the reader
+        // is scrolling): it still gets a full batch's time, or a page under
+        // a steady scroll would take seconds to finish.
+        const idle = deadline.didTimeout ? BATCH_MS : deadline.timeRemaining();
+        const room = Math.min(idle, BATCH_MS - (performance.now() - tCallback));
+        return Math.max(MIN_CHUNK, Math.min(CHUNK, Math.floor(room / this.#spanMs)));
+      };
       if (holder.cancelled) {
         holder.resolve();
         return;
@@ -6420,7 +6620,22 @@ export class TypographyEngine {
           }
           const csize = new Map();
           for (const c of chainOf.values()) csize.set(c, (csize.get(c) || 0) + 1);
-          const zones = rulePairs.filter((p) => (csize.get(chainOf.get(p.a)) || 0) >= 3);
+          // ...or one of the two is a DOUBLE rule: two hairlines a couple of
+          // px apart, each a rule rect of its own, across the same extent. A
+          // journal's table opens and closes on one (\hline\hline) and has no
+          // third rule inside, so its rows sat between an "isolated pair" and
+          // the cells the text rules missed were emphasized (a public paper,
+          // Physical Review layout). No underline or frame edge is doubled.
+          const doubled = new Set();
+          for (let a = 0; a + 1 < hRules.length; a++) {
+            const A = hRules[a], B = hRules[a + 1];
+            const gap = B.top - A.bottom; // between PADDED rects: one page px each side
+            if (gap > RULE_SAME_GAP * zoom || gap <= -1.5 * zoom) continue; // apart, or one thick rule
+            if (Math.abs(A.left - B.left) > 2 * zoom || Math.abs(A.right - B.right) > 2 * zoom) continue;
+            doubled.add(a);
+            doubled.add(a + 1);
+          }
+          const zones = rulePairs.filter((p) => (csize.get(chainOf.get(p.a)) || 0) >= 3 || doubled.has(p.a) || doubled.has(p.b));
           if (zones.length) {
             const byLine = new Map();
             for (const pr of pairs) {
@@ -6857,8 +7072,10 @@ export class TypographyEngine {
         // canvas a reader's scroll repainted, read every span's colour —
         // 10-21 ms of the batch on the page in view — which the batch then
         // carried on top of its own work.
-        if (inkColor && inkAhead < Math.min(i + CHUNK, pairs.length)) {
-          const until = Math.min(i + CHUNK, pairs.length);
+        // ...for the batch about to run, no further: read sixty spans ahead
+        // of a batch of twenty, the reads were the long task.
+        if (inkColor && inkAhead <= i) {
+          const until = Math.min(i + chunkNow(), pairs.length);
           const before = inkReads;
           for (let j = Math.max(i, inkAhead); j < until; j++) {
             const div = pairs[j].div;
@@ -6873,7 +7090,8 @@ export class TypographyEngine {
           }
         }
         const tBatch = performance.now();
-        const end = Math.min(i + CHUNK, pairs.length);
+        // Never past the spans whose colours were read ahead for it.
+        const end = Math.min(inkColor && inkAhead > i ? inkAhead : i + chunkNow(), pairs.length);
         const batch = [];
         // A bundled face drawn at a scale (FONT_SCALES) sizes each span from
         // its own font size, read here with the geometry: read in the content
@@ -7317,8 +7535,12 @@ export class TypographyEngine {
         if (runsDue.length) this.#runsDue.set(pageNumber, paintRuns);
         this.#spanMs = (performance.now() - tBatch) / (end - i);
         i = end;
-        if (deadline && deadline.timeRemaining() < this.#batchBudget(Math.min(CHUNK, pairs.length - i)) && i < pairs.length) {
-          requestIdleCallback(work, { timeout: 200 });
+        if (deadline && i < pairs.length &&
+            (performance.now() - tCallback >= BATCH_MS * 0.6 || deadline.timeRemaining() < this.#batchBudget(Math.min(MIN_CHUNK, pairs.length - i)))) {
+          // Sooner than the other waits when no idle period comes: a batch is
+          // a third the size it was, and at 200 ms apiece on a saturated main
+          // thread a page took three times as long to finish.
+          requestIdleCallback(work, { timeout: BATCH_WAIT_MS });
           return;
         }
       }

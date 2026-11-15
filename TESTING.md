@@ -162,6 +162,61 @@ the expression it was waiting on. Before it, a browser that went away left a
 promise pending for ever and Node exited 13 ("unsettled top-level await") with
 no error at all — which a sweep then reported as a product failure.
 
+### 1c. The public corpus, a local copy, and a sweep of it
+
+The public corpus is listed once, in `test/lib/corpus.mjs`: the fourteen
+`core` papers, four `regress` ones kept for one past defect each, and sixteen
+`wide` ones of other publishers' layouts (CVPR/ICCV, ICML, ICLR, LNCS, AAAI,
+IEEE Computer Society, Physical Review Letters, NAACL, NeurIPS 2020, a
+whitepaper, JMLR, a mathematics article). A new public paper is one line
+there.
+
+```bash
+node test/sweep.mjs                         # allprobes --all over all 34, two at a time (~6 min)
+node test/sweep.mjs --set=wide --par=2      # one set
+node test/sweep.mjs --filter=cvpr,jmlr --script=test/dump-page.mjs -- --page=4 --find="Figure 3"
+node test/sweep.mjs --fetch                 # only download what is missing
+node test/sweep-diff.mjs <sweepA> <sweepB>  # what moved between two sweeps
+```
+
+- Each PDF is downloaded ONCE into `test/out/corpus/` (git-ignored) and
+  served from 127.0.0.1 under its id, with byte ranges: a run measures the
+  engine, not a host's availability, and a paper's id names its logs.
+- `--script=` is any harness that takes `--url=`/`--label=`; everything after
+  `--` goes to it. Logs land in `test/out/sweep/<run>/<id>.log` with a
+  `summary.txt`; exit 75 (no verdict) is retried once.
+- **`sweep-diff.mjs` is how an engine change is read**: per page, the whyskip
+  reason counts that moved, and per document every check's totals. Sweep the
+  tree before the change (a `git worktree` with `extension/vendor` copied in)
+  and after, and read every line of the diff — a rule meant to move one line
+  shows up as that line, and whatever else it moved shows up beside it.
+- **The page's own "finished".** `allprobes.mjs` no longer waits on a clock
+  when the page can say it is done: the engine marks a page's text layer
+  `data-fx-pass="run"` when a pass starts and `"done"` when its last batch
+  resolves, and the annotation pass adds `data-fx-ann="1"` once it has run
+  over a finished page (a new pass clears both). Settled is that, the page's
+  canvases finished, no font loading, and the counts unchanged 300 ms later.
+  Without the signal (reading mode off, an old build) it falls back to the
+  old wait — counts unchanged for 2.5 s after a 1.2–2.2 s floor — and
+  `--settle=legacy` forces it. The run prints how many pages settled each
+  way. **After changing the engine's pass scheduling, the annotation order or
+  this wait, run a few documents both ways and `sweep-diff` them: no line may
+  differ.** A new harness that waits for a page should read the same two
+  attributes rather than add a sleep.
+- `node test/dump-page.mjs --url= --page=N [--find=<regex> --near=px]
+  [--probe="<caption or heading lead>"] [--joined=<regex>] [--traces]` —
+  every span of a page with its box, size and `done` or the reason it was
+  left; the engine's caption/heading traces for one lead; the annotator's
+  reading-order text around a match; the page's rules. Read the mechanism
+  here before touching a rule.
+- `node test/refparse.mjs test/out/corpus [--unresolved] [--entries]` — the
+  reference parser over the whole cached corpus with no browser, in under a
+  minute.
+- `node test/diag-perf.mjs --url= --cold [--throttle=4]` — `--throttle`
+  slows the renderer's CPU (CDP), a slower machine's conditions; the per-page
+  batch timings are always printed, and `--trace` says how much of the
+  layout tree each long task had dirty.
+
 ---
 
 ## 2. Automated test inventory

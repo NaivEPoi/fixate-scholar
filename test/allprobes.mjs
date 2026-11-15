@@ -126,18 +126,51 @@ const handled = (page) => `(() => {
 })()`;
 // Whether the engine has processed anything in this document yet.
 let engineSeen = false;
-/** This page's settled signature, or null if it never held still. */
-const settle = async (page) => {
-  let last = "", stable = 0;
-  for (let i = 0; i < 60; i++) {
-    const cur = await ev(signature(page)).catch(soft("x"));
-    // Five reads 500 ms apart: at least as patient as every harness it
-    // replaces (fontkeep and eqkeep take 5 at 400, whyskip 5 at 500).
-    if (cur === last && cur !== "x") {
-      if (++stable >= 5) { if (!cur.startsWith("0/")) engineSeen = true; return cur; }
-    } else if (cur !== last) { stable = 0; last = cur; }
-    await sleep(500);
+// The product's own word that a page is finished (engine.mjs fxPass,
+// citations.mjs fxAnn): its pass has resolved, the annotation pass has run
+// over the result, the page's canvases have finished painting and no font is
+// still loading. Each of those is what a count holding still was a proxy for.
+// --settle=legacy ignores it, for comparing the two waits on one tree.
+const LEGACY = arg("settle", "") === "legacy";
+const quiet = (page) => `(() => {
+  const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page} - 1);
+  const d = pv?.textLayer?.div;
+  return !!d && d.dataset.fxPass === "done" && d.dataset.fxAnn === "1" && pv.renderingState === 3 &&
+    (!pv.detailView || pv.detailView.renderingState === 3) && document.fonts.status === "loaded";
+})()`;
+let fastPages = 0, slowPages = 0;
+/**
+ * This page's settled signature, or null if it never held still.
+ *
+ * Settled is either of two things. The page says it is finished (quiet) and
+ * its counts are the same 300 ms later — longer than the 250 ms the overlay
+ * waits before a font refresh re-processes a page, the one re-process that
+ * starts after a pass has ended; a re-process flips the page back to "run"
+ * and the wait goes on. Or, with no such word from the page (reading mode
+ * off, an old build, a pass that never resolves), its counts have held for
+ * 2.5 s and at least `floorMs` has passed since the page was asked for — the
+ * wait this harness always made (five reads 500 ms apart, after a fixed
+ * sleep), at least as patient as every harness it replaced.
+ */
+const settle = async (page, floorMs = 0) => {
+  const t0 = Date.now();
+  let last = "", changed = t0, quietAt = 0;
+  while (Date.now() - t0 < 32000 + floorMs) {
+    const r = await ev(`({ sig: ${signature(page)}, quiet: ${LEGACY ? "false" : quiet(page)} })`).catch(soft({ sig: "x", quiet: false }));
+    const now = Date.now();
+    if (r.sig !== last) { last = r.sig; changed = now; quietAt = 0; }
+    if (r.sig !== "x") {
+      if (!r.quiet) quietAt = 0; else if (!quietAt) quietAt = now;
+      const fast = quietAt && now - quietAt >= 300 && now - changed >= 300;
+      if (fast || (now - changed >= 2500 && now - t0 >= floorMs + 2500)) {
+        if (!r.sig.startsWith("0/")) engineSeen = true;
+        settle.fast = !!fast;
+        return r.sig;
+      }
+    }
+    await sleep(r.quiet ? 100 : 250);
   }
+  settle.fast = false;
   return null;
 };
 
@@ -163,14 +196,20 @@ try {
   // — an option set below never reached the engine (R55). The default run
   // sets only the defaults, so it is unchanged.
   await fetch(`http://127.0.0.1:${PORT}/json/activate/${tab.id}`).catch(() => {});
-  await sleep(2500);
-  const live = (await http("/json/list")).find((t) => t.id === tab.id) ?? tab;
+  // The viewer's target, once it is the extension page (the wait for the
+  // document below does the rest; this was a fixed 2.5 s).
+  let live = tab;
+  for (let i = 0; i < 25; i++) {
+    await sleep(100);
+    live = (await http("/json/list")).find((t) => t.id === tab.id) ?? tab;
+    if (/viewer\.html/.test(live.url || "")) break;
+  }
   cdp = connect(live.webSocketDebuggerUrl, { where: "viewer" });
   await cdp.ready;
   await cdp.send("Runtime.enable");
   await cdp.send("Page.enable");
   let loaded = false;
-  for (let i = 0; i < 40 && !loaded; i++) { loaded = await ev(`!!window.PDFViewerApplication?.pdfDocument`).catch(soft(false)); if (!loaded) await sleep(500); }
+  for (let i = 0; i < 100 && !loaded; i++) { loaded = await ev(`!!window.PDFViewerApplication?.pdfDocument`).catch(soft(false)); if (!loaded) await sleep(200); }
   if (!loaded) throw new Error("document never loaded");
   // Before any page is processed, as whyskip does it, so the engine records
   // its skip reasons from the first pass rather than from a re-process.
@@ -186,8 +225,8 @@ try {
   await ev(`new Promise((r) => chrome.storage.sync.set({ enabled: true, lineModel: ${process.argv.includes("--line")} }, r))`);
   // The document-wide warm-up refcolor and citepoint wait for: enough
   // emphasis to know the engine is running, and the reference index built.
-  for (let i = 0; i < 40; i++) {
-    await sleep(800);
+  for (let i = 0; i < 128; i++) {
+    await sleep(250);
     const w = await ev(`({ b: document.querySelectorAll('.textLayer .fx-b').length, refs: globalThis.__fxRefCount ?? -1 })`).catch(soft(null));
     if (w && w.b > 80 && w.refs >= 0) break;
   }
@@ -205,8 +244,11 @@ try {
   const measurePage = async (pg, revisit) => {
     const citing = CHECKS.includes("citepoint") && state.citepoint.examined < MAX;
     await ev(`(() => { window.PDFViewerApplication.page = ${pg}; return true; })()`);
-    await sleep(citing ? 2200 : 1200);
-    let sig = await settle(pg);
+    let sig = await settle(pg, citing ? 2200 : 1200);
+    // A page that said it was finished needs none of the waits below: its
+    // unprocessed prose is final, and so are its hit-targets.
+    const fast = settle.fast;
+    if (fast) fastPages++; else slowPages++;
     if (!revisit && !engineSeen && sig?.startsWith("0/")) { deferred.push(pg); return; }
     // Counts that hold still are not a finished page: the engine can pause
     // between chunks. Wait until every prose span is processed or carries the
@@ -221,7 +263,7 @@ try {
     let st = null, still = 0, lastHandled = -1;
     for (let i = 0; i < 30 && sig !== null; i++) {
       st = await ev(handled(pg)).catch(soft(null));
-      if (!st || st.prose < 3 || st.handled === st.prose) break;
+      if (fast || !st || st.prose < 3 || st.handled === st.prose) break;
       if (st.hidden) break;
       if (st.handled === lastHandled) { if (++still >= 5) break; } else { still = 0; lastHandled = st.handled; }
       await sleep(1000);
@@ -239,7 +281,7 @@ try {
     const hasLayer = sig !== null || await ev(`!!window.PDFViewerApplication.pdfViewer.getPageView(${pg - 1})?.textLayer`).catch(soft(false));
     blankRun = hasLayer ? 0 : blankRun + 1;
     if (blankRun >= 3) throw new Error(`viewer stopped producing text layers (p${pg - 2}..p${pg}) — no verdict`);
-    if (citing) {
+    if (citing && !fast) {
       // citepoint's own wait: this page's hit-targets, not a document count —
       // a page read mid-annotation reports every citation as WRONG-TARGET.
       for (let i = 0; i < 20; i++) {
@@ -322,6 +364,8 @@ try {
     console.log(`--- ${c} ---`);
     for (const l of lines[c]) console.log(l);
   }
+  // How each page's wait ended: on the page's own word, or on the clock.
+  console.log(`settle: ${fastPages} page(s) on the page's own signal, ${slowPages} on the 2.5 s hold${LEGACY ? " (--settle=legacy)" : ""}`);
   const line = `${LABEL} zoom=${ZOOM} pages=${pages.length} ${verdicts.join(" ")}`;
   console.log(line);
   appendFileSync(`${outDir()}/allprobes.log`, line + String.fromCharCode(10));

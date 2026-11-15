@@ -549,6 +549,9 @@ export class ReferencesFeature {
     // annotation links (it may have rendered before or after this pass).
     this.reconcileLinks(pageView);
     this.#preview.attach(pageView);
+    // This page is annotated as its finished pass left it (test
+    // introspection; the engine's fxPass, which a new pass resets with this).
+    if (textLayerDiv.dataset.fxPass === "done") textLayerDiv.dataset.fxAnn = "1";
   }
 
   /**

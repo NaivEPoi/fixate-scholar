@@ -29,6 +29,7 @@ const COLD = process.argv.includes("--cold");
 const PAGES = parseInt(arg("pages", "8"), 10);
 const DPR = arg("dpr", "");
 const OFF = process.argv.includes("--off");
+const THROTTLE = parseFloat(arg("throttle", "1"));
 // --phases (with --cold): __fxDebug on, and the engine's own per-page phase
 // timings printed — which step of a page's pass blocks the main thread.
 const PHASES = process.argv.includes("--phases");
@@ -159,6 +160,9 @@ try {
     if (PHASES) await ev(`(() => { globalThis.__fxDebug = true; return true; })()`);
     if (CSS) await ev(`(() => { const s = document.createElement("style"); s.textContent = ${JSON.stringify(CSS)}; document.head.appendChild(s); return true; })()`);
     await sleep(6000);
+    // --throttle=N: the renderer's CPU slowed N times (CDP), a slower machine's
+    // conditions on this one — how long the engine's tasks run there.
+    if (THROTTLE > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: THROTTLE });
     await cdp.send("Performance.enable");
     await cdp.send("Profiler.enable");
     await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
@@ -200,7 +204,8 @@ try {
     }
     const cpu = Object.keys(c1).map((k) => `${k} ${((c1[k] - (c0[k] || 0)) * 1000).toFixed(0)} ms`).join(", ");
     console.log(`  browser CPU by process: ${cpu}`);
-    if (PHASES) {
+    {
+      // Always: __fxPerf (STALLS_START) records these without the debug-only work.
       for (const t of await ev(`globalThis.__fxTiming || []`)) {
         const c = t.chunks;
         console.log(`  p${String(t.page).padStart(2)}: classify ${t.classify} ms, obstacles ${t.obstacles} ms, ${c.length} chunks (max ${Math.max(0, ...c)} ms, sum ${c.reduce((a, b) => a + b, 0)} ms), wall ${t.total} ms`);
@@ -314,6 +319,10 @@ function summarizeTrace(events) {
     const inside = onMain.filter((e) => e !== t && e.ts >= t.ts && e.ts + (e.dur || 0) <= t.ts + t.dur);
     const byName = {};
     for (const e of inside) if (e.dur > 2000) byName[e.name] = (byName[e.name] || 0) + e.dur / 1000;
+    // What the frame had to redo: how much of the tree was dirty.
+    const lay = inside.filter((e) => e.name === "Layout").map((e) => `${e.args?.beginData?.dirtyObjects ?? "?"}/${e.args?.beginData?.totalObjects ?? "?"}`).join(",");
+    const sty = inside.filter((e) => e.name === "UpdateLayoutTree").map((e) => e.args?.elementCount ?? "?").join(",");
+    console.log(`     at ${((t.ts - tasks[0].ts) / 1e6).toFixed(2)} s; layout dirty/total ${lay || "-"}; style elements ${sty || "-"}`);
     console.log(`   ${(t.dur / 1000).toFixed(0)} ms: ` + Object.entries(byName).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", "));
   }
 }
