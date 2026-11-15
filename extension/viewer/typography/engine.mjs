@@ -3605,6 +3605,27 @@ export class TypographyEngine {
         const afterNum = /^\d+(?:\.\d+)*\.?$/.test(leadStr) ? its.slice(a + 1).find((p) => p.item.str.trim()) : null;
         // (not in a list: there the italic sentence is the item, and its one-line siblings were kept while the ones that wrap were processed.)
         if (afterNum && isItalic(afterNum) && afterNum.item.transform[4] < bx1 && (!listSibling || /^[^.:]{1,60}:/.test(its.slice(its.indexOf(afterNum), its.indexOf(afterNum) + 4).map((p) => p.item.str).join("")))) skipItalicLead(ln, its, its.indexOf(afterNum), bx0, bx1);
+        // A run-in title after a multi-level section number, set in a face of
+        // its own and closed by a period before the paragraph: "4.3.2 <Two
+        // Words>. Empirically, …", "A.1.2 <Three Words>. Currently, …". The
+        // number was kept and the title emphasised (two public papers; its
+        // siblings that stand alone on their lines are kept as headings).
+        if (/^(?:[A-Z]\.)?\d+(?:\.\d+){1,3}\.?$/.test(leadStr) && band.length >= 3) {
+          const row = band.slice().sort((p, q) => p.item.transform[4] - q.item.transform[4]);
+          const bodyFace = row.reduce((p, q) => ((q.item.width || 0) > (p.item.width || 0) ? q : p)).item.fontName;
+          const run = [];
+          let n = 0, shut = false;
+          for (const p of row.slice(row.indexOf(lead) + 1)) {
+            const s = p.item.str.trim();
+            if (s === ".") { run.push(p); shut = true; break; }
+            if (p.item.fontName === bodyFace) break;
+            n += s.split(/\s+/).length;
+            if (n > 8) break;
+            run.push(p);
+            if (/\.$/.test(s)) { shut = true; break; }
+          }
+          if (shut && run.length && run.at(-1) !== row.at(-1)) for (const p of run) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin"); }
+        }
         if (isAlgoLead(leadStr)) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
@@ -3865,6 +3886,12 @@ export class TypographyEngine {
           let closed = false;
           for (let j = a; j < its.length && !closed; j++) {
             const t = its[j].item.str.trim();
+            // The lead's period may open the NEXT item ("Effectiveness of" |
+            // <a product's name in another face> | ". On our dataset …"): the
+            // lead ends before it (three leads of one public paper emphasised
+            // beside two kept).
+            // (Words only: a citation closing a sentence at a line's start, "… et al., 2019)" before its period, is no lead.)
+            if (runDivs.length && /^\.(?:\s|$)/.test(t) && /^[A-Z][A-Za-zÀ-ɏ\s-]+$/.test(runDivs.map((p) => p.item.str).join(" ").trim())) { closed = true; break; }
             words += t ? t.split(/\s+/).length : 0;
             if (words > 5) break;
             runDivs.push(its[j]);
