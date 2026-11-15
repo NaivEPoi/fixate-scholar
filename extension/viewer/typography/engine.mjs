@@ -2202,8 +2202,13 @@ export class TypographyEngine {
         const inRefs = !!refsHere && !!fn0?.transform && refsHere.some(
           (bx) => fn0.transform[5] >= bx.y0 && fn0.transform[5] <= bx.y1 && fn0.transform[4] >= bx.x0 - 2 && fn0.transform[4] <= bx.x1 + 2);
         const markerless = lc >= 4 && lowest && bodyAbove && !inRefs && cells < 3;
+        // ...or a NUMBER set on the line at the notes' own size ("18. Theano
+        // is …", a journal's footnote style): no superscript to find, and a
+        // note quoting two URLs has cells enough to fail the markerless test —
+        // two notes of one page were emphasised (a public paper, JMLR layout).
+        const numMark = /^\d{1,3}\.\s/.test(b.lead) && lowest && bodyAbove && !inRefs;
         if (b.h < dominant * 0.92 && b.yBot - vy0 < pageH * 0.3 &&
-            (/^[•†‡§¶*∗⁎]/.test(b.lead) || supMark || markerless)) {
+            (/^[•†‡§¶*∗⁎]/.test(b.lead) || supMark || markerless || numMark)) {
           // ...sparing its BODY-SIZE rows. `b.h` is an average over the
           // rows, so a body paragraph's lines dense with inline mathematics
           // — each with a row of sub- and superscripts beside it — average
@@ -3418,7 +3423,8 @@ export class TypographyEngine {
         // A paragraph's last line starts where the line above did (the
         // column's edge, or a list item's indent); a centred heading under a
         // full line starts well inside it.
-        if (lead.item.transform[4] > Math.min(...bandPrev.map((p) => p.item.transform[4])) + h * 0.6) return false;
+        // (Its first WORD: a list item's bullet stands left of its text.)
+        if (lead.item.transform[4] > Math.min(...bandPrev.filter((p) => /[A-Za-zÀ-ɏ]{2}/.test(p.item.str)).map((p) => p.item.transform[4])) + h * 1.5) return false; // a bullet set in the line's own item is a height and a bit
         const prevText = lineText(bandPrev);
         if (/[.!?:][”’"')\]]*\s*$/.test(prevText)) return false;
         // Prose by its words — or, where names and years leave it few ("…
@@ -3507,7 +3513,8 @@ export class TypographyEngine {
         // starts, and that line — a paragraph's last — took the heading's place.
         // Only an ALL-lowercase first word: "iOS", "eBPF", "mmWave" do open headings.
         const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol && !/^[a-zà-ÿ]+(?:[\s.,;:]|$)/.test(leadStr);
-        const paraTail = !isSpecial(lead) && !isBold(lead) && continuesAbove(ln, lead, bx0, bx1);
+        const contAbove = continuesAbove(ln, lead, bx0, bx1); // whatever the lead's face
+        const paraTail = contAbove && !isBold(lead) && !isSpecial(lead);
         if (globalThis.__fxDebug && globalThis.__fxTitleProbe && leadStr.includes(globalThis.__fxTitleProbe)) {
           (globalThis.__fxTitleTrace ??= []).push({ text: leadStr.slice(0, 40), why: "chain", special: isSpecial(lead), italic: isItalic(lead), bold: isBold(lead), anchor: !!atHeadingAnchor, algo: isAlgoLead(leadStr), head: HEAD_LEAD.test(leadStr), band: band.length, its: its.length, paraTail: !isSpecial(lead) && !isBold(lead) && continuesAbove(ln, lead, bx0, bx1), above: (() => { const h = lead.item.height || 8, out = []; for (let m = lines.indexOf(ln) - 1; m >= 0 && out.length < 3; m--) { const bp = lines[m].items.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1); if (bp.length) out.push({ dy: +(lines[m].y - ln.y).toFixed(1), n: bp.length, end: Math.round(Math.max(...bp.map((p) => p.item.transform[4] + (p.item.width ?? 0)))), t: lineText(bp).slice(-30), hmax: Math.max(...bp.map((p) => p.item.height || 0)) }); } return { h, measure: Math.round(bandMeasure(bx0, bx1)), out }; })(), title: titleCaseHead(ln, band, bx0, bx1) });
         }
@@ -3726,7 +3733,9 @@ export class TypographyEngine {
           // operators with masks; keep the whole line on the canvas.
           for (const p of band) { skip.add(p.div); protect.add(p.div); dbg(p.div, "line-formula"); }
         } else if (isBold(lead)) {
-          skipHeadingRun(its, a);
+          // A bold phrase a sentence happens to break before is no heading:
+          // the line above it is full and unfinished (contAbove).
+          if (!contAbove) skipHeadingRun(its, a);
         } else if (isItalic(lead) && !skip.has(lead.div)) {
           skipItalicLead(ln, its, a, bx0, bx1);
         } else if (!skip.has(lead.div) && /^[A-Z]/.test(leadStr) &&
@@ -3767,9 +3776,14 @@ export class TypographyEngine {
             words += t ? t.split(/\s+/).length : 0;
             if (words > 5) break;
             runDivs.push(its[j]);
-            if (/[.]\s*$/.test(t)) closed = true;
+            // ...a sentence's period, not an abbreviation's: "Similarly, Le
+            // et al." opened three paragraphs and was kept as their heading.
+            if (/[.]\s*$/.test(t) && !/(?:^|\s)(?:al|etc|cf|vs|e\.g|i\.e|Fig|Eq|Sec|No|Dr|St)\.$/i.test(t)) closed = true;
           }
-          if (closed && runDivs.length && runDivs.at(-1) !== its.at(-1)) {
+          // Followed by more prose IN ITS COLUMN (the row holds the other
+          // column's line too), and not the paragraph above's own last line:
+          // a list item's two-word second line was kept as a heading.
+          if (closed && runDivs.length && runDivs.at(-1) !== band.at(-1) && !contAbove) {
             for (const p of runDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-short"); }
           }
         }
@@ -4388,10 +4402,38 @@ export class TypographyEngine {
         if (!words.length || !words.some((p) => skip.has(p.div))) continue;
         if (words.some((p) => skip.has(p.div) && !TAIL_RELEASE.has(blockWhy.get(p.div)))) continue;
         const lowers = words.flatMap((p) => p.item.str.trim().split(/\s+/)).filter((w) => /^[a-zà-ÿ]{2,}[.,;:]?$/.test(w)).length; // "as follows:" is two
-        if (lowers < 2 || maxCells([{ items: words }]) >= 2) continue; // between its WORDS: a formula on the line spaces its own glyphs
+        if (lowers < 1 || maxCells([{ items: words }]) >= 2) continue; // one, for "We compute" over its display; two for a paragraph's tail (below) // between its WORDS: a formula on the line spaces its own glyphs
         const widest = words.reduce((a, b) => ((b.item.width || 0) > (a.item.width || 0) ? b : a));
         const left = band.reduce((a, b) => (b.item.transform[4] < a.item.transform[4] ? b : a));
-        if (!continuesAbove(ln, { item: { height: widest.item.height, transform: left.item.transform } }, bx0, bx1)) continue;
+        // ...or it OPENS on the display: a short clause of its own, "Now we
+        // compute", "By <name>'s inequality, then", words from the line's
+        // start with at most a glyph or two beside them, and under it a row
+        // of mathematics with a relation in it (not a table's numbers).
+        const belowBand = (() => {
+          for (let m = lines.indexOf(ln) + 1; m < lines.length; m++) {
+            const b2 = lines[m].items.filter((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1 && (p.item.height || 0) >= (widest.item.height || 8) * 0.75);
+            if (b2.length) return lines[m].y < ln.y && ln.y - lines[m].y <= (widest.item.height || 8) * 3.2 ? b2 : null;
+          }
+          return null;
+        })();
+        const opensDisplay = !!belowBand && band.length - words.length <= 2 && words.flatMap((p) => p.item.str.trim().split(/\s+/)).length >= 2 &&
+          /[=≤≥∑∫∈<>≈]/.test(belowBand.map((p) => p.item.str).join("")) &&
+          belowBand.filter((p) => isMath(p) || isSpecial(p) || !/[A-Za-zÀ-ɏ]{2}/.test(p.item.str)).length >= belowBand.length * 0.6 &&
+          !words.some((p) => /^(?:table-|line-cells)/.test(blockWhy.get(p.div) || "") && blockWhy.get(p.div) !== "table-region");
+        if (!opensDisplay && lowers < 2) continue;
+        if (!opensDisplay && !continuesAbove(ln, { item: { height: widest.item.height, transform: left.item.transform } }, bx0, bx1)) continue;
+        // A TABLE's reason is given up only above a display: a wordy cell's
+        // second line sits under a full first line too (a prompt quoted in a
+        // ruled table, a public paper — two cell lines were given back).
+        // The line under this one must be mathematics, not more words.
+        if (!opensDisplay && words.some((p) => skip.has(p.div) && /^(?:table-|line-cells)/.test(blockWhy.get(p.div) || ""))) {
+          let below = null;
+          for (let m = lines.indexOf(ln) + 1; m < lines.length && !below; m++) {
+            const b2 = lines[m].items.filter((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1 && (p.item.height || 0) >= (widest.item.height || 8) * 0.75);
+            if (b2.length) below = b2;
+          }
+          if (!below || below.filter((p) => isMath(p) || isSpecial(p) || !/[A-Za-zÀ-ɏ]{2}/.test(p.item.str)).length < below.length * 0.6) continue;
+        }
         for (const p of words) {
           if (!skip.has(p.div)) continue;
           skip.delete(p.div);
@@ -4432,6 +4474,93 @@ export class TypographyEngine {
         if ((n > 0 && !wide(row[n - 1], p)) || (n < row.length - 1 && !wide(p, row[n + 1]))) continue;
         skip.add(p.div);
         dbg(p.div, "row-numeric");
+      }
+    }
+    // A label BETWEEN a table's rows: "<Group> methods" alone on its row,
+    // the header's cells kept on the row above and a data row's on the row
+    // below (a public paper, ICCV layout — the second such label of the
+    // table was kept by the aligned run, the first emphasised). A word or a
+    // few, and both neighbouring rows, a line pitch away, are rows of kept
+    // cells.
+    const cellRow = (ln) => {
+      const its = ln.items.filter((p) => p.item?.transform && p.item.str.trim());
+      return its.length >= 4 && its.filter((p) => skip.has(p.div)).length >= its.length * 0.8;
+    };
+    for (let k = 1; k + 1 < lines.length; k++) {
+      const row = lines[k].items.filter((p) => p.item?.transform && p.item.str.trim());
+      const open = row.filter((p) => !skip.has(p.div));
+      if (!open.length || open.length > 2 || row.length > 3) continue;
+      if (open.map((p) => p.item.str).join(" ").trim().split(/\s+/).length > 4) continue;
+      const h = Math.max(...row.map((p) => p.item.height || 0)) || 8;
+      if (Math.abs(lines[k - 1].y - lines[k].y) > h * 1.8 || Math.abs(lines[k].y - lines[k + 1].y) > h * 1.8) continue;
+      if (!cellRow(lines[k - 1]) || !cellRow(lines[k + 1])) continue;
+      // ...of a TABLE: numbers on one of them, and the label ends as a label
+      // does. A clause before its display ("… the distribution:") sits
+      // between two rows of kept mathematics just the same.
+      const numbers = (ln) => ln.items.filter((p) => /^[\d.,%+\-−–±()\s]*\d[\d.,%+\-−–±()\s]*$/.test(p.item?.str || "") && (p.item.height || 0) >= h * 0.8).length;
+      if (numbers(lines[k - 1]) + numbers(lines[k + 1]) < 3 || /[.:,;]\s*$/.test(open.at(-1).item.str.trim())) continue;
+      for (const p of open) { skip.add(p.div); dbg(p.div, "table-label"); }
+    }
+    // A display's last row, "where μ = W h + b": one connective and then
+    // mathematics, set in from the column's edge under a row of the display
+    // (a public paper, ICLR layout — "where" emphasised on the last row of
+    // three displays). A sentence that opens "where f is the …" starts at
+    // the edge and goes on in words.
+    {
+      const CONNECTIVE = /^(?:where|and|with|for|if|otherwise|or|when|whenever|at|on)$/;
+      const EQ_WHY = new Set(["row-eqn", "blk-eqn", "line-formula"]);
+      const sides = twoColumn ? [[vx0, centerX], [centerX, vx0 + pageW]] : [[vx0, vx0 + pageW]];
+      for (let k = 1; k < lines.length; k++) {
+        for (const [bx0, bx1] of sides) {
+          const band = lines[k].items.filter((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1)
+            .sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+          if (band.length < 4) continue;
+          const wordy = band.filter((p) => !isMath(p) && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str) && !MATH_OP.test(p.item.str.trim().replace(/[()]/g, "")));
+          if (wordy.length !== 1 || skip.has(wordy[0].div) || !CONNECTIVE.test(wordy[0].item.str.trim())) continue;
+          // ...or anywhere on a row whose other items the display already holds ("… , where z ∼ p(z|x)").
+          const others = band.filter((p) => p !== wordy[0]);
+          if (others.filter((p) => skip.has(p.div) && EQ_WHY.has(blockWhy.get(p.div))).length >= others.length * 0.6) { skip.add(wordy[0].div); dbg(wordy[0].div, "row-eqn"); continue; }
+          // ...or in the MIDDLE of a row set in from the edge that holds nothing
+          // else but glyphs ("… , where z ∼ p(z|x)" closing a display).
+          if (wordy[0] !== band[0]) {
+            const h0 = band[0].item.height || 8;
+            if (others.length >= 4 && /[=≤≥∈<>≈∼]/.test(band.map((p) => p.item.str).join("")) && band[0].item.transform[4] >= Math.max(bx0, bandLeft(bx0, bx1)) + h0 * 2) { skip.add(wordy[0].div); dbg(wordy[0].div, "row-eqn"); }
+            continue;
+          }
+          if (!/[=≤≥∈<>≈∼]/.test(band.map((p) => p.item.str).join(""))) continue;
+          const h = band[0].item.height || 8;
+          if (band[0].item.transform[4] < Math.max(bx0, bandLeft(bx0, bx1)) + h * 2) continue;
+          let above = null;
+          for (let m = k - 1; m >= 0 && !above; m--) {
+            const b2 = lines[m].items.filter((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1 && (p.item.height || 0) >= h * 0.75);
+            if (b2.length) above = { y: lines[m].y, items: b2 };
+          }
+          if (!above || above.y - lines[k].y > h * 2.6) continue;
+          if (above.items.filter((p) => skip.has(p.div) && EQ_WHY.has(blockWhy.get(p.div))).length < above.items.length * 0.6) continue;
+          skip.add(wordy[0].div);
+          dbg(wordy[0].div, "row-eqn");
+        }
+      }
+    }
+    // A panel's sub-caption: "(d) <bold lead> baselines (with …)" set under a
+    // sub-table, smaller than the body. The label and the bold lead were
+    // kept and the roman words after them emphasised (a public paper, ICCV
+    // layout). From a lone "(a)"…"(z)" item below body size, everything of
+    // that size up to the next wide gap is the panel's caption.
+    if (bodyH > 0) {
+      for (const ln of lines) {
+        const row = ln.items.filter((p) => p.item?.transform && p.item.str.trim()).sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+        for (let n = 0; n < row.length; n++) {
+          const h = row[n].item.height || 0;
+          if (!/^\([a-z]\)$/.test(row[n].item.str.trim()) || !(h > 0) || h > bodyH * 0.92) continue;
+          for (let m = n + 1; m < row.length; m++) {
+            const prev = row[m - 1].item, cur = row[m].item;
+            if (cur.transform[4] - (prev.transform[4] + (prev.width ?? 0)) > h * 3) break;
+            if (/^\([a-z]\)$/.test(cur.str.trim())) break;
+            if ((cur.height || 0) > bodyH * 0.92) break;
+            if (!skip.has(row[m].div)) { skip.add(row[m].div); dbg(row[m].div, "sub-caption"); }
+          }
+        }
       }
     }
     return { skip, protect, why: blockWhy };

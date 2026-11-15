@@ -168,6 +168,10 @@ const settle = async (page, floorMs = 0) => {
   // at all, and a page read then "passes" every check on nothing.
   const running = `(() => { const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page} - 1); if (pv?.renderingState === 1) return true;
     const d = pv?.textLayer?.div; if (!d) return false;
+    // ...or painted, its text layer still EMPTY and not yet announced: the
+    // layer is filled a moment after the canvas finishes, and that moment
+    // was long enough to read the page with no spans at all.
+    if (d.childElementCount === 0 && globalThis.__fxTL && !globalThis.__fxTL.has(${page})) return true;
     return d.dataset.fxPass === "run" || (d.dataset.fxPass === undefined && d.childElementCount > 0 && !!document.querySelector(".textLayer[data-fx-pass]")); })()`;
   while (Date.now() - t0 < 32000 + floorMs || (settle.running && Date.now() - t0 < 150000)) {
     const r = await ev(`({ sig: ${signature(page)}, quiet: ${LEGACY ? "false" : quiet(page)}, running: ${LEGACY ? "false" : running} })`).catch(soft({ sig: "x", quiet: false, running: false }));
@@ -224,7 +228,10 @@ try {
   await cdp.send("Runtime.enable");
   await cdp.send("Page.enable");
   let loaded = false;
-  for (let i = 0; i < 100 && !loaded; i++) { loaded = await ev(`!!window.PDFViewerApplication?.pdfDocument`).catch(soft(false)); if (!loaded) await sleep(200); }
+  for (let i = 0; i < 100 && !loaded; i++) { loaded = await ev(`(() => { const a = window.PDFViewerApplication;
+      // Which pages' text layers the viewer has announced (settle's "running").
+      if (a?.eventBus && !globalThis.__fxTL) { globalThis.__fxTL = new Set(); a.eventBus.on("textlayerrendered", (e) => globalThis.__fxTL.add(e.pageNumber)); }
+      return !!a?.pdfDocument; })()`).catch(soft(false)); if (!loaded) await sleep(200); }
   if (!loaded) throw new Error("document never loaded");
   // Before any page is processed, as whyskip does it, so the engine records
   // its skip reasons from the first pass rather than from a re-process.

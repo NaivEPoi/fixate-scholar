@@ -8302,7 +8302,7 @@ Review one, pages 1–3 of the NAACL and NeurIPS 2020 papers and 1–5 of the
 JMLR one. Five findings, four fixed above; no page of the wide set is now
 unread.
 
-**Still open**, each confirmed on the final tree:
+**Open after the third pass** (worked through in the fourth, below):
 
 - Three formula-led lines above a display, mostly mathematics with two or
   three words ("q(z|x) as follows:", "Now we compute", "…'s inequality,
@@ -8350,3 +8350,54 @@ all 573 pages (`sweep-diff`), and `diag-drag`, `copytext`, `highlights`,
 has not been measured in this round.
 
 Final tree: 34/34 pass `allprobes` in 6.8 min; `npm test` 344 pass.
+
+### R69, fourth pass (2026-11-15)
+
+The third pass's list, item by item.
+
+- **Run-in rules against a paragraph's continuation.** The short-sentence
+  run-in ("≤ 5 words ending in a period") judged "more prose follows" on the
+  whole row, the other column's line included, and closed on an
+  abbreviation's period: a list item's two-word last line and three
+  paragraphs opening "<Surname> et al." were kept as headings. It now reads
+  its own column, does not close on "al.", "e.g.", "Fig." and the like, and
+  — with the bold run-in rule — does not fire on a line that continues the
+  line above (`continuesAbove`, now whatever the lead's face; its alignment
+  test takes the line above's first word and allows a bullet's width). A bold
+  phrase a sentence breaks before is kept as bold text is kept anywhere, not
+  as a heading.
+- **A group label between a table's rows** ("<Group> methods" alone on its
+  row): kept when both neighbouring rows are rows of kept cells with numbers
+  on one of them and the label does not end as a clause does. The first
+  version, without the last two conditions, took two clauses before their
+  displays for labels on the regression papers; the sweep diff showed them.
+- **A panel's sub-caption** ("(d) <bold lead> baselines (with …)"): from a
+  lone "(a)"…"(z)" item below body size, everything of that size up to the
+  next wide gap.
+- **A display's connective** ("where μ = W h + b" as a display's last row,
+  set in from the column's edge under a kept row; a connective alone among a
+  row's kept mathematics).
+- **A clause that opens on its display** ("Now we compute", "and retain
+  (1.2) in the form"): words from the line's start, at most two glyphs
+  beside them, and under it a row of mathematics with a relation. And a
+  table's reason is given up for a paragraph's tail only above a display — a
+  wordy cell's second line sits under a full first line too.
+- **Numbered footnotes** ("18. …" at the notes' size, a journal's style):
+  a footnote by its number when it is the lowest small block under body
+  text.
+
+By design, and left: a line of identifiers with two connectives among them
+("… CVE-…-… and CVE-…-…", a line opening "(L=12, H=768, …") is kept whole by
+the segmenter as mostly non-words; a word TeX split at its accent
+("H¨older's") stays with its kept piece; "We compute" as a page's first
+line keeps its figure-label reason (one lowercase word). ("where" in the
+middle of a display's row is kept too: alone among glyphs on a row set in
+from the edge, with a relation on it.)
+
+The gate once more: the page of the 44 MB paper also has a moment when its
+canvas is finished and its text layer is still an empty element. The harness
+now listens for the viewer's own `textlayerrendered` and waits for a page it
+has not been told about; four runs in a row measure that page alike (254
+spans). Final sweep: 34/34, 6.4 min, 574 of 575 pages settled on the page's
+signal; against the previous full sweep only the three retracted table
+labels moved. `npm test`: 344 pass.
