@@ -1773,7 +1773,7 @@ export class TypographyEngine {
     for (const ln of lines)
       if (ln.items.some((p) => p.item.transform[4] < centerX && p.item.transform[4] + (p.item.width ?? 0) > centerX))
         occupy++;
-    const twoColumn = lines.length > 4 && occupy < lines.length * 0.35;
+    const fewCross = lines.length > 4 && occupy < lines.length * 0.35;
 
     // Is there a gutter down the middle of the BODY? Used only to keep the
     // aligned-gap table rule from reading that gutter as a column boundary.
@@ -1808,6 +1808,18 @@ export class TypographyEngine {
     // table-starts, table-rules and the region fill. `tables.mjs` over the
     // single-column papers is the check that this is the right trade.
     const gutterX = gutterRows >= 6 ? centerX : null;
+    // The same vote taken over body-height lines alone: a full-width table's
+    // rows all cross the centre and outvoted the two columns of prose under
+    // it, so the page was read as one column and every rule that looks at a
+    // column's first item (run-in leads, headings) saw only the left one.
+    let bodyLines = 0;
+    let bodyCross = 0;
+    for (const ln of lines) {
+      if (ln.h < dominant * 0.9 || ln.h > dominant * 1.15) continue;
+      bodyLines++;
+      if (ln.items.some((p) => p.item.transform[4] < centerX && p.item.transform[4] + (p.item.width ?? 0) > centerX)) bodyCross++;
+    }
+    const twoColumn = fewCross || (gutterRows >= 8 && bodyLines > 8 && gutterRows >= bodyLines * 0.4 && bodyCross < bodyLines * 0.2);
 
     const left = [];
     const right = [];
@@ -7202,6 +7214,7 @@ export class TypographyEngine {
               return za - zb || ka - kb;
             });
             const lastExempt = new Map(); // zone index -> last exempt line key
+            let keptByLine = null; // line key -> rects of spans the classifier kept (built on demand)
             for (const key of entryKeys) {
               const group = byLine.get(key);
               const [zi, lineKey] = key.split(":").map(Number);
@@ -7231,8 +7244,47 @@ export class TypographyEngine {
               const cellBorder = vRules.some(
                 (v) => v.left > gx0 + lineH && v.right < gx1 - lineH && v.top <= gy0 && v.bottom >= gy1,
               );
+              // Prose between frames starts at the zone's left edge (an
+              // indent or a list marker in). A wordy cell's wrapped line
+              // starts a label column in: the cell's own left edge, with the
+              // row's label on a baseline of its own beside it — a table with
+              // no vertical rules gives no cell border to see.
+              // A lead the classifier already kept (a run-in heading) is not
+              // among the candidates: the line starts where IT starts when it
+              // adjoins the first candidate.
+              let fromLeft = gx0 - z.x0 <= (z.x1 - z.x0) * 0.12 + lineH;
+              if (!fromLeft) {
+                if (!keptByLine) {
+                  keptByLine = new Map();
+                  const cand = new Set(pairs.map((q) => q.div));
+                  for (const q of allPairs) {
+                    if (cand.has(q.div) || !/[A-Za-z]{2}/.test(q.div.textContent)) continue;
+                    const qr = q.div.getBoundingClientRect();
+                    if (!(qr.width > 0)) continue;
+                    const k = lineOf(qr);
+                    let arr = keptByLine.get(k);
+                    if (!arr) keptByLine.set(k, (arr = []));
+                    arr.push(qr);
+                  }
+                }
+                let left = gx0;
+                for (let dk = -1; dk <= 1; dk++) {
+                  for (const qr of (keptByLine.get(lineKey + dk) || []).sort((m, n) => n.right - m.right)) {
+                    if (qr.right <= left + lineH * 0.3 && left - qr.right <= lineH * 1.8 && qr.bottom > gy0 + lineH * 0.3 && qr.top < gy1 - lineH * 0.3) left = Math.min(left, qr.left);
+                  }
+                }
+                fromLeft = left - z.x0 <= (z.x1 - z.x0) * 0.12 + lineH;
+              }
+              // ...and when the label does share the baseline, the column gap
+              // between it and the cell is wider than any word space.
+              const byX = group.map((g) => g.r).sort((a, b) => a.left - b.left);
+              let colGap = false;
+              for (let i = 1, right = byX[0].right; i < byX.length; i++) {
+                if (byX[i].left - right > lineH * 1.8) colGap = true;
+                right = Math.max(right, byX[i].right);
+              }
               const exemptLine =
-                clearOfRules && !cellBorder &&
+                clearOfRules && !cellBorder && fromLeft && !colGap &&
                 ((lw >= 4 && gx1 - gx0 >= (z.x1 - z.x0) * 0.55) ||
                   (lw >= 2 && prev != null && lineKey - prev <= ZONE_CONT_LINES));
               if (exemptLine) lastExempt.set(zi, lineKey);
