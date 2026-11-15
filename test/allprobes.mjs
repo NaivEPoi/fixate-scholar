@@ -139,6 +139,7 @@ const quiet = (page) => `(() => {
     (!pv.detailView || pv.detailView.renderingState === 3) && document.fonts.status === "loaded";
 })()`;
 let fastPages = 0, slowPages = 0;
+const slowWhy = [];
 /**
  * This page's settled signature, or null if it never held still.
  *
@@ -155,14 +156,28 @@ let fastPages = 0, slowPages = 0;
 const settle = async (page, floorMs = 0) => {
   const t0 = Date.now();
   let last = "", changed = t0, quietAt = 0;
-  while (Date.now() - t0 < 32000 + floorMs) {
-    const r = await ev(`({ sig: ${signature(page)}, quiet: ${LEGACY ? "false" : quiet(page)} })`).catch(soft({ sig: "x", quiet: false }));
+  // A pass still RUNNING is not held against the clock: a page of large
+  // figures in a 44 MB document painted for longer than any hold, was read
+  // with its pass waiting on the canvas, and came back as 52 unreasoned
+  // spans — a FAIL about a page that had not been processed yet. Such a page
+  // is waited for (to 150 s), and reported NOT MEASURED if it never finishes.
+  // ...and so is one whose pass has not STARTED while other pages' have: its
+  // text layer is in the document before the viewer announces it.
+  // ...and one whose CANVAS is still being painted: the viewer builds the
+  // text layer when the canvas is done, so until then the page has no spans
+  // at all, and a page read then "passes" every check on nothing.
+  const running = `(() => { const pv = window.PDFViewerApplication.pdfViewer.getPageView(${page} - 1); if (pv?.renderingState === 1) return true;
+    const d = pv?.textLayer?.div; if (!d) return false;
+    return d.dataset.fxPass === "run" || (d.dataset.fxPass === undefined && d.childElementCount > 0 && !!document.querySelector(".textLayer[data-fx-pass]")); })()`;
+  while (Date.now() - t0 < 32000 + floorMs || (settle.running && Date.now() - t0 < 150000)) {
+    const r = await ev(`({ sig: ${signature(page)}, quiet: ${LEGACY ? "false" : quiet(page)}, running: ${LEGACY ? "false" : running} })`).catch(soft({ sig: "x", quiet: false, running: false }));
+    settle.running = r.running;
     const now = Date.now();
     if (r.sig !== last) { last = r.sig; changed = now; quietAt = 0; }
     if (r.sig !== "x") {
       if (!r.quiet) quietAt = 0; else if (!quietAt) quietAt = now;
       const fast = quietAt && now - quietAt >= 300 && now - changed >= 300;
-      if (fast || (now - changed >= 2500 && now - t0 >= floorMs + 2500)) {
+      if (fast || (!r.running && now - changed >= 2500 && now - t0 >= floorMs + 2500)) {
         if (!r.sig.startsWith("0/")) engineSeen = true;
         settle.fast = !!fast;
         return r.sig;
@@ -248,7 +263,12 @@ try {
     // A page that said it was finished needs none of the waits below: its
     // unprocessed prose is final, and so are its hit-targets.
     const fast = settle.fast;
-    if (fast) fastPages++; else slowPages++;
+    if (fast) fastPages++; else {
+      slowPages++;
+      // What the page had not said when the clock was taken instead.
+      slowWhy.push(`p${pg} ` + await ev(`(() => { const pv = window.PDFViewerApplication.pdfViewer.getPageView(${pg - 1}); const d = pv?.textLayer?.div;
+        return JSON.stringify({ pass: d?.dataset.fxPass ?? null, ann: d?.dataset.fxAnn ?? null, canvas: pv?.renderingState ?? null, detail: pv?.detailView?.renderingState ?? null, fonts: document.fonts.status, spans: d?.childElementCount ?? null }); })()`).catch(soft("?")));
+    }
     if (!revisit && !engineSeen && sig?.startsWith("0/")) { deferred.push(pg); return; }
     // Counts that hold still are not a finished page: the engine can pause
     // between chunks. Wait until every prose span is processed or carries the
@@ -365,7 +385,7 @@ try {
     for (const l of lines[c]) console.log(l);
   }
   // How each page's wait ended: on the page's own word, or on the clock.
-  console.log(`settle: ${fastPages} page(s) on the page's own signal, ${slowPages} on the 2.5 s hold${LEGACY ? " (--settle=legacy)" : ""}`);
+  console.log(`settle: ${fastPages} page(s) on the page's own signal, ${slowPages} on the 2.5 s hold${LEGACY ? " (--settle=legacy)" : ""}${slowWhy.length && !LEGACY ? ": " + slowWhy.join("; ") : ""}`);
   const line = `${LABEL} zoom=${ZOOM} pages=${pages.length} ${verdicts.join(" ")}`;
   console.log(line);
   appendFileSync(`${outDir()}/allprobes.log`, line + String.fromCharCode(10));

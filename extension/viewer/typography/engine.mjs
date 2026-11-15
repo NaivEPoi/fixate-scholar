@@ -3370,9 +3370,18 @@ export class TypographyEngine {
       for (let m = lines.indexOf(ln) - 1; m >= 0; m--) {
         const bandPrev = lines[m].items.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
         if (!bandPrev.length) continue;
+        // Not a row of scripts (the line above's superscripts, grouped as a
+        // row of their own).
+        if (Math.max(...bandPrev.map((p) => p.item.height || 0)) < h * 0.75) continue;
+        // ...nor a row of symbols alone (a displayed operator riding above an inline formula).
+        if (!bandPrev.some((p) => /[A-Za-zÀ-ɏ]{2}/.test(p.item.str))) continue;
         if (lines[m].y - ln.y > h * 1.7 || lines[m].y - ln.y <= 0) return false;
         const prevEnd = Math.max(...bandPrev.map((p) => p.item.transform[4] + (p.item.width ?? 0)));
         if (prevEnd < measure - h * 1.5) return false;
+        // A paragraph's last line starts where the line above did (the
+        // column's edge, or a list item's indent); a centred heading under a
+        // full line starts well inside it.
+        if (lead.item.transform[4] > Math.min(...bandPrev.map((p) => p.item.transform[4])) + h * 0.6) return false;
         const prevText = lineText(bandPrev);
         if (/[.!?:][”’"')\]]*\s*$/.test(prevText)) return false;
         // Prose by its words — or, where names and years leave it few ("…
@@ -3591,7 +3600,22 @@ export class TypographyEngine {
             lineEndH >= measureH - (measureH - bandLeft(bx0, bx1)) * 0.15 &&
             (runsOn(band) || /[,;]\s*$/.test(bandText)) &&
             !band.some((p) => isBold(p) || isItalic(p) || isSpecial(p));
-          if (paraTail && !/^(?:[A-Z]|[IVX]{1,5})\.$/.test(leadStr)) { /* the paragraph's own last line (continuesAbove) */ }
+          if (globalThis.__fxDebug && globalThis.__fxTitleProbe && leadStr.includes(globalThis.__fxTitleProbe)) {
+            (globalThis.__fxTitleTrace ??= []).push({ text: leadStr.slice(0, 40), why: "head-lead", lower: lowerWords(band), listItem, italicHead, shortNumbered, paraTail, band: band.map((p) => p.item.str.slice(0, 20)) });
+          }
+          // The labelled run itself, where a column's width of space parts it
+          // from the rest of the row: on a page not read as two-column (a
+          // figure across most of it) a centred "II. <TITLE>" shares its row
+          // with the other column's line, whose words made it prose — the
+          // heading was processed (a public paper, Physical Review layout).
+          const sorted = band.slice().sort((p, q) => p.item.transform[4] - q.item.transform[4]);
+          let cut = sorted.indexOf(lead) + 1;
+          while (cut < sorted.length && sorted[cut].item.transform[4] - (sorted[cut - 1].item.transform[4] + (sorted[cut - 1].item.width ?? 0)) <= (lead.item.height || 8) * 3) cut++;
+          const labelRun = sorted.slice(sorted.indexOf(lead), cut);
+          if (labelRun.length < band.length && lowerWords(labelRun) <= 3 && lowerWords(band) > 3 && !listItem && !paraTail && sorted.indexOf(lead) === 0) {
+            for (const p of labelRun) { skip.add(p.div); dbg(p.div, "line-head"); }
+          } else
+          if (paraTail && !/^(?:[A-Z]|[IVX]{1,5})\.(?:\s|$)/.test(leadStr)) { /* the paragraph's own last line (continuesAbove) */ }
           else if ((lowerWords(band) <= 3 && !listItem) || italicHead || shortNumbered) {
             // A NUMBERED RUN-IN heading shares its line with the paragraph it
             // opens ("2.3.1. Latency overhead.  Table 5 shows the measured …").
@@ -4296,6 +4320,36 @@ export class TypographyEngine {
             prevY = curY;
             absorbed++;
           }
+        }
+      }
+    }
+    // A paragraph's last line, given back. The line a sentence runs on to
+    // before its display — "…, we define", "yielding objective", "the
+    // following update equations:" — was kept with the display under it by
+    // whichever rule took the display (a row of an equation, a table's run,
+    // a figure's labels): a dozen lines over three public papers. It is the
+    // paragraph's own by the line above it (continuesAbove: full, prose, in
+    // this face, its sentence unfinished), starts at the column's edge, holds
+    // two lowercase words and no cell's gap. Only its words are given back;
+    // the mathematics on it stays where it was.
+    const TAIL_RELEASE = new Set(["row-eqn", "blk-eqn", "blk-figlabel", "table-aligned", "line-formula", "line-cells", "line-cells-wide", "table-region"]);
+    for (const ln of lines) {
+      const sides = twoColumn ? [[vx0, centerX], [centerX, vx0 + pageW]] : [[vx0, vx0 + pageW]];
+      for (const [bx0, bx1] of sides) {
+        const band = ln.items.filter((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+        const words = band.filter((p) => !isMath(p) && !isSpecial(p) && !isBold(p) && /[a-zà-ÿ]{2}/.test(p.item.str));
+        if (!words.length || !words.some((p) => skip.has(p.div))) continue;
+        if (words.some((p) => skip.has(p.div) && !TAIL_RELEASE.has(blockWhy.get(p.div)))) continue;
+        if (lowerWords(words) < 2 || maxCells([{ items: words }]) >= 2) continue; // between its WORDS: a formula on the line spaces its own glyphs
+        const widest = words.reduce((a, b) => ((b.item.width || 0) > (a.item.width || 0) ? b : a));
+        const left = band.reduce((a, b) => (b.item.transform[4] < a.item.transform[4] ? b : a));
+        if (!continuesAbove(ln, { item: { height: widest.item.height, transform: left.item.transform } }, bx0, bx1)) continue;
+        for (const p of words) {
+          if (!skip.has(p.div)) continue;
+          skip.delete(p.div);
+          protect.delete(p.div);
+          blockWhy.delete(p.div);
+          if (globalThis.__fxDebug) delete p.div.dataset.fxWhy;
         }
       }
     }

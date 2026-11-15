@@ -137,7 +137,14 @@ export function findContentStart(lines) {
   // private paper). A line that merely opens with the word ("Abstract
   // syntax trees …") does not qualify.
   const line = lines.find((l) => l.page <= 5 && /^abstract(?:\s*[.:—–-]|$)/i.test(l.text));
-  return line ? { page: line.page, y: line.y, h: line.h } : null;
+  if (line) return { page: line.page, y: line.y, h: line.h };
+  // No heading at all: a Physical Review article sets its abstract straight
+  // under the title block, whose last line is the dates in parentheses —
+  // "(Received … ; published …)", or a preprint's "(Dated: …)". Without a
+  // start, its title, collaboration line and dates were body prose (a public
+  // paper). The start is just under that line, which is front matter itself.
+  const dated = lines.find((l) => l.page === 1 && /^\((?:Received|Dated)\b[^)]*(?:19|20)\d{2}/.test(l.text.trim()));
+  return dated ? { page: 1, y: dated.y - dated.h * 0.7, h: dated.h } : null;
 }
 
 /**
@@ -318,6 +325,37 @@ export function findReferenceSections(lines) {
     }
   }
   return sections;
+}
+
+/**
+ * A roster printed after the bibliography: a collaboration's members and
+ * their institutions, pages of names and addresses with no heading and no
+ * sentence. Most of its lines are kept by the engine's own rules (a name with
+ * its superscript, a numbered address), but the ones with neither — an
+ * address's second line, a run of "van …" surnames — were emphasised as
+ * prose, a line here and a line there over five pages (a public paper).
+ *
+ * Returned: every line after the last section's first entry that is not in
+ * its body, when what follows the list is such a roster — thirty lines or
+ * more, four in five of them made of capitalised words and initials. An
+ * appendix is sentences, and returns nothing.
+ */
+export function rosterAfter(lines, sections) {
+  const sec = sections.at(-1);
+  const lastLine = sec?.body.at(-1);
+  if (!lastLine) return [];
+  const end = lines.indexOf(lastLine);
+  if (end < 0) return [];
+  const nameLike = (t) => {
+    const words = t.match(/\p{L}[\p{L}.’'-]*/gu) ?? [];
+    if (words.length < 2) return true;
+    return words.filter((w) => /^\p{Lu}/u.test(w)).length >= words.length * 0.6;
+  };
+  const tail = lines.slice(end + 1).filter((l) => l.text.trim().length >= 12);
+  if (tail.length < 30 || tail.filter((l) => nameLike(l.text)).length < tail.length * 0.8) return [];
+  const inBody = new Set(sec.body);
+  const start = lines.indexOf(sec.body[0]);
+  return lines.slice(start).filter((l) => !inBody.has(l));
 }
 
 /**

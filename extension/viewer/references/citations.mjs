@@ -5,6 +5,7 @@
 import { extractLines } from "./extractor.mjs";
 import {
   parseReferenceSections,
+  rosterAfter,
   findContentStart,
   findFurniture,
   findCitations,
@@ -126,7 +127,8 @@ export class ReferencesFeature {
             // alone. Covering only one of them left the other reference list
             // emphasized as body prose.
             const boxes = new Map();
-            for (const line of sections.flatMap((sec) => [sec.heading, ...sec.body])) {
+            // ...and a roster printed after the list (parser.mjs rosterAfter).
+            for (const line of [...sections.flatMap((sec) => [sec.heading, ...sec.body]), ...rosterAfter(lines, sections)]) {
               const pad = line.h * 0.7;
               if (!boxes.has(line.page)) boxes.set(line.page, []);
               boxes.get(line.page).push({
