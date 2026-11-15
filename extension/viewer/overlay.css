@@ -204,6 +204,22 @@
   display: none;
 }
 
+/* Pages out of view are not laid out or painted until they come near it.
+   In reading mode the text layer is VISIBLE text in the document's embedded
+   faces, and every newly loaded face (each page brings its own subsets)
+   makes the browser lay out and repaint all of it: every rendered page's
+   text and masks in one frame, 20-32 thousand layout objects, 130-145 ms on
+   a 14-page scroll — once per page reached. Both layers already fill the
+   page box and clip to it (inset: 0; overflow: clip), so containing them
+   changes nothing that is drawn; a page the engine measures while it is off
+   screen is laid out for that measurement as before. Measured, five runs
+   each way: longest task 132-145 ms to 84-88 ms, long-task time 1024-1116 ms
+   to 738-783 ms, frame gaps over 100 ms 4-5 to 0-1. */
+#viewerContainer.fx-on .page .textLayer,
+#viewerContainer.fx-on .page .fx-mask {
+  content-visibility: auto;
+}
+
 #viewerContainer.fx-on .fx-mask {
   display: block;
 }

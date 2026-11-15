@@ -8169,7 +8169,7 @@ Fixed, each read to its mechanism from `test/dump-page.mjs` first:
 - **Constraint rows that open on a name** ("<Name>(N) ≤ <target name>"):
   an inequality or membership glyph, up to three name spans, no function word.
 
-### Left for the next round (seen, verified only by the reader, not fixed)
+### Left after the first pass (most of it fixed in the later passes, below)
 
 - The Physical Review Letters article: front matter (title, collaboration
   line, received dates) and one roman-numeral heading processed — it has no
@@ -8262,3 +8262,91 @@ page's), colours are read ahead for the coming batch only, and a batch waits
 the largest callback of a page 36–170 ms (the first stage is still one
 piece). Unthrottled: unchanged (long tasks 7–8, 525–603 ms before and
 after).
+
+### R69, second and third passes (2026-11-15)
+
+The first pass's sheet, worked through; each from `dump-page.mjs` first.
+
+- **An abstract with no heading** (the Physical Review article): the content
+  starts just under the parenthesised dates line, "(Received …)" or
+  "(Dated: …)"; title, author line, collaboration and dates are front matter.
+- **A centred heading on a page not read as two-column** shared its row with
+  the other column's line, whose words made it prose: a labelled run parted
+  from the rest of its row by more than three heights is judged alone.
+- **A roster after the bibliography** (members, then numbered addresses, five
+  pages): what follows the list — thirty lines or more, four in five of them
+  capitalised words and initials — joins the region the engine leaves alone
+  (`rosterAfter`), with the roster lines laid between two entries.
+- **A paragraph's line above its display**, kept by whichever rule took the
+  display: given back when the line above is full, unfinished prose in its
+  face (`continuesAbove`), it starts where that line did, holds two lowercase
+  words and no cell's gap between its words. Only its words; the mathematics
+  on it stays. `continuesAbove` itself: the line above is the nearest with a
+  word on it (not a row of scripts or of symbols), within two heights.
+- **Theorem-environment leads**: "Proof.", "Remark.", "Proof of the claim."
+  by the environment's word (the italic run ran on through a math letter,
+  stood alone above a display, or was mostly lowercase); an italic lead after
+  a bare section number; an italic Title-Case lead printed without its period.
+- **A line over both columns has no second start at the centre**: a number
+  standing there in an abstract read as a heading's label.
+- **A rotated page is not processed**: the block rules read positions in the
+  page's own space, and on a sideways table's page the one span let through
+  was its caption.
+- My own slip, caught by the sweep diff before it was committed: a check
+  inserted mid-chain detached the run-in rule from its `else`, and five body
+  lines on three core papers were kept as run-ins.
+
+The pages nobody had certified were captured again and read, with notes kept
+per page: all 16 of the IEEE Computer Society paper, all 16 of the Physical
+Review one, pages 1–3 of the NAACL and NeurIPS 2020 papers and 1–5 of the
+JMLR one. Five findings, four fixed above; no page of the wide set is now
+unread.
+
+**Still open**, each confirmed on the final tree:
+
+- Three formula-led lines above a display, mostly mathematics with two or
+  three words ("q(z|x) as follows:", "Now we compute", "…'s inequality,
+  then"): the line above them is not a full prose line.
+- Two footnotes of one JMLR page ("18. …", "19. …") processed where every
+  other footnote is kept: the number is part of the first item there, and
+  the block does not read as a footnote.
+- A group label alone on a table row ("Two-stage methods"); two table
+  sub-caption fragments after a bold lead; "where" on the last line of three
+  displays.
+- One-word and two-word leftovers: a list item's two-word last line kept as
+  `runin-short`, a paragraph's opening surname kept the same way (three), a
+  bold mid-sentence phrase at a line start kept as a run-in (four), a line
+  of CVE identifiers kept as `url-or-math`, a body line opening "(L=12,
+  H=768, …" kept as `line-formula`.
+
+### The gate, again
+
+A page of a 44 MB paper paints for over thirty seconds, and the viewer
+builds a page's text layer when its canvas is done: until then the page has
+no spans. The harness's clock ran out first and it scored the page empty
+(every check passing on nothing) or, when the layer landed in between,
+half-processed (52 unreasoned spans, a FAIL) — on v1.4.8 and after. A page
+whose canvas is still painting, whose pass has not started while other
+pages' have, or whose pass is running, is now waited for (150 s) and
+reported NOT MEASURED otherwise; a page that settles on the clock prints
+what it was missing. That page is measured now: 254 spans, pass done.
+
+### The stall, settled
+
+Fourteen pages scrolled instead of eight, five runs each way, alternating:
+
+| | as it was | off-screen layers contained |
+|---|---|---|
+| longest task | 132–145 ms | 84–88 ms |
+| long-task time | 1024–1116 ms | 738–783 ms |
+| frame gaps over 100 ms | 4–5 | 0–1 |
+
+`content-visibility: auto` on each page's text layer and mask layer in
+reading mode (overlay.css). Both layers already fill the page box and clip
+to it, so nothing drawn changes; a page measured off screen is laid out for
+the measurement as before. With it on: the 34-paper sweep is unchanged on
+all 573 pages (`sweep-diff`), and `diag-drag`, `copytext`, `highlights`,
+`latexdiff` and `citeaudit` pass. Headless measurements; the real display
+has not been measured in this round.
+
+Final tree: 34/34 pass `allprobes` in 6.8 min; `npm test` 344 pass.

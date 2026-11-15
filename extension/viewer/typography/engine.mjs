@@ -3391,7 +3391,16 @@ export class TypographyEngine {
     // No heading opens under an unfinished full line.
     const continuesAbove = (ln, lead, bx0, bx1) => {
       const h = lead.item.height || 8;
-      const measure = bandMeasure(bx0, bx1);
+      // The column's measure — or, where the text layer is one item a WORD
+      // (no item holds the four words the measure is read from), the
+      // furthest any line of this size reaches in the band.
+      let measure = bandMeasure(bx0, bx1);
+      if (!(measure > 0)) {
+        for (const l of lines) for (const p of l.items) {
+          const x = p.item.transform[4];
+          if (x >= bx0 && x < bx1 && Math.abs((p.item.height || 0) - h) <= h * 0.05) measure = Math.max(measure || 0, Math.min(bx1, x + (p.item.width ?? 0)));
+        }
+      }
       if (!(measure > 0)) return false;
       for (let m = lines.indexOf(ln) - 1; m >= 0; m--) {
         const bandPrev = lines[m].items.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
@@ -3401,7 +3410,9 @@ export class TypographyEngine {
         if (Math.max(...bandPrev.map((p) => p.item.height || 0)) < h * 0.75) continue;
         // ...nor a row of symbols alone (a displayed operator riding above an inline formula).
         if (!bandPrev.some((p) => /[A-Za-zÀ-ɏ]{2}/.test(p.item.str))) continue;
-        if (lines[m].y - ln.y > h * 1.7 || lines[m].y - ln.y <= 0) return false;
+        if (lines[m].y - ln.y > h * 2.0 || lines[m].y - ln.y <= 0) return false;
+        // (two heights, not the 1.7 of a line pitch: a line group's y moves
+        // with what else sits on its row, and a last line read 1.705 away.)
         const prevEnd = Math.max(...bandPrev.map((p) => p.item.transform[4] + (p.item.width ?? 0)));
         if (prevEnd < measure - h * 1.5) return false;
         // A paragraph's last line starts where the line above did (the
@@ -3498,7 +3509,7 @@ export class TypographyEngine {
         const atHeadingAnchor = hAnchor && Math.abs(hAnchor.x - ax) <= tol && !/^[a-zà-ÿ]+(?:[\s.,;:]|$)/.test(leadStr);
         const paraTail = !isSpecial(lead) && !isBold(lead) && continuesAbove(ln, lead, bx0, bx1);
         if (globalThis.__fxDebug && globalThis.__fxTitleProbe && leadStr.includes(globalThis.__fxTitleProbe)) {
-          (globalThis.__fxTitleTrace ??= []).push({ text: leadStr.slice(0, 40), why: "chain", special: isSpecial(lead), italic: isItalic(lead), bold: isBold(lead), anchor: !!atHeadingAnchor, algo: isAlgoLead(leadStr), head: HEAD_LEAD.test(leadStr), band: band.length, its: its.length });
+          (globalThis.__fxTitleTrace ??= []).push({ text: leadStr.slice(0, 40), why: "chain", special: isSpecial(lead), italic: isItalic(lead), bold: isBold(lead), anchor: !!atHeadingAnchor, algo: isAlgoLead(leadStr), head: HEAD_LEAD.test(leadStr), band: band.length, its: its.length, paraTail: !isSpecial(lead) && !isBold(lead) && continuesAbove(ln, lead, bx0, bx1), above: (() => { const h = lead.item.height || 8, out = []; for (let m = lines.indexOf(ln) - 1; m >= 0 && out.length < 3; m--) { const bp = lines[m].items.filter((p) => p.item.transform[4] >= bx0 && p.item.transform[4] < bx1); if (bp.length) out.push({ dy: +(lines[m].y - ln.y).toFixed(1), n: bp.length, end: Math.round(Math.max(...bp.map((p) => p.item.transform[4] + (p.item.width ?? 0)))), t: lineText(bp).slice(-30), hmax: Math.max(...bp.map((p) => p.item.height || 0)) }); } return { h, measure: Math.round(bandMeasure(bx0, bx1)), out }; })(), title: titleCaseHead(ln, band, bx0, bx1) });
         }
         // An italic lead after a bare section number: "1.3" kept, its
         // "Remark." in italic after it — the lead of the same paragraph.
@@ -5504,6 +5515,13 @@ export class TypographyEngine {
       // reader sees; a landscape page's rotation is the viewport's, not the
       // item's, so the angle is taken in the viewport's frame, as PDF.js
       // lays the span out.
+      // ...and a ROTATED PAGE is processed not at all. The block rules read
+      // an item's position in the page's own space, where a landscape page's
+      // lines run down, not across: on a sideways table's page nothing
+      // grouped into lines, and the one span the rules let through was the
+      // table's caption (a public paper, JMLR layout). What a paper turns
+      // sideways is a table or a figure; its text stays as the author set it.
+      if ((pageView?.viewport?.rotation ?? 0) % 360 !== 0) return reject(div, "rotated-page");
       if (item?.transform && pageView?.viewport?.transform) {
         const v = pageView.viewport.transform, t = item.transform;
         const ax = v[0] * t[0] + v[2] * t[1], ay = v[1] * t[0] + v[3] * t[1];
