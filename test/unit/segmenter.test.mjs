@@ -255,3 +255,14 @@ test('emphasisMode "none" bolds nothing but keeps the text intact', () => {
   assert.ok(parts.every((p) => !p.bold));
   assert.equal(parts.map((p) => p.text).join(""), text);
 });
+
+test("emphasizeParts leaves a run-in lead's words plain when it shares the span with its sentence", () => {
+  const text = "Sample Trace Synthesis. To widen the set further we add more.";
+  const lead = "Sample Trace Synthesis.".length;
+  const bold = (r) => { let o = 0; const out = []; for (const p of r.parts) { if (p.bold) out.push(o); o += p.text.length; } return out; };
+  const plain = emphasizeParts(text, FRACTION);
+  const led = emphasizeParts(text, FRACTION, 0, { lead });
+  assert.ok(bold(plain).some((o) => o < lead));
+  assert.ok(bold(led).length > 0 && bold(led).every((o) => o >= lead));
+  assert.equal(led.parts.map((p) => p.text).join(""), text);
+});

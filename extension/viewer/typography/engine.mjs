@@ -1384,7 +1384,8 @@ export class TypographyEngine {
       if (gutterDivs.size) items = items.filter((p) => !gutterDivs.has(p.div));
     }
     const lines = this.#lineGroups(items);
-    if (!lines.length) return { skip, protect, why: blockWhy };
+    const leadIn = new Map(); // div -> characters of a run-in lead that opens it (no emphasis there)
+    if (!lines.length) return { skip, protect, why: blockWhy, leadIn };
 
     const centerX = vx0 + pageW * 0.5;
     const LOWER_WORD = /^[a-zà-ÿ]{2,}$/;
@@ -3916,6 +3917,13 @@ export class TypographyEngine {
           // a list item's two-word second line was kept as a heading.
           if (closed && runDivs.length && runDivs.at(-1) !== band.at(-1) && !contAbove) {
             for (const p of runDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-short"); }
+          }          // The same lead in ONE text item with its sentence ("<Short Phrase>.
+          // To further …", a single item): the span is processed whole, so
+          // the lead cannot be kept — its words are left without emphasis
+          // instead, like its siblings that are items of their own.
+          if (!closed && !runDivs.length && !contAbove) {
+            const m = /^(\s*[A-Z][^\s.]*(?:\s+[^\s.]+){0,4}\.)\s+[A-Z(]/.exec(lead.item.str);
+            if (m && !/(?:^|\s)(?:al|etc|cf|vs|e\.g|i\.e|Fig|Eq|Sec|No|Dr|St)\.$/i.test(m[1])) leadIn.set(lead.div, m[1].length);
           }
         }
       }
@@ -4847,7 +4855,7 @@ export class TypographyEngine {
         }
       }
     }
-    return { skip, protect, why: blockWhy };
+    return { skip, protect, why: blockWhy, leadIn };
   }
 
   /** Dominant body-text height (weighted by character count). */
@@ -5656,7 +5664,7 @@ export class TypographyEngine {
       );
     };
     if (globalThis.__fxDebug) globalThis.__fxCurPage = pageNumber;
-    const { skip: skipSet, protect: protectSet, why: blockWhy } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath, pageNumber);
+    const { skip: skipSet, protect: protectSet, why: blockWhy, leadIn } = this.#classifyBlocks(allPairs, vx0, pageW, pageH, isSpecial, isBold, isItalic, vy0, isMath, pageNumber);
     // The line classifier (the option; line-model.mjs): its verdicts for the
     // page are taken here, before the candidate filter, because the filter
     // is where the release happens. `released` is the block pass's keeps
@@ -5828,6 +5836,7 @@ export class TypographyEngine {
     // over allPairs, not candidates, because the piece next door is often the
     // math glyph that is deliberately left on the canvas.
     const joins = joinRuns(allPairs);
+    for (const [div, n] of leadIn) joins.set(div, { ...(joins.get(div) || {}), lead: n });
     // The page's body face, by characters set in it: a one-letter run kept in
     // another face is a math variable whatever its name says (the kept j of
     // an optimisation paper's "j-th" was in a face named neither italic nor

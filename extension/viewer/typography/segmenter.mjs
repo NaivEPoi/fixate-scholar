@@ -265,6 +265,9 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
   // second bold run in one word) and after a kept small-caps tail (a lone
   // bold "s" behind plain small caps, R68, a private paper). The engine's
   // join reads the apostrophe as a word character, so the head is there.
+  // A run-in lead sharing the span with its sentence (join.lead characters):
+  // a heading is not emphasised, the sentence after it is.
+  const leadChars = join?.lead || 0;
   const firstWord = segs.findIndex((x) => x.isWord);
   const lastWord = segs.length - 1;
   const headJoin =
@@ -304,6 +307,7 @@ export function emphasizeParts(text, opts = {}, startWordIndex = 0, join = {}) {
     if (
       noEmphasis ||
       !seg.isWord ||
+      start < leadChars ||
       inLink ||
       !PLAIN_WORD.test(seg.text) ||
       CAPITALS.test(seg.text) || CAPITALS.test(asRead) ||
