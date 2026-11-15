@@ -8576,3 +8576,47 @@ of all …" line under a display whose words stand between formulas.
 Final tree: 34/34 pass `allprobes` in 6.9 min; `npm test` 344 pass. The
 real-display measurement of the stall change is still owed: it needs a
 visible window, which this round was not given.
+
+### R69, the original papers' older items (2026-11-15)
+
+Items the reads had found on the original and regression papers that predate
+this round, taken up after the new papers were closed. Fixed, each confirmed
+by a reader on the committed tree:
+
+- a paragraph's last line kept as the figure's under it ("… for security
+  testing [22].", "Technical Specifications (TS).", "process is
+  finalized."): given back when it is body text, at the body's size, under
+  processed body text. A figure's reason is not given up inside a figure —
+  the first version gave back a line of a full-page figure's listing;
+- a run-in heading that wraps ("5.2.1 <Title> / with 5G AKA. This section
+  …"): the heading's last words on the next line, in its face and closed by
+  its period, are kept;
+- a run-in title after a multi-level section number, in a face of its own
+  ("4.3.2 <Two Words>.", "A.1.2 <Three Words>."): kept with the number;
+- `allprobes` exits 75 (no verdict, retried) when the document or browser
+  never came up; one document of a full sweep had come back FAIL for that
+  and passed when run again.
+
+Still as they were at v1.4.8, with the reason each is not a one-rule fix:
+
+- **A run-in lead in the same text item as its sentence** (an underlined
+  "<Phrase>." at a paragraph's start, one PDF text item with the words after
+  it — four leads of one paper): the engine keeps or processes a span whole.
+  Keeping the lead means splitting a span, which no rule does today.
+- **Leads and headings in the right column of a page not read as
+  two-column** (a full-width table above the columns): the lead rules look
+  at each line's first item and the right column's first item only on
+  two-column pages. The column model is per page, not per region.
+- **Wordy cells' wrapped lines in two ruled tables**: a full-width line of
+  four lowercase words inside a table zone is taken for prose between two
+  framed blocks unless a vertical rule crosses it; these tables' columns
+  have no vertical rules.
+- **One algorithm's lines** set as prose with bullets inside a ruled box,
+  and italic identifiers in two pseudocode listings.
+- A caption's second line with no closing period; a paragraph's first line
+  right under a figure's caption; a paragraph's last line above a run-in
+  heading on one page; two lines of a first-page note on one paper; list
+  items beside a table on one appendix page; operator names in inline
+  formulas ("log log", "exp(").
+
+Final tree: 34/34 pass `allprobes` in 7.1 min; `npm test` 344 pass.
