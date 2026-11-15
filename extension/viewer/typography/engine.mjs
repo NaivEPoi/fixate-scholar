@@ -3357,6 +3357,7 @@ export class TypographyEngine {
       // sentence — an italic term at a paragraph's start is followed by a
       // lowercase verb.
       const afterItal = last && its.includes(last) ? its.slice(its.indexOf(last) + 1).find((p) => !isItalic(p) && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str)) : null;
+      if (globalThis.__fxDebug && globalThis.__fxTitleProbe && italText.includes(globalThis.__fxTitleProbe)) (globalThis.__fxTitleTrace ??= []).push({ text: italText.slice(0, 40), why: "ital-lead", page: pageNumber, ended, run: runDivs.map((p) => p.item.str.slice(0, 14)), romanFollows, lowerHalf, periodHead, abbr: ABBREVIATION.test(italText), skipped: skip.has(its[a].div) });
       const titleRun = italDivs.length > 0 && italWords.length >= 2 && italWords.length <= 6 &&
         italWords.every((w) => /^[A-ZÀ-Ý0-9]/.test(w)) && !/[.,;:]$/.test(italText) &&
         italDivs.every((p) => its.includes(p)) && !!afterItal && /^[A-ZÀ-Ý][a-zà-ÿ]/.test(afterItal.item.str.trim()) &&
@@ -3547,7 +3548,7 @@ export class TypographyEngine {
           if (!m) return false;
           const n = Number(m[1]), h = lead.item.height || 8, li = lines.indexOf(ln);
           // A list's items are in the body's weight and size; a numbered heading two lines from the next is not.
-          if (band.some((p) => isBold(p)) || (bodyH > 0 && h > bodyH * 1.05)) return false;
+          if (band.filter((p) => /[A-Za-zÀ-ɏ]{2}/.test(p.item.str)).every((p) => isBold(p)) || (bodyH > 0 && h > bodyH * 1.05)) return false;
           // ...nor is a line in Title Case: IEEE's numbered italic subsubsections
           // ("1) <Two Capitalised Words>", "2) <Word> on") stand two to a page as
           // list items do. An item is a sentence: most of its words are lowercase.
@@ -3582,7 +3583,8 @@ export class TypographyEngine {
         // "Remark." in italic after it — the lead of the same paragraph.
         // Before the chain below, and no part of it.
         const afterNum = /^\d+(?:\.\d+)*\.?$/.test(leadStr) ? its.slice(a + 1).find((p) => p.item.str.trim()) : null;
-        if (afterNum && isItalic(afterNum) && afterNum.item.transform[4] < bx1) skipItalicLead(ln, its, its.indexOf(afterNum), bx0, bx1);
+        // (not in a list: there the italic sentence is the item, and its one-line siblings were kept while the ones that wrap were processed.)
+        if (afterNum && isItalic(afterNum) && afterNum.item.transform[4] < bx1 && !listSibling) skipItalicLead(ln, its, its.indexOf(afterNum), bx0, bx1);
         if (isAlgoLead(leadStr)) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
@@ -4493,7 +4495,8 @@ export class TypographyEngine {
         if (!words.length || !words.some((p) => skip.has(p.div))) continue;
         if (words.some((p) => skip.has(p.div) && !TAIL_RELEASE.has(blockWhy.get(p.div)))) continue;
         const lowers = words.flatMap((p) => p.item.str.trim().split(/\s+/)).filter((w) => /^[a-zà-ÿ]{2,}[.,;:]?$/.test(w)).length; // "as follows:" is two
-        if (lowers < 1 || maxCells([{ items: words }]) >= 2) continue; // one, for "We compute" over its display; two for a paragraph's tail (below) // between its WORDS: a formula on the line spaces its own glyphs
+        const anyWords = words.flatMap((p) => p.item.str.trim().split(/\s+/)).filter((w) => /^[A-Za-zÀ-ɏ][a-zà-ÿ]{2,}[.,;:]?$/.test(w)).length;
+        if ((lowers < 1 && anyWords < 2) || maxCells([{ items: words }]) >= 2) continue; // one, for "We compute" over its display; two for a paragraph's tail (below) // between its WORDS: a formula on the line spaces its own glyphs
         const widest = words.reduce((a, b) => ((b.item.width || 0) > (a.item.width || 0) ? b : a));
         const left = band.reduce((a, b) => (b.item.transform[4] < a.item.transform[4] ? b : a));
         // ...or it OPENS on the display: a short clause of its own, "Now we
@@ -4513,6 +4516,14 @@ export class TypographyEngine {
           /[=≤≥∑∫∈<>≈]/.test(belowBand.map((p) => p.item.str).join("")) &&
           belowBand.filter((p) => isMath(p) || isSpecial(p) || !/[A-Za-zÀ-ɏ]{2}/.test(p.item.str)).length >= belowBand.length * 0.6 &&
           !words.some((p) => /^(?:table-|line-cells)/.test(blockWhy.get(p.div) || "") && blockWhy.get(p.div) !== "table-region");
+        // ...or it is the END of a paragraph begun on the page or column
+        // before: the first line of its column, opening lowercase and closing
+        // its sentence ("…jority class." under nothing, kept as a figure's
+        // label). Nothing stands above it within three heights.
+        const colTop = /^[a-zà-ÿ]/.test(lineText(words)) && /[a-zà-ÿ][.!?]\s*$/.test(lineText(words)) && lowers >= 1 &&
+          !lines.some((l) => l !== ln && l.y > ln.y && l.y - ln.y <= (widest.item.height || 8) * 3 &&
+            l.items.some((p) => p.item?.transform && p.item.str.trim() && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1));
+        if (colTop) { for (const p of words) { if (skip.has(p.div)) { skip.delete(p.div); protect.delete(p.div); blockWhy.delete(p.div); if (globalThis.__fxDebug) delete p.div.dataset.fxWhy; } } continue; }
         if (!opensDisplay && lowers < 2) continue;
         if (!opensDisplay && !continuesAbove(ln, { item: { height: widest.item.height, transform: left.item.transform } }, bx0, bx1)) continue;
         // A TABLE's reason is given up only above a display: a wordy cell's
@@ -4564,6 +4575,8 @@ export class TypographyEngine {
         const p = row[n];
         if (skip.has(p.div) || numeric(p)) continue;
         if (p.item.str.trim().split(/\s+/).length > 6) continue; // "<Method> w <variant> [20]" is five
+        // ...nor does it open on a list's number.
+        if (/^\d{1,2}[.)]\s/.test(p.item.str.trim())) continue;
         // A label names; three lowercase words running are a sentence's.
         if ((p.item.str.match(/(?:^|\s)[a-zà-ÿ]{2,}(?=[\s.,;:]|$)/g) ?? []).length >= 3) continue;
         if ((n > 0 && !wide(row[n - 1], p)) || (n < row.length - 1 && !wide(p, row[n + 1]))) continue;

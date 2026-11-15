@@ -187,8 +187,27 @@ async function capturePaper(name) {
       // sleep, the shutter fired mid-emphasis and the overlay showed body text
       // as untinted — i.e. it manufactured exactly the "body wrongly skipped"
       // finding this capture exists to detect.
-      for (let i = 0; i < 25; i++) { await sleep(300); const ok = await ev(`(()=>{const d=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;return !!(d&&d.childElementCount)})()`).catch(() => false); if (ok) break; }
-      await settleOn(p);
+      // ...and, first, for the page's own word that it is finished (the
+      // engine's data-fx-pass and the annotator's data-fx-ann, as
+      // allprobes.mjs waits): canvas painted, pass done, annotated. A page of
+      // large figures paints for half a minute and gets its text layer only
+      // then — the fixed waits below photographed three pages of one paper
+      // blank or unprocessed, and a reader could say nothing about them. Up
+      // to 150 s; without the signal (an old build) after 12 s, the waits
+      // below as before.
+      let said = false;
+      for (let i = 0; i < 600 && !said; i++) {
+        const st = await ev(`(()=>{const pv=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});const d=pv?.textLayer?.div;
+          return { said: !!d && pv.renderingState===3 && d.dataset.fxPass==="done" && d.dataset.fxAnn==="1", signal: !!document.querySelector(".textLayer[data-fx-pass]") };})()`).catch(() => null);
+        said = !!st?.said;
+        if (!said && i >= 48 && st && !st.signal) break;
+        if (!said) await sleep(250);
+      }
+      if (said) await sleep(350);
+      else {
+        for (let i = 0; i < 25; i++) { await sleep(300); const ok = await ev(`(()=>{const d=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1})?.textLayer?.div;return !!(d&&d.childElementCount)})()`).catch(() => false); if (ok) break; }
+        await settleOn(p);
+      }
       await ev(OVERLAY_ON);
       const clip = await ev(`(()=>{const pv=window.PDFViewerApplication.pdfViewer.getPageView(${p - 1});const r=pv.div.getBoundingClientRect();return {x:Math.max(0,r.left),y:Math.max(0,r.top),width:Math.min(r.width, innerWidth),height:Math.min(r.height, innerHeight)};})()`);
       const shot = await send("Page.captureScreenshot", { format: "png", clip: { ...clip, scale: 1.4 } });
