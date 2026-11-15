@@ -8401,3 +8401,101 @@ has not been told about; four runs in a row measure that page alike (254
 spans). Final sweep: 34/34, 6.4 min, 574 of 575 pages settled on the page's
 signal; against the previous full sweep only the three retracted table
 labels moved. `npm test`: 344 pass.
+
+### R69, fifth pass: the final tree read again (2026-11-15)
+
+All 298 pages of the sixteen new papers were captured on the fourth pass's
+tree and read by eleven readers in batches of about thirty pages, each
+keeping a notes file page by page (the first read lost findings to evicted
+images). Twenty-odd findings; two were regressions from the fourth pass's own
+rules, caught here and not by the probes:
+
+- the numeric-row label rule kept a paragraph's last words in the OTHER
+  column when they shared a baseline with a table row ("… FLOPs).", two
+  words of a sentence with a subscript before them). A label is not a
+  sentence's end, not a continuation of the line above, not three lowercase
+  words running, and stands clear of every item on its row, the small ones
+  too. (A five-token method name is a label: the cap is six.)
+- the clause-over-a-display release gave back a fraction's numerator
+  ("<name> − <name>"): a clause carries no operator of its own.
+
+And from the read itself:
+
+- **Footnotes joined to the paragraph above.** The block rule reads a
+  block's average size; a note set a point under the body at the body's
+  leading is part of the body's block (thirteen rows averaging 9.7 on 10).
+  By rows now: the small lines at a column's foot up to the first body-size
+  line, in the page's last 30%, under body text, when the note announces
+  itself (a marker item of its own before its first word, a number,
+  "Copyright") or stands a wider skip under the text. Four notes on four
+  papers; the block rule's "lowest" is by column, too.
+- **Numbered list items read as headings** (the second of five steps kept,
+  the rest emphasised; three papers): not a heading when the item numbered
+  one less or one more starts at the same x nearby — or as far in from the
+  other column's edge, across the column break — in the body's weight, and
+  the line is a sentence, not Title Case (IEEE's "1) <Two Words>"
+  subsubsections stand two to a page as list items do; the first version
+  released four of them on a regression paper, and the diff showed it).
+- **An italic closing sentence** above the next heading is prose when it
+  runs to its period with four lowercase words.
+- **A caption crosses the centre by its words**: items either side of the
+  centre a word's space apart, where two columns stand a gutter apart. The
+  first pass's "crosses, not touches" had cut a full-width caption's right
+  half loose.
+- **A caption beside its table** (a narrow block in the right of the
+  column, the table's rows on its baselines) is followed in its own strip.
+- **A connective among a display row's glyphs** ("for i > 1", "at t = t₀").
+
+Left open, each seen by a reader on this tree: one "Proof." lead of four in
+one appendix; a full-width note under a table's bottom rule; a paragraph's
+last two words at the head of a column after a page break; a three-word
+clause above a display whose words are all capitalised; a two-letter name in
+a derivative's numerator; a listing's one-word label; an italic variable in
+an inline hexadecimal expression; one five-word span kept as `split-word`
+because the kept math letter after it abuts the span's own trailing space.
+
+### R69, the original papers read on the final tree (2026-11-15)
+
+The changed pages of the new papers were re-captured and re-read: fifteen of
+sixteen fixes confirmed as intended on the page; the sixteenth is the two
+one-line italic list leads below.
+
+The fourteen original papers and the four regression papers (273 pages) were
+captured on the fifth pass's tree and given to ten readers. Nine of them
+were cut off by a usage limit part-way; their per-page notes survive. Read:
+229 pages. NOT read, and not to be taken as clean: the short ACM paper
+p5-6, the stamped IEEE conference paper p5-6, the four-page dissertation
+abstract (all), the IEEE journal paper p10-13, 5GCVerif p10-15, the first
+regression paper p5-13, UC-Scheme p12-18, the Computer Modern article
+p27-28, the third regression paper p9-15. The capture harness also failed
+on three pages of the 44 MB paper (not rendered, or photographed before
+their pass): `review-capture.mjs` still waits on the clock, and should take
+`allprobes`' settle.
+
+What the readers reported on those papers was checked against v1.4.8 in a
+worktree, span by span, before anything was touched:
+
+- **One regression of this round**, fixed: an IEEE numbered italic
+  subsubsection ("3) <Title Case Words>:") at the foot of a column was given
+  back as a paragraph's line by the tail test. An italic line under a one-
+  or two-digit label is a heading whatever stands above it; and the tail
+  test no longer takes a line under a HEADING for its continuation.
+- **The rest predate this round** — identical at v1.4.8 — and are left as
+  found, for a round of their own: wordy cells' wrapped lines in two ruled
+  tables emphasised (5GCVerif); the second line of two wrapped headings
+  emphasised; underlined run-in leads longer than five words, or closing
+  on a product name, emphasised beside siblings that are kept (5GShield);
+  a paragraph's last line above a figure kept as the figure's (three
+  papers); list items and a paragraph beside a table kept with it on one
+  appendix page (ACL); lines carrying circled step numbers not candidates
+  (by design: vector art); a bold IEEE abstract kept (by design: bold
+  face); italic identifiers in two pseudocode listings and operator names
+  in inline formulas ("log log", "exp(") emphasised.
+
+Open on the new papers after the last read: two one-line italic leads of a
+six-item list kept as run-ins where the four that wrap are processed; a
+bold-led "N. Question:" line of a list; a paragraph's two last words at the
+head of a column.
+
+Final tree: 34/34 pass `allprobes` (8.1 min with other work running);
+`npm test` 344 pass.

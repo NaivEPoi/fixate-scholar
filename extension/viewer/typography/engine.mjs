@@ -3447,6 +3447,11 @@ export class TypographyEngine {
         // full line starts well inside it.
         // (Its first WORD: a list item's bullet stands left of its text.)
         if (lead.item.transform[4] > Math.min(...bandPrev.filter((p) => /[A-Za-zÀ-ɏ]{2}/.test(p.item.str)).map((p) => p.item.transform[4])) + h * 1.5) return false; // a bullet set in the line's own item is a height and a bit
+        // ...and it is TEXT, not a heading: a heading that wraps fills its
+        // first line and does not end there either, and its second line was
+        // given back as "the paragraph's" (three headings on the original
+        // papers, found by the read of the final tree, not by the probes).
+        if (bandPrev.some((p) => skip.has(p.div) && /^(?:line-head|head-wrap|blk-heading|runin)/.test(blockWhy.get(p.div) || ""))) return false;
         const prevText = lineText(bandPrev);
         if (/[.!?:][”’"')\]]*\s*$/.test(prevText)) return false;
         // Prose by its words — or, where names and years leave it few ("…
@@ -3733,7 +3738,8 @@ export class TypographyEngine {
           if (labelRun.length < band.length && lowerWords(labelRun) <= 3 && lowerWords(band) > 3 && !listItem && !paraTail && sorted.indexOf(lead) === 0) {
             for (const p of labelRun) { skip.add(p.div); dbg(p.div, "line-head"); }
           } else
-          if (paraTail && !/^(?:[A-Z]|[IVX]{1,5})\.(?:\s|$)/.test(leadStr)) { /* the paragraph's own last line (continuesAbove) */ }
+          // (An italic line under a one- or two-digit label is IEEE's numbered subsubsection whatever stands above it: "3) <Title Case Words>:" at the foot of a column was given back as a paragraph's line — found by the read of the final tree.)
+          if (paraTail && !/^(?:[A-Z]|[IVX]{1,5})\.(?:\s|$)/.test(leadStr) && !(isItalic(lead) && /^\d{1,2}[.)]\s/.test(leadStr))) { /* the paragraph's own last line (continuesAbove) */ }
           else if (((lowerWords(band) <= 3 && !listItem) || italicHead || shortNumbered) && !listSibling) {
             // A NUMBERED RUN-IN heading shares its line with the paragraph it
             // opens ("2.3.1. Latency overhead.  Table 5 shows the measured …").
