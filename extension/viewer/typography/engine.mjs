@@ -3584,7 +3584,7 @@ export class TypographyEngine {
         // Before the chain below, and no part of it.
         const afterNum = /^\d+(?:\.\d+)*\.?$/.test(leadStr) ? its.slice(a + 1).find((p) => p.item.str.trim()) : null;
         // (not in a list: there the italic sentence is the item, and its one-line siblings were kept while the ones that wrap were processed.)
-        if (afterNum && isItalic(afterNum) && afterNum.item.transform[4] < bx1 && !listSibling) skipItalicLead(ln, its, its.indexOf(afterNum), bx0, bx1);
+        if (afterNum && isItalic(afterNum) && afterNum.item.transform[4] < bx1 && (!listSibling || /^[^.:]{1,60}:/.test(its.slice(its.indexOf(afterNum), its.indexOf(afterNum) + 4).map((p) => p.item.str).join("")))) skipItalicLead(ln, its, its.indexOf(afterNum), bx0, bx1);
         if (isAlgoLead(leadStr)) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
@@ -4540,6 +4540,10 @@ export class TypographyEngine {
         }
         for (const p of words) {
           if (!skip.has(p.div)) continue;
+          // ...but not a theorem environment's italic lead on it: the line
+          // was kept whole by a block before the lead rules saw it, and given
+          // back whole, "Proof." went with its sentence (found by the read).
+          if (isItalic(p) && /^(?:Proof|Remarks?|Note|Examples?|Definition|Claim|Lemma|Theorem|Corollary|Proposition|Sketch)\b[^.]{0,40}\.$/.test(p.item.str.trim())) { dbg(p.div, "runin-ital"); continue; }
           skip.delete(p.div);
           protect.delete(p.div);
           blockWhy.delete(p.div);

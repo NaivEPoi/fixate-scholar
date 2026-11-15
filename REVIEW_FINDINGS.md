@@ -8499,3 +8499,46 @@ head of a column.
 
 Final tree: 34/34 pass `allprobes` (8.1 min with other work running);
 `npm test` 344 pass.
+
+### R69, the read completed (2026-11-15)
+
+`review-capture.mjs` now waits for the page's own finished mark, as
+`allprobes.mjs` does: the three pages of the 44 MB paper it had photographed
+blank or unprocessed are captured processed, and 273 pages capture in 5.1
+min where they took about 15.
+
+With it, the 44 pages the interrupted readers had not reached were read, the
+heavy paper was read whole, and the pages the last fixes changed were read
+again. **Every page of all 34 papers has now been read on this round's
+tree** (the last two one-word changes after the final read are confirmed by
+`wordshot`, not by a reader).
+
+From those reads, on the new papers:
+
+- an italic sentence opening a list item is the item's prose whether it
+  wraps or not (two one-line leads of six were kept); a lead that ends in a
+  colon is still a run-in, in a list too;
+- a list item may open on a bold word; a numeric-row label does not open on
+  a list's number;
+- a paragraph's last words at the head of a column are given back;
+- a clause over its display may be all capitalised words;
+- a line given back to its paragraph leaves a theorem environment's italic
+  lead on it kept: v1.4.8 kept the whole line "Proof. Using …" as a figure's
+  label, the release gave it back whole, and "Proof." went with it.
+
+A table-note rule (a small line under a table's last row) was tried and
+withdrawn the same hour: it took an abstract under a journal's banner for a
+note.
+
+Checked against v1.4.8 with `wordshot`, and identical there — not this
+round's, left for a round of their own: an italic run-in lead after a
+three-part section number ("4.3.2 <Two Words>.") and one of five appendix
+leads emphasised; two lines of a first-page footnote emphasised; the items
+listed under "the original papers read" above.
+
+Open on the new papers, each a word or a formula-led line: a two-letter
+name in a derivative's numerator; a listing's one-word label; an italic
+variable in an inline hexadecimal expression; a five-word span kept as
+`split-word`; two formula-led lines above displays.
+
+Final tree: 34/34 pass `allprobes` in 6.7 min; `npm test` 344 pass.
