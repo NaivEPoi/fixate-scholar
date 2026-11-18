@@ -1608,7 +1608,11 @@ export class TypographyEngine {
           const a = prev.transform[4] + (prev.width ?? 0);
           const bx = r.items[k].item.transform[4];
           if (bx - a > Math.max(prev.height || 8, r.items[k].item.height || 8) * 1.4 &&
-              !(gutterX != null && a < gutterX && bx > gutterX)) g.push([a, bx]);
+              // (The gutter gap TOUCHES the centre: a right column that starts
+              // exactly on the page's centre line, or a pixel left of it, left
+              // a gap ending at the centre, not past it — it seeded a run down
+              // both columns of an appendix page's prose, a public paper.)
+              !(gutterX != null && a < gutterX + 2 && bx > gutterX - 2 && a < bx)) g.push([a, bx]);
         }
         return g;
       };
@@ -1788,9 +1792,15 @@ export class TypographyEngine {
     // both columns of body text on that page were skipped — the page rendered
     // with no emphasis at all. Counting only body-height lines is what the
     // table cannot outvote, because its rows are not at body height.
+    // Body height: the page's dominant one, or the DOCUMENT's — on an appendix
+    // page that is mostly a table set a size down, the table's size is the
+    // page's dominant one and the two columns of prose under it were counted
+    // by neither vote (gutterRows 0: the gutter then seeded a "table" down
+    // both columns, a public paper).
+    const atBody = (h) => (h >= dominant * 0.9 && h <= dominant * 1.15) || (bodyH > 0 && h >= bodyH * 0.9 && h <= bodyH * 1.15);
     let gutterRows = 0;
     for (const ln of lines) {
-      if (ln.h < dominant * 0.9 || ln.h > dominant * 1.15) continue;
+      if (!atBody(ln.h)) continue;
       for (let k = 1; k < ln.items.length; k++) {
         const a = ln.items[k - 1].item.transform[4] + (ln.items[k - 1].item.width ?? 0);
         const bx = ln.items[k].item.transform[4];
@@ -1815,8 +1825,11 @@ export class TypographyEngine {
     // column's first item (run-in leads, headings) saw only the left one.
     let bodyLines = 0;
     let bodyCross = 0;
+    // (At the DOCUMENT's body height where it is known: on a page whose
+    // dominant size is its table's, the table's rows are no body lines.)
+    const atDocBody = (h) => (bodyH > 0 ? h >= bodyH * 0.9 && h <= bodyH * 1.15 : atBody(h));
     for (const ln of lines) {
-      if (ln.h < dominant * 0.9 || ln.h > dominant * 1.15) continue;
+      if (!atDocBody(ln.h)) continue;
       bodyLines++;
       if (ln.items.some((p) => p.item.transform[4] < centerX && p.item.transform[4] + (p.item.width ?? 0) > centerX)) bodyCross++;
     }
@@ -3477,7 +3490,11 @@ export class TypographyEngine {
         // Prose by its words — or, where names and years leave it few ("…
         // (2005); … and … (2009);"), by ending on a comma, a semicolon or a
         // broken word.
-        if (lowerWords(bandPrev) < 3 && !/[,;]\s*$|[A-Za-zÀ-ɏ]-\s*$/.test(prevText)) return false;
+        // (A word with its comma is a word: "… trusted sources, e.g., <Four
+        // Capitalised Words>" has two bare lowercase words and three with
+        // "sources," — its paragraph's last line was kept as a heading.)
+        if (lowerWords(bandPrev) < 3 && !/[,;]\s*$|[A-Za-zÀ-ɏ]-\s*$/.test(prevText) &&
+            prevText.split(/\s+/).filter((w) => /^[a-zà-ÿ]{2,}[.,;:]?$/.test(w)).length < 3) return false;
         const widest = bandPrev.reduce((a, b) => ((b.item.width || 0) > (a.item.width || 0) ? b : a));
         return !isBold(widest) && !isSpecial(widest) && Math.abs((widest.item.height || h) - h) <= h * 0.05;
       }
@@ -4553,6 +4570,35 @@ export class TypographyEngine {
     // this face, its sentence unfinished), starts at the column's edge, holds
     // two lowercase words and no cell's gap. Only its words are given back;
     // the mathematics on it stays where it was.
+    // A caption's NOTE: a line right under a caption, set a size below both
+    // the caption and the body ("An overview of … is presented in Section
+    // 3.4", left-aligned under a centred "Figure 2: …"). It is no line of
+    // the caption by its face or its alignment, and was processed as body
+    // above the paragraph that resumes under it. Up to three such lines.
+    if (bodyH > 0) {
+      const sidesN = twoColumn ? [[vx0, centerX], [centerX, vx0 + pageW]] : [[vx0, vx0 + pageW]];
+      for (const [bx0, bx1] of sidesN) {
+        const inBand = (l) => l.items.filter((p) => p.item?.transform && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str) && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1);
+        let run = 0; // note lines taken under the current caption
+        let above = null; // the nearest line above in the band: { y, cap: caption height or 0 }
+        for (const ln of lines) {
+          const band = inBand(ln);
+          if (!band.length) continue;
+          const hh = Math.max(...band.map((p) => p.item.height || 0));
+          const isCap = band.every((p) => blockWhy.get(p.div) === "caption");
+          if (isCap) { above = { y: ln.y, cap: hh }; run = 0; continue; }
+          const note = above && above.cap > 0 && run < 3 && above.y - ln.y > 0 && above.y - ln.y <= hh * 2.2 &&
+            hh <= bodyH * 0.95 && hh <= above.cap * 0.95 && hh >= bodyH * 0.75 && !band.some((p) => skip.has(p.div));
+          if (note) {
+            for (const p of band) { skip.add(p.div); dbg(p.div, "caption"); }
+            // (the small capitals and marks riding on it too)
+            for (const p of ln.items) if (p.item?.transform && p.item.transform[4] >= bx0 && p.item.transform[4] < bx1 && !skip.has(p.div) && (p.item.height || 0) <= hh) { skip.add(p.div); dbg(p.div, "caption"); }
+            above = { y: ln.y, cap: above.cap };
+            run++;
+          } else above = null;
+        }
+      }
+    }
     const TAIL_RELEASE = new Set(["row-eqn", "blk-eqn", "blk-figlabel", "table-aligned", "line-formula", "line-cells", "line-cells-wide", "table-region", "blk-heading", "fig-body"]);
     for (const ln of lines) {
       const sides = twoColumn ? [[vx0, centerX], [centerX, vx0 + pageW]] : [[vx0, vx0 + pageW]];
