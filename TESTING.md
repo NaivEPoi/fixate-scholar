@@ -213,6 +213,7 @@ node test/sweep-diff.mjs <sweepA> <sweepB>  # what moved between two sweeps
   reference parser over the whole cached corpus with no browser, in under a
   minute.
 - `node test/diag-perf.mjs --url= --cold [--throttle=4]` — `--throttle`
+`node test/diag-perf.mjs --url=<pdf> --cold --pages=14 --dpr=1.5 --gpu` runs headless on the machine's GPU (no window; the GL renderer is printed): GPU-backed canvases at a display's pixel ratio, the closest to a real display short of `--headful`.
   slows the renderer's CPU (CDP), a slower machine's conditions; the per-page
   batch timings are always printed, and `--trace` says how much of the
   layout tree each long task had dirty.

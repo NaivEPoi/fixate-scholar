@@ -52,6 +52,11 @@ const CLICK = process.argv.includes("--click");
 const HEADFUL = process.argv.includes("--headful");
 // --switch-font=<mode>: with reading mode on and settled, switch the reading
 // font and measure the re-process of every rendered page it causes.
+// --gpu: headless, but on the machine's real GPU (no window is opened): the
+// page's canvases are GPU-backed as on a display, so a readback pays the
+// GPU-to-CPU copy a headless software canvas never does. The GL renderer is
+// printed, so a run that fell back to software rendering says so.
+const GPU = process.argv.includes("--gpu");
 const SWITCH = arg("switch-font", "");
 const ENABLE = CLICK
   ? `(() => { document.getElementById("fxToggleButton").click(); return true; })()`
@@ -83,6 +88,7 @@ const launched = Date.now();
 const browser = spawn(browserPath("edge"), [
   "--remote-debugging-port=0", ...(HEADFUL ? [] : ["--headless=new"]), "--no-first-run",
   ...(DPR ? [`--force-device-scale-factor=${DPR}`] : []),
+  ...(GPU ? ["--enable-gpu", "--ignore-gpu-blocklist", "--use-angle=d3d11", "--enable-gpu-rasterization", "--enable-accelerated-2d-canvas"] : []),
   "--no-default-browser-check", "--disable-sync", "--window-size=1400,2000",
   `--user-data-dir=${userDataDir}`, `--load-extension=${extensionDir}`,
   `--disable-extensions-except=${extensionDir}`, "about:blank",
@@ -115,7 +121,12 @@ const DONE = `(() => {
 const STALLS_START = `(() => { globalThis.__fxGaps = []; let last = performance.now();
   const tick = (t) => { globalThis.__fxGaps.push(t - last); last = t; if (globalThis.__fxGaps.length < 5000) requestAnimationFrame(tick); };
   requestAnimationFrame(tick); globalThis.__fxPerf = true; globalThis.__fxReadbacks = []; return true; })()`;
+async function printGpu() {
+  const r = await ev(`(() => { try { const c = document.createElement("canvas"); const gl = c.getContext("webgl"); const e = gl && gl.getExtension("WEBGL_debug_renderer_info"); const pc = window.PDFViewerApplication?.pdfViewer?.getPageView(0)?.canvas; return (gl ? (e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : "webgl, renderer hidden") : "no webgl") + "; dpr " + devicePixelRatio + "; window " + innerWidth + "x" + innerHeight + (pc ? "; page canvas " + pc.width + "x" + pc.height : ""); } catch (e) { return "error " + e.message; } })()`);
+  console.log(`  GL renderer: ${r}`);
+}
 async function printStalls() {
+  await printGpu();
   const fx = await ev(`(() => { const g = globalThis.__fxGaps || [], r = globalThis.__fxReadbacks || [];
     return { frames: g.length, worst: Math.max(0, ...g), over50: g.filter((x) => x > 50).length, over100: g.filter((x) => x > 100).length,
       readbacks: r.length, readMs: r.reduce((a, b) => a + b.ms, 0), readMax: Math.max(0, ...r.map((b) => b.ms)), readMpx: r.reduce((a, b) => a + b.px, 0) / 1e6,

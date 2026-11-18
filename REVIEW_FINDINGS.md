@@ -8711,3 +8711,26 @@ full sweep; every sweep diff was confined to the pages named.
 Nothing reported on the 34 public papers is open. Final tree: 34/34 pass
 `allprobes` in 6.2 min; `npm test` 348 pass; `latexdiff.mjs` and
 `latexdiff.mjs --dark` pass.
+
+#### The stall fix measured on the machine's GPU (no window)
+
+`diag-perf.mjs --gpu` runs headless on the real GPU (ANGLE/D3D11; the GL
+renderer is printed, so a software fallback shows): the page's canvases are
+GPU-backed at the display's pixel ratio, which a plain headless run's are
+not. One public paper, 14 pages scrolled cold at device pixel ratio 2, three
+runs each:
+
+| | worst frame gap | gaps > 100 ms | long tasks | longest |
+|---|---|---|---|---|
+| v1.4.8 | 150 ms (all three) | 4-5 | 19-20, 1590-1674 ms | 135-144 ms |
+| this tree | 84-117 ms | 0-3 | 19, 1212-1376 ms | 83-115 ms |
+| reading mode off | 83-100 ms | 0 | 7-8, 451-513 ms | 85-94 ms |
+
+The longest task left is a rendering frame (paint about 30 ms, layout about
+25 ms) of the size the stock viewer has by itself. Layout/paint containment
+on the processed spans or on the text layer, and dropping the emphasis
+shadow, each measured within run-to-run noise: not adopted.
+
+Not measured: an on-screen window on the real display (`--headful`), which
+needs the user's go-ahead on this machine. The GPU-backed run has the
+display's canvases and pixel ratio but no on-screen compositing.
