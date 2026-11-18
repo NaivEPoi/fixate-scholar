@@ -8654,3 +8654,30 @@ a run-in heading; two lines of a first-page note; list items beside a table
 on one appendix page.
 
 Final tree: 34/34 pass `allprobes` in 6.9 min; `npm test` 346 pass.
+
+### R70 — prose in a dark colour came out part coloured, part black
+
+Reported from a screenshot: paragraphs set in a dark green were redrawn with
+some letters green and some in the reading colour, often the bold prefix one
+and the rest of the word the other.
+
+- **Cause.** A span whose letter-wide windows disagree is coloured letter by
+  letter, and a single letter must show strong colour (chroma 120) because it
+  keeps one edge's subpixel tint. A dark colour (forest green, maroon, navy)
+  sits at that bar: each letter fell on one side or the other. A span of black
+  beside a dark colour was not split at all and took one colour whole, and a
+  one-word item in a dark colour was drawn black.
+- **Fix.** A letter under the bar carries its reading at the span's bar when
+  it has no tint's shape (`weak`); its word decides — it joins a strongly read
+  letter of the same hue, or the word is coloured when half its letters read
+  so, and in a word three fifths coloured the unread letters follow. Shades
+  of one ink read apart are merged. In a span that reads coloured as a whole
+  the windows count at the span's bar, so dark-beside-black is seen as two
+  colours. A short span takes a colour of 80 in no tint's shape.
+- **Check.** `node test/latexdiff.mjs --dark`: a synthetic page of dark green
+  and maroon prose with link-blue words inside one text item and black beside
+  them; every piece of every word must be drawn in the colour of the ink
+  under it. Before: 389 of 538 pieces wrong at 100%. After: 0 at 100/150/200/
+  300% and while scrolling. The red/blue revision page (`latexdiff.mjs`)
+  passes unchanged; 34/34 public papers pass with no reason changed, and two
+  dark-link pages were looked at (links navy, punctuation black).

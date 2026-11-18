@@ -6835,7 +6835,11 @@ export class TypographyEngine {
                       for (let c = Math.max(a + 2, cut - reach); c <= Math.min(col.length - 1, cut + reach); c++) if (col[c] < col[cut]) cut = c;
                     }
                     const w = darkness(s, x0 + a, x0 + cut, y0, y1, step, b0, b1);
-                    if (w.n >= 4) seen.add(hueOf(inkColour(w.d, LOCAL_CHROMA, false)));
+                    // (In a span that reads coloured as a whole, a window
+                    // under the letter's bar counts at the span's, in a shape
+                    // no tint has: dark green beside black is two colours,
+                    // and was one — the black words went green.)
+                    if (w.n >= 4) seen.add(hueOf(inkColour(w.d, LOCAL_CHROMA, false) ?? (rgb ? inkColour(w.d, SPAN_CHROMA, true) : null)));
                     a = cut;
                   }
                 }
@@ -6869,6 +6873,15 @@ export class TypographyEngine {
                 const memo = key ? this.#inkMemo.get(span) : undefined;
                 if (memo && memo.canvas === canvas && memo.key === key) return memo.ink;
                 const ink = inkOf(wide, 2, 12, need, false);
+                // A short span in a DARK colour (one word of forest green, a
+                // text item of its own) is under the strong bar and was drawn
+                // black beside its green line. What a few black letters leave
+                // over is a tint's shape; a colour of 80 in no tint's shape
+                // is the ink's.
+                if (!ink.color && need === LOCAL_CHROMA && ink.n >= 12) {
+                  const dark = inkColour(ink.d, 80, true);
+                  if (dark) ink.color = `rgb(${dark.join(", ")})`;
+                }
                 inkReads++;
                 if (key) this.#inkMemo.set(span, { canvas, key, ink: { color: ink.color, mixed: ink.mixed } });
                 return ink;
@@ -6909,11 +6922,28 @@ export class TypographyEngine {
                       // Read strictly, and kept only where it agrees with the
                       // letter before it (colourRuns): "data," struck red stays
                       // red, the black comma after a green link digit black.
-                      const own = inkColour(ink.d, LOCAL_CHROMA, true);
+                      // (A dark colour reads below the letter's bar: the
+                      // span's bar, in a shape no tint has, speaks for it.)
+                      const own = inkColour(ink.d, LOCAL_CHROMA, true) ?? inkColour(ink.d, SPAN_CHROMA, true);
                       chars.push({ punct: true, color: ink.n >= 4 && own ? `rgb(${own.join(", ")})` : null, n: ink.n });
-                    } else chars.push(ink.n >= 4 ? { color, n: ink.n } : {});
+                    } else if (ink.n < 4) chars.push({});
+                    else if (color) chars.push({ color, n: ink.n });
+                    else {
+                      // Below the letter's bar: a dark colour (forest green,
+                      // maroon) reads there, and so does what one edge's tint
+                      // leaves on black. `weak` is the reading at the span's
+                      // bar in a shape no tint has; the letter's word decides
+                      // (colourRuns). `unsure`: neither that nor plainly grey.
+                      const w = inkColour(ink.d, SPAN_CHROMA, true);
+                      const raw = inkColour(ink.d, 0, false);
+                      const ch = { color: null, n: ink.n };
+                      if (w) ch.weak = `rgb(${w.join(", ")})`;
+                      else if (raw && Math.max(...raw) - Math.min(...raw) >= 45) ch.unsure = true;
+                      chars.push(ch);
+                    }
                   }
                 }
+                if (globalThis.__fxDebug) span.dataset.fxChars = chars.map((c) => (c.space ? "_" : c.punct ? "p" : !("color" in c) ? "?" : c.color ? "C" : c.weak ? "w" : c.unsure ? "u" : "n") + (c.n ?? "")).join(" "); // test introspection
                 return colourRuns(chars);
               };
               // `exact`: judge a rect of ANY width — the symbol probe below

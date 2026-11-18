@@ -122,3 +122,25 @@ test("opening punctuation takes the colour of the letter after it", () => {
   // ...but not when it reads black itself.
   assert.deepEqual(colourRuns([...chars("KK "), P(null), ...chars("BB")]), [{ from: 4, to: 6, color: BLUE }]);
 });
+
+test("a dark colour read below the letter's bar is decided by its word", () => {
+  const G = "rgb(0, 112, 58)";
+  const weak = (n = 40) => ({ color: null, weak: G, n });
+  const grey = (n = 40) => ({ color: null, n });
+  // every letter weak: the span is that colour throughout
+  assert.deepEqual(colourRuns([weak(), weak(), weak(), { space: true }, weak(), weak()]), { uniform: G });
+  // a black word beside a dark green one: one run, over the green word only
+  const runs = colourRuns([grey(), grey(), grey(), { space: true }, weak(), weak(), weak()]);
+  assert.equal(runs.length, 1);
+  assert.deepEqual([runs[0].from, runs[0].to], [4, 7]);
+  // one stray weak letter in a black word is not a colour
+  assert.deepEqual(colourRuns([grey(), weak(), grey(), grey()]), []);
+});
+
+test("weak letters join the strongly read letter of their word, and shades of one ink are one colour", () => {
+  const out = colourRuns([
+    { color: null, weak: "rgb(0, 70, 12)", n: 40 }, { color: null, weak: "rgb(0, 96, 40)", n: 40 },
+    { color: null, n: 10 }, { color: "rgb(0, 150, 100)", n: 40 },
+  ]);
+  assert.ok(out.uniform);
+});

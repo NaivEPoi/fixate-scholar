@@ -39,11 +39,23 @@ const WORDS = "the reader's line keeps (each) word in view, while the column mov
 let wi = 0;
 const words = (n) => Array.from({ length: n }, () => WORDS[wi++ % WORDS.length]).join(" ");
 const esc = (t) => t.replace(/[()\\]/g, (m) => "\\" + m);
-const COL = { k: "0 0 0", r: "1 0 0", b: "0 0 1" };
+const COL = { k: "0 0 0", r: "1 0 0", b: "0 0 1", g: "0 0.45 0.22", m: "0.5 0 0.1" };
+// --dark: prose set in a DARK colour throughout (an author's note in forest
+// green, a maroon one), with bright link-blue words inside one text item and
+// black beside it. A dark colour sits near the bar a letter-wide reading must
+// clear, and read letter by letter it came out green here and black there.
+const DARK = process.argv.includes("--dark");
 // Each line: runs of [colour, word count] — or [colour, literal text]; red
 // runs are struck, blue underlined. The literal "," and "." are black marks
 // right after a coloured word.
-const PATTERNS = [
+const PATTERNS = DARK ? [
+  [["g", 9]],
+  [["g", 4], ["b", 2], ["g", 3]],
+  [["m", 9]],
+  [["k", 4], ["g", 5]],
+  [["g", 3], ["k", ","], ["g", 4], ["b", 1]],
+  [["m", 3], ["b", 2], ["m", 3]],
+] : [
   [["k", 3], ["r", 3], ["k", 2], ["b", 3]],
   [["r", 9]],
   [["k", 2], ["b", 4], ["k", ","], ["k", 3]],
@@ -74,7 +86,7 @@ function buildPdf() {
     pieces.forEach(([col, text], i) => {
       const w = width(text.trimEnd());
       if (col === "r") bars.push({ kind: "strike", x0: x, x1: x + w, y: y + SIZE * 0.25, col });
-      if (col === "b") bars.push({ kind: "under", x0: x, x1: x + w, y: y - 1.5, col });
+      if (col === "b" && !DARK) bars.push({ kind: "under", x0: x, x1: x + w, y: y - 1.5, col });
       x += width(text) + (gapAfter(i) ? (GAP * SIZE) / 1000 : 0);
     });
   }
@@ -112,21 +124,42 @@ const AUDIT = (bars) => `(() => {
   const cx = c2.getContext('2d'); cx.drawImage(cv, 0, 0);
   const D = cx.getImageData(0, 0, cv.width, cv.height).data;
   const px = (X, Y) => { const i = (Y * cv.width + X) * 4; return [D[i], D[i + 1], D[i + 2]]; };
-  const cls = (r, g, b) => r > 150 && g < 110 && b < 110 ? 'red' : b > 150 && r < 110 && g < 110 ? 'blue' : 'n';
+  const cls = (r, g, b) => r > 150 && g < 110 && b < 110 ? 'red' : b > 150 && r < 110 && g < 110 ? 'blue' : g - Math.max(r, b) > 35 && r < 110 ? 'green' : r - Math.max(g, b) > 60 ? 'maroon' : 'n';
   // A thin bar is anti-aliased across rows, so it is told by its hue, not its depth.
   const hue = (r, g, b) => r - Math.max(g, b) > 60 ? 'red' : b - Math.max(r, g) > 60 ? 'blue' : 'n';
+  // --dark: by the dominant channel; under 50 of chroma it is black.
+  const dcls = (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) < 50 ? 'n' : b >= r && b >= g ? 'blue' : g >= r ? 'green' : 'maroon';
   const rgb = (s) => (s.match(/[0-9]+/g) || []).map(Number);
   const inkUnder = (rc) => {
-    const h = { red: 0, blue: 0, n: 0 }; let ink = 0;
+    const h = { red: 0, blue: 0, green: 0, maroon: 0, n: 0 }; let ink = 0; const d = [0, 0, 0];
     const y0 = Math.round((rc.top + rc.height * 0.3 - cr.top) * ky), y1 = Math.round((rc.bottom - rc.height * 0.3 - cr.top) * ky);
     for (let Y = y0; Y < y1; Y++) for (let X = Math.round((rc.left - cr.left) * kx); X < Math.round((rc.right - cr.left) * kx); X++) {
       const [R, G, B] = px(X, Y);
       if (0.299 * R + 0.587 * G + 0.114 * B > 170) continue;
       ink++; h[cls(R, G, B)]++;
+      d[0] += 255 - R; d[1] += 255 - G; d[2] += 255 - B;
     }
+    // --dark: by the channels' summed darkness, as a dark colour's thin strokes
+    // are mostly antialiased edge and class as nothing pixel by pixel.
+    if (${DARK}) { const hi = Math.max(...d); inkUnder.last = d.map((v) => Math.round(255 * (1 - v / hi))); return ink < 12 ? null : dcls(...inkUnder.last); }
     return ink < 12 ? null : h.red > ink * 0.4 ? 'red' : h.blue > ink * 0.4 ? 'blue' : 'n';
   };
-  const out = { spans: 0, runs: 0, bad: [], points: 0, covered: [] };
+  const out = { spans: 0, runs: 0, bad: [], points: 0, covered: [], pieces: 0, badPieces: [] };
+  // --dark: every piece of a word (a text node's run of letters) is drawn in the
+  // colour of the ink under it — a neutral hole inside a coloured word is in no
+  // run, so the run check below cannot see it.
+  if (${DARK}) for (const sp of pg.querySelectorAll('.textLayer > span')) {
+    if (!sp.querySelector('.fx-b')) continue;
+    const tw = document.createTreeWalker(sp, NodeFilter.SHOW_TEXT); let n;
+    while ((n = tw.nextNode())) { const re = /[a-z]{3,}/g; let m; while ((m = re.exec(n.data))) {
+      const rg = document.createRange(); rg.setStart(n, m.index); rg.setEnd(n, m.index + m[0].length);
+      const got = inkUnder(rg.getBoundingClientRect());
+      if (!got) continue;
+      out.pieces++;
+      const want = dcls(...rgb(getComputedStyle(n.parentElement).color));
+      if (want !== got && out.badPieces.length < 400) out.badPieces.push([m[0], want, got, inkUnder.last.join(" "), getComputedStyle(n.parentElement).color, sp.textContent.slice(0, 40), sp.style.getPropertyValue("--fx-ink"), [...sp.querySelectorAll("fx-ink")].map((q) => q.textContent + "=" + q.style.color).join("|").slice(0, 200), sp.dataset.fxChars]);
+    } }
+  }
   for (const sp of pg.querySelectorAll('.textLayer > span')) {
     const b = sp.querySelector('.fx-b');
     if (!b) continue;
@@ -135,7 +168,7 @@ const AUDIT = (bars) => `(() => {
       const got = inkUnder(sp.getBoundingClientRect());
       if (!got) continue;
       out.spans++;
-      const want = cls(...rgb(getComputedStyle(b).color));
+      const want = (${DARK} ? dcls : cls)(...rgb(getComputedStyle(b).color));
       if (want !== got) out.bad.push(['span', sp.textContent.slice(0, 20), want, got]);
       continue;
     }
@@ -147,7 +180,7 @@ const AUDIT = (bars) => `(() => {
         const got = inkUnder(rc);
         if (!got) continue;
         out.runs++;
-        const want = cls(...rgb(el.style.color || getComputedStyle(el).color));
+        const want = (${DARK} ? dcls : cls)(...rgb(el.style.color || getComputedStyle(el).color));
         if (want !== got) {
           out.bad.push(['run', el.textContent.slice(0, 20), want, got]);
           if (DEBUG && !out.cdbg) {
@@ -272,9 +305,18 @@ try {
     }
     await sleep(2500);
     const out = JSON.parse(await ev(AUDIT(bars)));
+    // --shot=<png>: the checked page as rendered, for a look at it.
+    if (arg("shot", null)) {
+      const clip = JSON.parse(await ev(`(() => { const r = document.querySelector('.page[data-page-number="2"]').getBoundingClientRect(); return JSON.stringify({ x: r.left, y: Math.max(0, r.top), width: r.width, height: Math.min(r.height, 700), scale: 2 }); })()`));
+      const shot = await send("Page.captureScreenshot", { format: "png", clip });
+      (await import("node:fs")).writeFileSync(arg("shot").replace(/\.png$/, `-${run.zoom}${run.jitter ? "j" : ""}.png`), Buffer.from(shot.data, "base64"));
+    }
     if (process.argv.includes('--debug')) console.log('   passes', await ev(`JSON.stringify((globalThis.__fxTiming || []).filter((t) => t.page === 2).map((t) => [t.total, t.chunks.filter((c) => c > 0).length, t.chunks.join(',')]))`));
     const label = `zoom ${run.zoom}${run.jitter ? ", scrolling" : ""}`;
-    const ok = out.spans + out.runs > 20 && out.points > 40 && !out.bad.length && !out.covered.length;
+    const ok = DARK
+      ? out.pieces > 200 && !out.bad.length && !out.badPieces.length
+      : out.spans + out.runs > 20 && out.points > 40 && !out.bad.length && !out.covered.length;
+    if (DARK) { console.log(`   pieces ${out.pieces}, ${out.badPieces.length} in the wrong colour`); const tally = {}; for (const [, w, g] of out.badPieces) tally[`drawn ${w}, ink ${g}`] = (tally[`drawn ${w}, ink ${g}`] || 0) + 1; console.log("   ", JSON.stringify(tally)); for (const b of out.badPieces.slice(0, 8)) console.log("   piece", JSON.stringify(b)); }
     if (!ok) failed++;
     console.log(`${ok ? "PASS" : "FAIL"} ${label}: colour ${out.spans} spans + ${out.runs} runs, ${out.bad.length} wrong; bars ${out.points} points, ${out.covered.length} covered`);
     for (const b of out.bad.slice(0, 6)) console.log("   colour", JSON.stringify(b));

@@ -58,7 +58,9 @@ export function inkColour(d, need, local = false) {
  * `chars`: one entry per character of the span's text, in order —
  * `{ space: true }` for whitespace, `{ color, n }` for a glyph sampled from `n`
  * inked pixels (`color` null when its ink is black or grey), `{}` when it had
- * too little ink to say, and `{ punct: true, color }` for punctuation.
+ * too little ink to say, and `{ punct: true, color }` for punctuation. A glyph
+ * whose colour is null may carry `weak` (a colour it reads below the bar a
+ * single letter must clear) or `unsure` (neither that nor clearly grey).
  *
  * Punctuation is mostly its neighbours' edges, so its own reading is weak: it
  * takes the colour of the letter before it — after it, opening a word: "(new"
@@ -93,6 +95,40 @@ export function colourRuns(chars) {
     const c = cls[i];
     if (c?.n === 1 && chars[i].n < FAINT && palette.some((p) => p !== c && shadeOf(c.rgb, p.rgb))) cls[i] = undefined;
   }
+  // A DARK colour — forest green, maroon — reads below the bar a single letter
+  // must clear (a letter keeps one edge's tint, so only strong colour counts
+  // there), and letter by letter such prose came out coloured here and black
+  // there. A letter under the bar carries its reading as `weak`, and its WORD
+  // decides: beside a strongly read letter of that colour it joins it; with
+  // none, the word is coloured when half its letters read so. In a word three
+  // fifths coloured, the letters that could not be read (faint, or neither
+  // clearly grey) take its colour too.
+  // (A weak reading is a paler or darker one of the same ink: the same
+  // channels lightest and darkest, within 100 a channel.)
+  const order = (rgb) => rgb.indexOf(Math.max(...rgb)) * 3 + rgb.indexOf(Math.min(...rgb));
+  const near = (rgb, p) => p.rgb.every((v, k) => Math.abs(v - rgb[k]) < SAME) ||
+    (order(rgb) === order(p.rgb) && p.rgb.every((v, k) => Math.abs(v - rgb[k]) < 100));
+  for (let a = 0; a < chars.length; ) {
+    if (chars[a].space) { a++; continue; }
+    let b = a;
+    while (b < chars.length && !chars[b].space) b++;
+    const letters = [];
+    for (let i = a; i < b; i++) if (!chars[i].punct && "color" in chars[i]) letters.push(i);
+    const weak = letters.filter((i) => !cls[i] && chars[i].weak);
+    if (weak.length) {
+      const strong = [...new Set(letters.map((i) => cls[i]).filter(Boolean))];
+      if (strong.length) {
+        for (const i of weak) { const rgb = parse(chars[i].weak); const c = strong.find((q) => near(rgb, q)); if (c) cls[i] = c; }
+      } else if (weak.length * 2 >= letters.length) {
+        for (const i of weak) cls[i] = snap(chars[i].weak);
+      }
+    }
+    const col = letters.filter((i) => cls[i]);
+    if (col.length && col.length * 5 >= letters.length * 3 && col.every((i) => cls[i] === cls[col[0]])) {
+      for (const i of letters) if (!cls[i] && (chars[i].n < FAINT || chars[i].weak || chars[i].unsure)) cls[i] = cls[col[0]];
+    }
+    a = b;
+  }
   // Punctuation: the letter before it (after it, opening a word), if it reads
   // that colour itself.
   for (let i = 0; i < chars.length; i++) {
@@ -119,6 +155,16 @@ export function colourRuns(chars) {
     for (let j = i + 1; j < chars.length && r === undefined; j++) if (!chars[j].space) r = cls[j];
     cls[i] = l !== undefined && l === r ? l : null;
   }
+  // Shades of one ink read apart (a thin letter darker than its word) are one
+  // colour: the smaller joins the larger, or each letter came out its own green.
+  const byN = palette.slice().sort((p, q) => q.n - p.n);
+  const into = new Map();
+  for (const c of byN) {
+    const mean = c.sum.map((v) => v / c.n);
+    const big = byN.find((q) => q !== c && !into.has(q) && q.n >= c.n && byN.indexOf(q) < byN.indexOf(c) && near(mean, { rgb: q.sum.map((v) => v / q.n) }));
+    if (big) into.set(c, big);
+  }
+  if (into.size) for (let i = 0; i < cls.length; i++) if (cls[i] && into.has(cls[i])) cls[i] = into.get(cls[i]);
   const css = (c) => `rgb(${c.sum.map((v) => Math.round(v / c.n)).join(", ")})`;
   const glyphs = cls.filter((c, i) => !chars[i].space);
   if (glyphs.length && glyphs.every((c) => c && c === glyphs[0])) return { uniform: css(glyphs[0]) };
