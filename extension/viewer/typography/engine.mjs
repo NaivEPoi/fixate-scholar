@@ -1640,7 +1640,12 @@ export class TypographyEngine {
         // gutter (a description cell running through it): there is no other
         // column's text on it to spare, and splitting it at the centre left
         // the half-row beyond the cut to be emphasised.
-        if (r.items.some((p) => p.item.transform[4] < splitX - 2 && p.item.transform[4] + (p.item.width ?? 0) > splitX + 2 && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str))) return r.items;
+        // (...when what stands past the centre is set at the cell's own size:
+        // a figure's small label that ends a few units past the centre has
+        // the other column's BODY line beside it, a size up — two lines of
+        // that paragraph were taken with the figure's rows, a public paper.)
+        if (r.items.some((p) => p.item.transform[4] < splitX - 2 && p.item.transform[4] + (p.item.width ?? 0) > splitX + 2 && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str) &&
+            r.items.every((q) => q.item.transform[4] <= splitX || !/[A-Za-zÀ-ɏ]{2}/.test(q.item.str) || Math.abs((q.item.height || 0) - (p.item.height || 0)) <= (p.item.height || 8) * 0.12))) return r.items;
         let cut = null;
         for (let k = 1; k < r.items.length; k++) {
           const a = r.items[k - 1].item.transform[4] + (r.items[k - 1].item.width ?? 0);
@@ -1769,8 +1774,17 @@ export class TypographyEngine {
               }
             }
           }
+          // A row's one item of words, ending on a colon, beside nothing but
+          // bare glyphs: the sentence that leads into a display whose tall
+          // brackets share its row ("… the following update equations:" over
+          // two bracketed sums; a public paper), not a cell. A table's row
+          // carries words or numbers in its other cells.
           for (let k = i; k <= bestLast; k++) {
-            const seg = segItems(sorted[k], bestBand);
+            const seg0 = segItems(sorted[k], bestBand);
+            const wordy0 = seg0.filter((p) => /[A-Za-zÀ-ɏ]{2}/.test(p.item.str));
+            const runLead = wordy0.length === 1 && lowerWords(wordy0) >= 4 && /:$/.test(wordy0[0].item.str.trim()) &&
+              seg0.every((p) => p === wordy0[0] || !/[A-Za-zÀ-ɏ0-9]/.test(p.item.str)) ? wordy0[0] : null;
+            const seg = seg0.filter((p) => p !== runLead);
             for (const p of seg) { skip.add(p.div); dbg(p.div, "table-aligned"); }
             // Feed the region pass: a two-column table's single-sided rows (a
             // tall cell's 3rd+ continuation line — "Modify a random byte")
@@ -2653,7 +2667,21 @@ export class TypographyEngine {
           // ICML layout — two such rows emphasised inside equation (2)). An
           // inequality or membership glyph, which no sentence carries, a few
           // name spans and not one function word.
-          const relNamed = prose > 0 && !sentencey && /[≤≥≈∈≠]/.test(rowText) && names.length > 0 && names.length <= 3 &&
+          // (Not a paragraph's own justified line: one flush with the prose
+          // rows right above and below it at both edges is running text that
+          // holds an inline set definition — two words and "T = { … ≤ … },"
+          // were kept mid-paragraph. A display is indented, centred or short.)
+          const flushInProse = (() => {
+            const i = b.rows.indexOf(r), up = b.rows[i - 1], dn = b.rows[i + 1];
+            if (!up || !dn) return false;
+            const ext = (row) => {
+              const xs = row.items.filter((p) => p.item.str.trim());
+              return [Math.min(...xs.map((p) => p.item.transform[4])), Math.max(...xs.map((p) => p.item.transform[4] + (p.item.width ?? 0)))];
+            };
+            const [u0, u1] = ext(up), [c0, c1] = ext(r), [d0] = ext(dn), h = r.items[0].item.height || 8;
+            return proseWords(up) >= 4 && proseWords(dn) >= 3 && Math.abs(u0 - c0) < 2 && Math.abs(d0 - c0) < 2 && Math.abs(u1 - c1) < h;
+          })();
+          const relNamed = prose > 0 && !sentencey && !flushInProse && /[≤≥≈∈≠]/.test(rowText) && names.length > 0 && names.length <= 3 &&
             names.every((p) => nameSpan(p, r.items)) && !FUNCTION_WORD.test(rowTrim);
           // (A row with a SENTENCE BOUNDARY in it — a closing bracket, a period,
           // then a bracketed or capitalised word — is text whatever its "="
@@ -3333,6 +3361,11 @@ export class TypographyEngine {
         // "Dr.". This scan runs BEFORE the anchored one and returns first, so
         // guarding only the anchored site left the common path unguarded.
         if (!isTerminator || ABBREVIATION.test(t)) continue;
+        // The heading's own label ("C.", "IV.") ends in a period without being
+        // a title: a lettered heading that fills its first line and wraps kept
+        // its letter and had its two title lines processed (as a numbered
+        // label, which carries no letter, never was).
+        if (j === 0 && /^(?:[A-Z]|[IVX]{1,5})[.:]$/.test(t)) continue;
         const tail = band.slice(j + 1);
         const tailText = tail.map((p) => p.item.str).join(" ").trim();
         // ...or the face changes after it: an italic run-in title and its
@@ -3745,7 +3778,23 @@ export class TypographyEngine {
             for (const p of run) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-ital"); }
           }
         }
-        if (afterNum && isItalic(afterNum) && afterNum.item.transform[4] < bx1 && (!listSibling || romanAfterItalic || /^[^.:]{1,60}:/.test(its.slice(its.indexOf(afterNum), its.indexOf(afterNum) + 4).map((p) => p.item.str).join("")))) skipItalicLead(ln, its, its.indexOf(afterNum), bx0, bx1);
+        // ...unless a sibling item's italic sentence fills its line and wraps:
+        // then the list sets each item's first SENTENCE in italics, and the
+        // ones short enough to end on their first line are no titles either
+        // (a numbered list of six pieces of advice — two one-line leads kept
+        // beside four that wrap and were processed; a public paper).
+        const italicSentenceSibling = () => {
+          const m = bandMeasure(bx0, bx1), h = lead.item.height || 8;
+          return m > 0 && lines.some((l2) => {
+            if (l2 === ln) return false;
+            const xs = l2.items.filter((p) => p.item.str.trim()).sort((p, q) => p.item.transform[4] - q.item.transform[4]);
+            const i0 = xs.findIndex((p) => Math.abs(p.item.transform[4] - lead.item.transform[4]) < 2 && /^\d+[.)]$/.test(p.item.str.trim()));
+            if (i0 < 0) return false;
+            const rest = xs.slice(i0 + 1).filter((p) => p.item.transform[4] < bx1 && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str));
+            return rest.length > 0 && rest.every((p) => isItalic(p)) && Math.max(...rest.map((p) => p.item.transform[4] + (p.item.width ?? 0))) >= m - h * 1.5;
+          });
+        };
+        if (afterNum && isItalic(afterNum) && afterNum.item.transform[4] < bx1 && (!listSibling || (romanAfterItalic && !italicSentenceSibling()) || /^[^.:]{1,60}:/.test(its.slice(its.indexOf(afterNum), its.indexOf(afterNum) + 4).map((p) => p.item.str).join("")))) skipItalicLead(ln, its, its.indexOf(afterNum), bx0, bx1);
         // A run-in title after a multi-level section number, set in a face of
         // its own and closed by a period before the paragraph: "4.3.2 <Two
         // Words>. Empirically, …", "A.1.2 <Three Words>. Currently, …". The
@@ -4252,6 +4301,11 @@ export class TypographyEngine {
             const ln = lineOfDiv.get(p.div);
             if (!ln) return false;
             const row = ln.items.filter((q) => q.item.str.trim() && q.item.transform[4] >= reg.x0 - 2 && q.item.transform[4] <= reg.x1 + 2).sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+            // (A row of cells is a few items. A proof's line of words between
+            // inline formulas is a dozen, with a gap wherever a tall operator
+            // stands: two such lines between two aligned rows were kept whole,
+            // a public paper.)
+            if (row.length > 4) return false;
             for (let k = 1; k < row.length; k++) {
               const gap = row[k].item.transform[4] - (row[k - 1].item.transform[4] + (row[k - 1].item.width ?? 0));
               if (gap > (p.item.height || 8) * 1.4 && !(twoColumn && row[k - 1].item.transform[4] + (row[k - 1].item.width ?? 0) < centerX + 2 && row[k].item.transform[4] > centerX - 2)) return true;
