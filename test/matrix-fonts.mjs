@@ -10,18 +10,25 @@
 // whatever was in it, so "jams = 0, narrow = 0 across all 18 combinations"
 // (R39) was a number somebody had to read rather than a check that could fail.
 // Usage: node test/matrix-fonts.mjs [paper] [page] [--browser=chrome|edge] [--zoom=N] [--find="text"]
+//        node test/matrix-fonts.mjs --url=<pdf> --page=N [--label=name]   # any document, headless Edge
+// With --url the run is headless (no window) on a port and profile of its own,
+// so test/sweep.mjs can drive it over the public corpus; screenshots are named
+// by --label. Without it, the original two-paper run in a visible window.
 import { spawn } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { browserPath, profileDir } from "./lib/env.mjs";
+import { browserPath, profileDir, devtoolsPort, killBrowser } from "./lib/env.mjs";
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const opt = (n) => process.argv.slice(2).find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
+const URLV = opt("url") ?? null;
+const LABEL = (opt("label") ?? "doc").replace(/[^A-Za-z0-9._-]/g, "_");
 const FILTER = POS[0] ?? "USENIX (code + algorithms)";
-const PAGE = parseInt(POS[1] ?? "14", 10);
+const PAGE = parseInt(opt("page") ?? POS[1] ?? "14", 10);
 const ZOOMV = parseFloat(process.argv.slice(2).find((a) => a.startsWith("--zoom="))?.slice(7) ?? "1.25");
-const BROWSER = process.argv.slice(2).find((a) => a.startsWith("--browser="))?.slice(10) ?? "chrome";
+const BROWSER = process.argv.slice(2).find((a) => a.startsWith("--browser="))?.slice(10) ?? (URLV ? "edge" : "chrome");
 const NEEDLE = JSON.stringify(process.argv.slice(2).find((a) => a.startsWith("--find="))?.slice(7) ?? "We address");
 const PAPERS = {
   "USENIX (baseline)": "https://yilud.me/usenixsecurity25-dong-yilu.pdf",
@@ -34,15 +41,17 @@ for (const fontMode of ["original", "atkinson", "inter", "literata", "lexend", "
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 mkdirSync(join(root, "test", "out", "matrix"), { recursive: true });
 const EXT = join(root, "extension");
-const PORT = 9226;
+let PORT = 9226;
+const UDD = URLV ? profileDir(`matrix-${LABEL}-${process.pid}`) : profileDir(`matrix-${BROWSER}`, { persistent: true });
+const SINCE = Date.now();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const http = async (p, m = "GET") => (await fetch(`http://127.0.0.1:${PORT}${p}`, { method: m })).json();
 
 const EXE = browserPath(BROWSER === "edge" ? "edge" : "chrome");
 const browser = spawn(EXE, [
-  `--remote-debugging-port=${PORT}`,
+  `--remote-debugging-port=${URLV ? 0 : PORT}`, ...(URLV ? ["--headless=new"] : []),
   ...(BROWSER === "edge" ? [`--load-extension=${EXT}`, `--disable-extensions-except=${EXT}`] : ["--enable-unsafe-extension-debugging"]),
-  `--user-data-dir=${profileDir(`matrix-${BROWSER}`, { persistent: true })}`,
+  `--user-data-dir=${UDD}`,
   "--no-first-run", "--no-default-browser-check", "--disable-sync",
   "--window-size=1500,1100", "--window-position=40,40", "about:blank",
 ], { stdio: "ignore" });
@@ -68,6 +77,7 @@ const connect = (url) => new Promise((resolve, reject) => {
 });
 
 try {
+  if (URLV) PORT = await devtoolsPort(UDD, SINCE);
   let version = null;
   for (let i = 0; i < 60 && !version; i++) { try { version = await http("/json/version"); } catch { await sleep(400); } }
   console.log("Browser:", version.Browser);
@@ -95,7 +105,8 @@ try {
   const tab = await http(`/json/new?about:blank`, "PUT");
   const p = await connect(tab.webSocketDebuggerUrl);
   await p.send("Page.enable");
-  await p.send("Page.navigate", { url: PAPERS[FILTER] });
+  const TARGET = URLV ?? PAPERS[FILTER];
+  await p.send("Page.navigate", { url: URLV ? `chrome-extension://${extId ?? new URL(swTarget.url).hostname}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(URLV)}` : TARGET });
   await sleep(5000);
   const ev = async (expr) => {
     const r = await p.send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
@@ -111,9 +122,9 @@ try {
       // (flaky Edge SW startup), go to the viewer directly — Edge permits
       // top-level navigation to the web-accessible viewer.html.
       const id = extId ?? new URL(swTarget.url).hostname;
-      await p.send("Page.navigate", { url: `chrome-extension://${id}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(PAPERS[FILTER])}` });
+      await p.send("Page.navigate", { url: `chrome-extension://${id}/vendor/pdfjs/web/viewer.html?file=${encodeURIComponent(TARGET)}` });
     } else {
-      await p.send("Page.navigate", { url: PAPERS[FILTER] });
+      await p.send("Page.navigate", { url: TARGET });
     }
     await sleep(4000);
     if (i === 3) throw new Error("viewer never loaded");
@@ -184,17 +195,17 @@ try {
       if (w) res.push(Math.abs(r.width - w));
       const key = Math.round(r.top / 4);
       if (!rows.has(key)) rows.set(key, []);
-      rows.get(key).push(r);
+      rows.get(key).push(Object.assign(r, { t: s.textContent.slice(0, 28), full: s.textContent }));
     }
-    let overlaps = 0;
+    let overlaps = 0; const pairs = [];
     for (const list of rows.values()) {
       list.sort((a, b) => a.left - b.left);
-      for (let k = 1; k < list.length; k++) if (list[k - 1].right > list[k].left + 2) overlaps++;
+      for (let k = 1; k < list.length; k++) if (list[k - 1].right > list[k].left + 2 && !/[¨´ˆ˜¯˘˙˚¸ˇ˝̀-ͯ]\s*$/.test(list[k - 1].full)) { overlaps++; if (pairs.length < 4) pairs.push([list[k - 1].t, list[k].t, Math.round(list[k - 1].right - list[k].left), Math.round(list[k - 1].top - list[k].top)]); }
     }
     res.sort((a, b) => a - b);
     const q = (f) => res.length ? Math.round(res[Math.min(res.length - 1, Math.floor(res.length * f))] * 100) / 100 : null;
     return { n: res.length, med: q(0.5), p90: q(0.9), max: q(1), jams, narrow,
-             gapMin: narrowest === null ? null : Math.round(narrowest * 1000) / 1000, overlaps };
+             gapMin: narrowest === null ? null : Math.round(narrowest * 10000) / 10000, overlaps, pairs };
   })()`;
 
   console.log("mode            weight  n   med    p90    max   jams narrow gapMin overlaps done");
@@ -235,20 +246,31 @@ try {
       String(done).padEnd(5),
       m.fxb,
     );
+    if (m.pairs?.length) console.log('   overlapping:', JSON.stringify(m.pairs));
     rows.push({ mode: combo.fontMode, weight: combo.boldWeight, n: m.n,
                 jams: m.jams, narrow: m.narrow, overlaps: m.overlaps, gapMin: m.gapMin });
     const clip = await ev(`(async () => {
       const v = window.PDFViewerApplication.pdfViewer;
       const div = v.getPageView(${PAGE - 1}).textLayer.div;
-      const t = [...div.querySelectorAll('span')].find(s => s.textContent.includes(${NEEDLE}));
+      // (the needle, or — on a paper that has no such words — the widest processed span: the layer's corner is often a figure)
+      const t = [...div.querySelectorAll('span')].find(s => s.textContent.includes(${NEEDLE})) ??
+        [...div.querySelectorAll('span[data-fx-done]')].reduce((a, s) => (!a || s.getBoundingClientRect().width > a.getBoundingClientRect().width ? s : a), null);
       if (t) { t.scrollIntoView({ block: 'center' }); await new Promise((r) => setTimeout(r, 1200)); }
       const r = t ? t.getBoundingClientRect() : div.getBoundingClientRect();
       return { x: Math.max(0, r.left - 12), y: Math.max(0, r.top - 12), width: 560, height: 300 };
     })()`);
     const shot = await p.send("Page.captureScreenshot", { format: "png", clip: { ...clip, scale: 2 } });
-    writeFileSync(join(root, "test", "out", "matrix", `${BROWSER}-${combo.fontMode}-${combo.boldWeight}.png`), Buffer.from(shot.data, "base64"));
+    writeFileSync(join(root, "test", "out", "matrix", `${URLV ? `${LABEL}-p${PAGE}` : BROWSER}-${combo.fontMode}-${combo.boldWeight}.png`), Buffer.from(shot.data, "base64"));
   }
-  const bad = rows.filter((r) => r.jams || r.narrow || r.overlaps || !r.n);
+  // Two things that are not the engine's doing:
+  // - a span ending on a spacing ACCENT ("L" + its double acute, the PDF's own
+  //   composition of an accented letter) is as wide as the accent's advance and
+  //   reaches over the letter it is set on, in the next span; the page renders
+  //   the name correctly (four public papers, every font, v1.4.8 alike);
+  // - in the ORIGINAL face the word gaps are the paper's own: a tightly set
+  //   journal column has gaps under 0.20 em on the canvas too. A jam (under
+  //   0.12 em) still fails there.
+  const bad = rows.filter((r) => r.jams || (r.narrow && r.mode !== "original") || r.overlaps || !r.n);
   for (const r of bad) {
     console.error(
       `  FAIL ${r.mode} ${r.weight}: jams=${r.jams} narrow=${r.narrow} ` +
@@ -265,4 +287,4 @@ try {
   console.log(`TOTALS: ${JSON.stringify({ combos: rows.length, failing: bad.length })}`);
   console.log("DONE");
 } catch (e) { console.error("matrix error:", e.message || e); process.exitCode = 1; }
-finally { try { browser.kill(); } catch {} await sleep(300); process.exit(process.exitCode ?? 0); }
+finally { try { URLV ? killBrowser(browser) : browser.kill(); } catch {} await sleep(300); if (URLV) { try { (await import("node:fs")).rmSync(UDD, { recursive: true, force: true }); } catch { /* still held */ } } process.exit(process.exitCode ?? 0); }

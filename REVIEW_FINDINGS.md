@@ -8750,3 +8750,28 @@ showed (a newly loaded font face laid out and repainted every rendered
 page's text in one frame, and an on-screen frame also composites it); the
 containment of off-screen layers removes them. One run each: the size of
 the difference, not its last digit, is the result.
+
+### R71 — fonts and weights, before 1.5.0
+
+The round's sweeps ran on the default settings only. Before the tag:
+
+- **Font × weight matrix** (`matrix-fonts.mjs`, now headless and drivable by
+  `sweep.mjs`): 6 faces × 3 weights on a body page of each of the 34 public
+  papers, 612 combinations. 610 pass. The two that do not are one word gap of
+  0.1996 em (bar: 0.20) on one page in Literata at 700 and 900 — a squeezed
+  line, the face's space times the fit's scale — identical at v1.4.8, left as
+  it is. The first run failed seven papers; six were the harness's criteria,
+  each checked against v1.4.8 (identical) and by eye: a span ending on a
+  spacing accent reaches over the letter the accent is set on (the page
+  renders the name correctly), and in the original face a tightly set
+  column's gaps are the paper's own.
+- **Style modes** (`stylemodes.mjs`): three papers pass (bundled face keeps
+  italics; the no-emphasis modes).
+- **Colour** (`latexdiff.mjs --dark` and plain, `--font=`/`--weight=`): all six
+  faces at four zooms and while scrolling, weights 500 and 900: pass. The
+  harness's hue classes were tightened twice on the way (a black word at
+  chroma 51 against a bar of 50; dark green reading green and blue level
+  under a reading face's shifted letter box).
+- **Stalls with a bundled face** (`diag-perf.mjs --gpu`): a cold scroll in
+  Inter 117 ms worst gap, Literata 167 ms (one run each; original 84-117);
+  a font switch over three rendered pages has no long task (worst gap 17 ms).

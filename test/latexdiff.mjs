@@ -16,6 +16,7 @@
 // had scrolled sampled colours from where its spans used to be.
 //
 // Usage: node test/latexdiff.mjs [--zooms=1,1.5,2,3] [--keep] [--debug] [--pdf-out=<file>]
+//        [--dark] [--font=atkinson|inter|literata|lexend|source-serif-4] [--weight=500|700|900] [--shot=<png>]
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { rmSync } from "node:fs";
@@ -128,7 +129,9 @@ const AUDIT = (bars) => `(() => {
   // A thin bar is anti-aliased across rows, so it is told by its hue, not its depth.
   const hue = (r, g, b) => r - Math.max(g, b) > 60 ? 'red' : b - Math.max(r, g) > 60 ? 'blue' : 'n';
   // --dark: by the dominant channel; under 50 of chroma it is black.
-  const dcls = (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) < 50 ? 'n' : b >= r && b >= g ? 'blue' : g >= r ? 'green' : 'maroon';
+  // (Blue leads green by 40: under a reading face a piece's box cuts the canvas
+  // glyphs, and what a cut edge's tint adds to dark green reads blue level with it.)
+  const dcls = (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) < 60 ? 'n' : b >= r && b >= g + 40 ? 'blue' : g >= r ? 'green' : b >= r ? 'blue' : 'maroon';
   const rgb = (s) => (s.match(/[0-9]+/g) || []).map(Number);
   const inkUnder = (rc) => {
     const h = { red: 0, blue: 0, green: 0, maroon: 0, n: 0 }; let ink = 0; const d = [0, 0, 0];
@@ -279,7 +282,8 @@ try {
       return r.result.value;
     };
     for (let i = 0; i < 60; i++) { if (await ev("!!window.PDFViewerApplication?.pdfDocument")) break; await sleep(250); }
-    await ev("globalThis.__fxDebug = true; new Promise((r) => chrome.storage.sync.set({ enabled: true }, r))");
+    // --font=<mode> --weight=<n>: the reading font and emphasis weight, set before the pass.
+    await ev(`globalThis.__fxDebug = true; new Promise((r) => chrome.storage.sync.set(${JSON.stringify({ enabled: true, ...(arg("font", null) ? { fontMode: arg("font") } : {}), ...(arg("weight", null) ? { boldWeight: Number(arg("weight")) } : {}) })}, r))`);
     await ev(`PDFViewerApplication.pdfViewer.currentScale = ${run.zoom}; PDFViewerApplication.page = 1; 1`);
     if (run.jitter) {
       // Page 2 starts its pass while it peeks in under page 1 — then jump to it.
