@@ -8776,7 +8776,7 @@ The round's sweeps ran on the default settings only. Before the tag:
   Inter 117 ms worst gap, Literata 167 ms (one run each; original 84-117);
   a font switch over three rendered pages has no long task (worst gap 17 ms).
 
-### R72 — the gate's visual read before 1.5.0 (in progress)
+### R72 — the gate's visual read before 1.5.0
 
 The plain lanes pass on both corpora (34/34 public, 37/37 private). The
 private skip-reason diff against v1.4.8 was 145 pages; all were captured
@@ -8822,6 +8822,58 @@ symbols; four single spans (a cell fragment after a coloured lead, a line
 of numbers with units, a history line, a name in an author block on a
 later page).
 
-Not yet done on this tree: the re-read of the pages changed since the
-first read, the option and console lanes, the full font matrix, the leak
-scan on the final commit.
+The second read. The 117 pages that changed since the first read (74
+private, 43 public) were captured and read again. Six lines were worse
+than at v1.4.8 and are fixed:
+- a lettered heading that fills its line and wraps: the run-in cut took
+  the label's own period for the title's end;
+- a justified paragraph line holding an inline set definition, read as a
+  named relation row;
+- body lines of one column on the rows of a figure in the other, when the
+  figure's small label ends a few units past the page centre (a row spans
+  the gutter only if what lies past the centre is the cell's own size);
+- a proof's lines of words between inline formulas, between two aligned
+  rows, kept as a table's interior (a row of cells is a few items);
+- the sentence leading into a display, on the row of its tall brackets,
+  taken with an aligned run of glyphs;
+- one-line italic first sentences of a numbered list kept as run-in
+  titles beside siblings that wrap and are processed.
+The other claims of that read were this round's improvements, lines
+identical at v1.4.8 (a cell's second lines in two tables, italic labels in
+a table, a sentence opening on "Table N" or "Algorithm N"), footnotes kept
+by design, or undecidable from the page (a table note that is a sentence,
+a plain lead before a colon).
+
+The lanes on the final engine, both corpora, two browsers at a time:
+
+| lane | public (34) | private (37) |
+|---|---|---|
+| plain, every page | 34 pass | 37 pass |
+| line-focus option, every page | 34 pass | 37 pass |
+| console, every page, viewer and service worker | 34 silent | 37 silent |
+| font matrix, 18 font and weight combinations | 612 of 612 | — |
+
+The gutter test above was first written as a distance in line heights; the
+reason diff of that run showed it releasing one cell of a full-width
+table, and the same-size test replaced it. Against that run the final
+diff changes one processed count — that cell, kept again — and otherwise
+only which table rule names a kept span (11 pages).
+
+The console lane first gave no verdict on one public paper: the viewer
+keeps only the last few pages' text layers, the paper ends in more pages
+of bibliography than that, and the harness counted processed spans after
+the walk — none left in the DOM. `test/console.mjs` now records what it
+saw while walking and takes the toggle check back to the best page it
+passed; the paper is silent and its emphasis returns in 0.3 s.
+
+The colour harness (`test/latexdiff.mjs`) passes dark and light. Its light
+run failed once at 300% — "a mask covers an underline" — and then on every
+run that opened at 300%, on v1.4.8 as well (10 of 10 on each tree). The
+harness, not the page: at that zoom the viewer caps the page's canvas and
+draws the part in view again on a detail canvas over it; the harness read
+the bars from the capped one, whose rows are 2.3 CSS px tall, and found a
+thin bar's ink a row below the bar. It now reads each point from the
+canvas on top and leaves points out of view unread (557 points read at
+300%, 1612 at 200%, all clear). Still as at v1.4.8, and not fixed: out of
+view at 300% a bar whose edge falls on a row boundary of the capped canvas
+has its ink one row past the cut, until the detail canvas is drawn there.

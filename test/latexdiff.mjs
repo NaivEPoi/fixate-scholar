@@ -199,24 +199,46 @@ const AUDIT = (bars) => `(() => {
   // its colour runs along, not a glyph's stroke — then ask whether a mask covers it.
   const masks = [...pg.querySelectorAll('.fx-mask > div')].map((m) => m.getBoundingClientRect());
   const vp = pv.viewport;
+  // At a high zoom the viewer caps the page's canvas and draws the part in
+  // view again, sharp, on a detail canvas over it. There the capped one is
+  // not what shows: its rows are over 2 CSS px tall and a thin bar's ink
+  // lands a row away from the bar. Read each point from the canvas on top.
+  const dcv = pv.detailView?.canvas, dcr = dcv?.width ? dcv.getBoundingClientRect() : null;
+  let dpx = null, dkx = 1, dky = 1;
+  if (dcr && dcr.width > 0 && dcr.height > 0) {
+    const c3 = document.createElement('canvas'); c3.width = dcv.width; c3.height = dcv.height;
+    const x3 = c3.getContext('2d'); x3.drawImage(dcv, 0, 0);
+    const D3 = x3.getImageData(0, 0, dcv.width, dcv.height).data;
+    dpx = (X, Y) => { const i = (Y * dcv.width + X) * 4; return [D3[i], D3[i + 1], D3[i + 2]]; };
+    dkx = dcv.width / dcr.width; dky = dcv.height / dcr.height;
+  }
+  out.onDetail = 0;
   for (const bar of ${JSON.stringify(bars)}) {
     const want = bar.col === 'r' ? 'red' : 'blue';
     for (let f = 0.1; f < 0.95; f += 0.1) {
       const [vx, vy] = vp.convertToViewportPoint(bar.x0 + (bar.x1 - bar.x0) * f, bar.y);
-      const X = Math.round(vx * cv.width / vp.width);
-      const yc = vy * cv.height / vp.height;
+      // The point on screen, by the capped canvas's own squeeze.
+      const px0 = cr.left + vx * cr.width / vp.width, py0 = cr.top + vy * cr.height / vp.height;
+      const top = dpx && px0 >= dcr.left + 6 && px0 <= dcr.right - 6 && py0 >= dcr.top + 8 && py0 <= dcr.bottom - 8;
+      // With a detail canvas up, a point off it is out of view: what is there
+      // is the capped canvas alone, redrawn sharp as soon as it scrolls in.
+      if (dpx && !top) { out.offView = (out.offView || 0) + 1; continue; }
+      const R = top ? { px: dpx, W: dcv.width, H: dcv.height, kx: dkx, ky: dky, left: dcr.left, tp: dcr.top, X: Math.round((px0 - dcr.left) * dkx), yc: (py0 - dcr.top) * dky }
+        : { px, W: cv.width, H: cv.height, kx, ky, left: cr.left, tp: cr.top, X: Math.round(vx * cv.width / vp.width), yc: vy * cv.height / vp.height };
+      const X = R.X, yc = R.yc, reach = Math.max(1, Math.round(4 * Math.max(1, R.kx)));
       let best = null;
-      for (let Y = Math.floor(yc - 6 * ky); Y <= Math.ceil(yc + 6 * ky); Y++) {
-        if (Y < 0 || Y >= cv.height || X < 0 || X >= cv.width) continue;
+      for (let Y = Math.floor(yc - 6 * R.ky); Y <= Math.ceil(yc + 6 * R.ky); Y++) {
+        if (Y < 0 || Y >= R.H || X - reach < 0 || X + reach >= R.W) continue;
         // A bar, not a glyph: its colour runs along the row.
         let run = 0;
-        for (let d = -4; d <= 4; d++) { const q = px(X + d, Y); if (hue(q[0], q[1], q[2]) === want) run++; }
-        if (run < 8) continue;
+        for (let d = -reach; d <= reach; d++) { const q = R.px(X + d, Y); if (hue(q[0], q[1], q[2]) === want) run++; }
+        if (run < 2 * reach) continue;
         if (best === null || Math.abs(Y - yc) < Math.abs(best - yc)) best = Y;
       }
       if (best === null) continue;
       out.points++;
-      const sx = cr.left + (X + 0.5) / kx, sy = cr.top + (best + 0.5) / ky;
+      if (top) out.onDetail++;
+      const sx = R.left + (X + 0.5) / R.kx, sy = R.tp + (best + 0.5) / R.ky;
       if (masks.some((m) => sx >= m.left && sx <= m.right && sy >= m.top && sy <= m.bottom)) {
         out.covered.push([bar.kind, Math.round(bar.y * 10) / 10, Math.round(f * 10) / 10]);
         if (DEBUG && !out.dbg) {
@@ -228,6 +250,13 @@ const AUDIT = (bars) => `(() => {
         }
       }
     }
+  }
+  // --debug: the canvas the bars were read from, and the detail canvas over it.
+  if (DEBUG) {
+    const dc = pv.detailView?.canvas, dr = dc?.getBoundingClientRect();
+    out.geo = { canvas: [cv.width, cv.height], box: [cr.left, cr.top, cr.width, cr.height].map((v) => Math.round(v * 10) / 10), viewport: [vp.width, vp.height].map(Math.round),
+      detail: dc ? [dc.width, dc.height, ...[dr.left, dr.top, dr.width, dr.height].map((v) => Math.round(v * 10) / 10)] : null,
+      masks: masks.length, scroll: [document.getElementById('viewerContainer').scrollLeft, document.getElementById('viewerContainer').scrollTop] };
   }
   return JSON.stringify(out);
 })()`;
@@ -322,9 +351,10 @@ try {
       : out.spans + out.runs > 20 && out.points > 40 && !out.bad.length && !out.covered.length;
     if (DARK) { console.log(`   pieces ${out.pieces}, ${out.badPieces.length} in the wrong colour`); const tally = {}; for (const [, w, g] of out.badPieces) tally[`drawn ${w}, ink ${g}`] = (tally[`drawn ${w}, ink ${g}`] || 0) + 1; console.log("   ", JSON.stringify(tally)); for (const b of out.badPieces.slice(0, 8)) console.log("   piece", JSON.stringify(b)); }
     if (!ok) failed++;
-    console.log(`${ok ? "PASS" : "FAIL"} ${label}: colour ${out.spans} spans + ${out.runs} runs, ${out.bad.length} wrong; bars ${out.points} points, ${out.covered.length} covered`);
+    console.log(`${ok ? "PASS" : "FAIL"} ${label}: colour ${out.spans} spans + ${out.runs} runs, ${out.bad.length} wrong; bars ${out.points} points${out.onDetail ? ` (on the detail canvas; ${out.offView || 0} out of view not read)` : ""}, ${out.covered.length} covered`);
     for (const b of out.bad.slice(0, 6)) console.log("   colour", JSON.stringify(b));
     for (const b of out.covered.slice(0, 6)) console.log("   covered", JSON.stringify(b));
+    if (out.geo) console.log("   geometry", JSON.stringify(out.geo));
     if (out.dbg) console.log("   debug", JSON.stringify(out.dbg));
     if (out.cdbg) console.log("   colour debug", JSON.stringify(out.cdbg));
     ws.close();

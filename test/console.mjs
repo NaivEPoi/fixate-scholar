@@ -199,9 +199,25 @@ try {
   if (total === 0) throw new Error("document failed to load (pagesCount remained 0)");
 
   const last = ALL ? total : Math.min(PAGES, total);
+  // What the walk saw on the way: the viewer keeps only the last few pages'
+  // text layers, so a document ending in more pages of bibliography than that
+  // has no processed span left in the DOM when the walk stops — and was
+  // scored "processed nothing" although every body page had been.
+  let walkDone = 0, walkBest = 0, walkBestN = 0;
   for (let p = 1; p <= last; p++) {
     await ev(`window.PDFViewerApplication.page = ${p}`);
     await sleep(1200);
+    if (FXOFF) continue;
+    const w = await ev(`(() => { let best = 0, n = 0;
+      const v = window.PDFViewerApplication.pdfViewer;
+      for (let i = 0; i < v.pagesCount; i++) {
+        const k = v.getPageView(i)?.textLayer?.div?.querySelectorAll(".fx-b").length ?? 0;
+        if (k > n) { n = k; best = i + 1; }
+      }
+      return { done: document.querySelectorAll(".textLayer span[data-fx-done]").length, best, n }; })()`).catch(() => null);
+    if (!w) continue;
+    walkDone = Math.max(walkDone, w.done);
+    if (w.n > walkBestN) { walkBestN = w.n; walkBest = w.best; }
   }
 
   // The page in view, once the engine has HANDLED it: every prose span
@@ -257,14 +273,17 @@ try {
   // lose, and there the check was blind — with re-processing disabled
   // outright it still passed 7 of 14 documents.
   if (!FXOFF) {
-    const best = await ev(`(() => { let best = 0, n = -1;
+    const live = await ev(`(() => { let best = 0, n = -1;
       const v = window.PDFViewerApplication.pdfViewer;
       for (let i = 0; i < v.pagesCount; i++) {
         const d = v.getPageView(i)?.textLayer?.div;
         const k = d ? d.querySelectorAll(".fx-b").length : -1;
         if (k > n) { n = k; best = i + 1; }
       }
-      return best; })()`);
+      return { best, n }; })()`);
+    // No emphasis on any page still rendered: go back to the best one the
+    // walk passed.
+    const best = live.n > 0 || !walkBest ? live.best : walkBest;
     if (best && best !== view) {
       view = best;
       await ev(`window.PDFViewerApplication.page = ${view}`);
@@ -324,7 +343,7 @@ try {
   const allowed = loud.length - bad.length;
   console.log(
     `${FILTER}: pages=${last}/${total} captured=${real.length} loud=${loud.length} allowed-upstream=${allowed} PROBLEMS=${bad.length}` +
-    (domState ? ` [DOM: bolded=${domState.bolded} processedSpans=${domState.processedSpans} refs=${domState.refsCount} cites=${domState.citesCount} fxOn=${domState.fxOn}]` : "") +
+    (domState ? ` [DOM: bolded=${domState.bolded} processedSpans=${domState.processedSpans} walk=${walkDone} refs=${domState.refsCount} cites=${domState.citesCount} fxOn=${domState.fxOn}]` : "") +
     (reprocessState ? ` [Reprocess: bolded=${reprocessState.bolded} fxOn=${reprocessState.fxOn} in-view=${reprocessMs === null ? "not back after 30 s" : `${(reprocessMs / 1000).toFixed(1)} s`}]` : ""),
   );
   if (ARGV.includes("--json")) {
@@ -393,7 +412,7 @@ try {
     }
     console.log(`  REPROCESS state: ${JSON.stringify(why)}`);
   }
-  if (!FXOFF && (!domState || domState.processedSpans === 0) && !process.exitCode) {
+  if (!FXOFF && (!domState || Math.max(domState.processedSpans, walkDone) === 0) && !process.exitCode) {
     // No verdict (75): the sweep retries it rather than scoring silence.
     console.log("  NO VERDICT — the engine processed no span of this document, so its console was not exercised");
     process.exitCode = 75;
