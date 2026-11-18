@@ -4570,6 +4570,19 @@ export class TypographyEngine {
     // this face, its sentence unfinished), starts at the column's edge, holds
     // two lowercase words and no cell's gap. Only its words are given back;
     // the mathematics on it stays where it was.
+    // An IDENTIFIER on a listing's assignment line: "<name> := 1", "<name> :=
+    // <name> * x (mod n)" with the name in the text italic, a word like any
+    // other to the candidate filter. The line carries an assignment sign and
+    // no prose beside its names (one lowercase word at most).
+    for (const ln of lines) {
+      const text = ln.items.map((p) => p.item?.str ?? "").join(" ");
+      if (!/:=|←/.test(text)) continue;
+      const names = ln.items.filter((p) => p.item?.transform && isItalic(p) && /^[A-Za-z][A-Za-z0-9_]*$/.test(p.item.str.trim()) && !skip.has(p.div));
+      if (!names.length) continue;
+      const rest = ln.items.filter((p) => p.item?.transform && !names.includes(p));
+      if (lowerWords(rest) > 1) continue;
+      for (const p of names) { skip.add(p.div); protect.add(p.div); dbg(p.div, "line-formula"); }
+    }
     // A caption's NOTE: a line right under a caption, set a size below both
     // the caption and the body ("An overview of … is presented in Section
     // 3.4", left-aligned under a centred "Figure 2: …"). It is no line of
@@ -7294,6 +7307,27 @@ export class TypographyEngine {
             doubled.add(a + 1);
           }
           const zones = rulePairs.filter((p) => (csize.get(chainOf.get(p.a)) || 0) >= 3 || doubled.has(p.a) || doubled.has(p.b));
+          // An ALGORITHM's ruled float — rule, "Algorithm N: title", rule, the
+          // steps, rule — is a listing from the rule under its title to the
+          // next rule of the same extent, however tall (a zone pairs rules a
+          // sixth of the page apart at most). Its steps are worded like
+          // sentences and were emphasised as prose, bullets and all.
+          const algoTitles = allPairs
+            .filter((q) => /^Algorithm\s+\d+\s*[:.]?/.test(q.div.textContent.trim()))
+            .map((q) => q.div.getBoundingClientRect()).filter((r) => r.width > 0);
+          for (const t of algoTitles) {
+            const tcx = (t.left + t.right) / 2;
+            const A = hRules.find((r) => r.top >= t.bottom - 3 * zoom && r.top - t.bottom <= t.height * 1.8 && r.left <= tcx && r.right >= tcx);
+            if (!A) continue;
+            const B = hRules.find((r) => r.top > A.bottom + 20 * zoom && Math.abs(r.left - A.left) <= 4 * zoom && Math.abs(r.right - A.right) <= 4 * zoom);
+            if (!B || B.top - A.bottom > pageHcss * 0.8) continue;
+            for (const pr of pairs) {
+              const r = pr.div.getBoundingClientRect();
+              if (!(r.width > 0)) continue;
+              const cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+              if (cx >= A.left && cx <= A.right && cy > A.bottom && cy < B.top) zoneDrops.add(pr.div);
+            }
+          }
           if (zones.length) {
             const byLine = new Map();
             for (const pr of pairs) {
@@ -7323,6 +7357,16 @@ export class TypographyEngine {
             });
             const lastExempt = new Map(); // zone index -> last exempt line key
             let keptByLine = null; // line key -> rects of spans the classifier kept (built on demand)
+            // A zone under an "Algorithm N" title (the ruled float: rule, title,
+            // rule, steps, rule) holds a listing: its steps are worded like
+            // sentences ("Set … for all … (clamp labeled points)") and passed
+            // as prose between two frames — one algorithm of a public paper
+            // was half emphasised beside another kept whole.
+            const algoZone = new Map();
+            const isAlgoZone = (zi, z) => {
+              if (!algoZone.has(zi)) algoZone.set(zi, algoTitles.some((r) => { const cx = (r.left + r.right) / 2; return cx >= z.x0 && cx <= z.x1 && r.top < z.yTop && z.yTop - r.bottom <= 30 * zoom; }));
+              return algoZone.get(zi);
+            };
             for (const key of entryKeys) {
               const group = byLine.get(key);
               const [zi, lineKey] = key.split(":").map(Number);
@@ -7392,7 +7436,7 @@ export class TypographyEngine {
                 right = Math.max(right, byX[i].right);
               }
               const exemptLine =
-                clearOfRules && !cellBorder && fromLeft && !colGap &&
+                clearOfRules && !cellBorder && fromLeft && !colGap && !isAlgoZone(zi, z) &&
                 ((lw >= 4 && gx1 - gx0 >= (z.x1 - z.x0) * 0.55) ||
                   (lw >= 2 && prev != null && lineKey - prev <= ZONE_CONT_LINES));
               if (exemptLine) lastExempt.set(zi, lineKey);

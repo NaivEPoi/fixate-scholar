@@ -8681,3 +8681,33 @@ and the rest of the word the other.
   300% and while scrolling. The red/blue revision page (`latexdiff.mjs`)
   passes unchanged; 34/34 public papers pass with no reason changed, and two
   dark-link pages were looked at (links navy, punctuation black).
+
+#### The single instances (after R70)
+
+Each was located again in a capture, fixed, and the page read after the
+full sweep; every sweep diff was confined to the pages named.
+
+- **Lists and a paragraph beside a table on an appendix page**: the page's
+  dominant height was its table's, so the two columns of body text under it
+  counted for neither the gutter vote nor the column vote, and the gutter
+  seeded an aligned "table" down both columns (17 spans processed on the
+  page; 61 after). Both votes read the document's body height; a gutter gap
+  may end on the centre line. The half-width caption on that page is a
+  caption again by the same change.
+- **A paragraph's last line above a run-in heading**: the line above held two
+  bare lowercase words and a third with its comma; a word with its comma
+  counts.
+- **A caption's second line**: it is a note under the caption, a size below
+  caption and body, left-aligned under a centred title. Up to three such
+  lines right under a caption are kept with it.
+- **One algorithm's steps emphasised**: an "Algorithm N" float is a listing
+  from the rule under its title to the next rule of the same extent, however
+  tall (23 spans on the page).
+- **Italic identifiers in two listings**: a lone italic name on a line with
+  an assignment sign and no prose beside it is kept.
+- **Two lines of a first-page note**: already kept by the footnote rule of
+  the fifth pass (every line reads `blk-footnote`); nothing to change.
+
+Nothing reported on the 34 public papers is open. Final tree: 34/34 pass
+`allprobes` in 6.2 min; `npm test` 348 pass; `latexdiff.mjs` and
+`latexdiff.mjs --dark` pass.
