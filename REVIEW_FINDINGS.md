@@ -8731,6 +8731,22 @@ The longest task left is a rendering frame (paint about 30 ms, layout about
 on the processed spans or on the text layer, and dropping the emphasis
 shadow, each measured within run-to-run noise: not adopted.
 
-Not measured: an on-screen window on the real display (`--headful`), which
-needs the user's go-ahead on this machine. The GPU-backed run has the
-display's canvases and pixel ratio but no on-screen compositing.
+The on-screen run on the real display follows below.
+
+#### The stall fix measured on the real display
+
+With the user's go-ahead for this run (2026-11-17): `diag-perf.mjs --cold
+--pages=14 --headful`, one visible window at a time on the real display
+(device pixel ratio 2, the machine's GPU), the same public paper, one run
+each, the window closed after each.
+
+| | worst frame gap | gaps > 100 ms | long tasks | longest |
+|---|---|---|---|---|
+| v1.4.8 | 284 ms | 10 | 18, 2595 ms | 265 ms |
+| this tree | 117 ms | 3 | 19, 1535 ms | 125 ms |
+
+On screen the old tree's stalls are about twice what the headless runs
+showed (a newly loaded font face laid out and repainted every rendered
+page's text in one frame, and an on-screen frame also composites it); the
+containment of off-screen layers removes them. One run each: the size of
+the difference, not its last digit, is the result.
