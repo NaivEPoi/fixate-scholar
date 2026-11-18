@@ -7,7 +7,7 @@
 // nothing, and its citations stayed black). Optional section label before it,
 // an optional colon or Japanese bracket pair around it.
 const HEADING = /^(?:[ivxlcdm]+[.\s]+|\d+[.\s]+|[A-Z][.\s]+)?【?(references|references and notes|notes and references|references cited|reference list|list of references|bibliography|works cited|literature cited|cited literature|literature|literatur|literaturverzeichnis|quellen|quellenverzeichnis|schrifttum|r[ée]f[ée]rences|r[ée]f[ée]rences bibliographiques|bibliographie|referencias|referencias bibliogr[áa]ficas|bibliograf[íi]a|refer[êe]ncias|riferimenti bibliografici|riferimenti|参考文献|引用文献|参照文献|參考文獻|参考资料|文献)】?\s*:?\s*$/i;
-const SECTION_AFTER = /^(?:[A-Z\d]+[.\s]+)?(appendix|acknowledg|supplementary|author contributions|funding|conflicts? of interest)/i;
+const SECTION_AFTER = /^(?:[A-Z\d]+[.\s]+)?(appendix|appendices|acknowledg|supplementary|author contributions|funding|conflicts? of interest)/i;
 const NUMERIC_MARKER = /^\[(\d{1,3})\]\s*/;
 const DOTTED_MARKER = /^(\d{1,3})\.\s+(?=\D)/;
 // BibTeX "alpha" style: author-initials + 2-digit year, optionally a "+" for

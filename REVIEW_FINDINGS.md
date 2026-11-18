@@ -8775,3 +8775,53 @@ The round's sweeps ran on the default settings only. Before the tag:
 - **Stalls with a bundled face** (`diag-perf.mjs --gpu`): a cold scroll in
   Inter 117 ms worst gap, Literata 167 ms (one run each; original 84-117);
   a font switch over three rendered pages has no long task (worst gap 17 ms).
+
+### R72 — the gate's visual read before 1.5.0 (in progress)
+
+The plain lanes pass on both corpora (34/34 public, 37/37 private). The
+private skip-reason diff against v1.4.8 was 145 pages; all were captured
+and read, about forty findings on thirty pages, and every flagged page was
+compared with v1.4.8 span by span to tell this round's regressions from
+older behaviour. Described by shape only.
+
+Regressions of this round, fixed:
+- a small-caps title's capital run before its reduced letters, and several
+  reduced words in one item (the block rule that used to take such titles
+  was confined to the first pages);
+- a lettered italic heading given back as the "tail" of the other column's
+  line on a page read as one column: the line above must start where the
+  candidate starts;
+- a multi-level number's run-in title when it is wider than the body text
+  on its line (the body face is the row's last wordy item's);
+- rows of nouns around a multiplication or membership sign read as named
+  quantities; a fraction's numerator read as a clause opening its display;
+- a cell's wrapped last line beside a citation cell, and a description
+  cell beside its symbol cell, given back as paragraph tails;
+- a table's note line once its page was read as two columns;
+- the italic lead of a list item numbered between two others;
+- the sentence after a labelled bold lead when its line ends on a math
+  letter a few units short of the measure.
+
+Older behaviour (identical at v1.4.8), fixed on request:
+- a bullet item's justified line set an item a word, kept as cells;
+- a short closing sentence on its own line under a heading's anchor;
+- words before an abbreviation set a letter an item, kept as a lead;
+- a sentence that opens on a bold "Algorithm N", kept as a listing line;
+- capitalised names with a parenthesised key and a bracketed label, kept
+  as formulas; a row ending on a broken word, kept as an equation row;
+- prose after a plural "Appendices" heading, kept as references;
+- a caption's legend lines; a wordy cell strictly between a table's rows;
+- column votes: rows with a gap away from the centre are no body lines,
+  and columns whose baselines do not pair are still two columns;
+- a bundled face squeezed to its line keeps a word gap of 0.205 em (the
+  one failing combination of the font matrix).
+
+Still as at v1.4.8: a page whose embedded figure carries a hidden text
+layer of its own; one table row whose two cells both mix words and
+symbols; four single spans (a cell fragment after a coloured lead, a line
+of numbers with units, a history line, a name in an author block on a
+later page).
+
+Not yet done on this tree: the re-read of the pages changed since the
+first read, the option and console lanes, the full font matrix, the leak
+scan on the final commit.

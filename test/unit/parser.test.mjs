@@ -1396,3 +1396,13 @@ test("an entry's year: its lettered year, and never a page or volume number", ()
   assert.deepEqual(entries.map((e) => e.year), ["2010", "2016b", "2004"]);
   for (const c of findCitations(doc[0].text)) assert.equal(resolveCitation(c.keys, entries).length, 1, c.keys.join());
 });
+
+test("a plural \"Appendices\" heading ends the bibliography too", () => {
+  const doc = [
+    ...NUMERIC_DOC,
+    ...lines(["Appendices", "A Extra tables", "Sentences under that heading that should be processed normally."], { startY: 500 }),
+  ];
+  const { body } = findReferencesBody(doc);
+  assert.equal(body.length, 6);
+  assert.ok(body.every((l) => !/ppendi|Extra|Sentences/.test(l.text)));
+});
