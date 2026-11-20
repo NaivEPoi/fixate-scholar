@@ -1399,9 +1399,82 @@ export class TypographyEngine {
       }
       if (gutterDivs.size) items = items.filter((p) => !gutterDivs.has(p.div));
     }
+    // A CLIPPED PAGE'S TEXT. A figure that is a cropped page of another
+    // document keeps that page's text in the text layer, clipped away on the
+    // canvas: lines in a face of their own lying across the body's lines,
+    // into the margins and off the page. Read as text they made the column
+    // under them a figure's body and joined its footnotes to their own lines
+    // (a private paper). Printed text does not lie on printed text: a face
+    // whose wordy items mostly overlap another face's wordy items is that
+    // layer, kept and left out of the geometry.
+    {
+      const wordy = items.filter((p) => !p.item.transform[1] && !p.item.transform[2] && (p.item.height || 0) >= 5 && /[A-Za-zÀ-ɏ]{3}/.test(p.item.str));
+      const order = wordy.slice().sort((a, b) => a.item.transform[5] - b.item.transform[5]);
+      const all = new Map(), hit = new Map();
+      for (const p of order) all.set(p.item.fontName, (all.get(p.item.fontName) || 0) + 1);
+      if (all.size > 1) {
+        const over = new Set();
+        for (let i = 0; i < order.length; i++) {
+          const A = order[i].item, ay = A.transform[5], ah = A.height, ax0 = A.transform[4], ax1 = ax0 + (A.width ?? 0);
+          for (let j = i + 1; j < order.length; j++) {
+            const B = order[j].item, by = B.transform[5];
+            if (by >= ay + ah) break;
+            if (B.fontName === A.fontName) continue;
+            const bx0 = B.transform[4], bx1 = bx0 + (B.width ?? 0);
+            const w = Math.min(ax1, bx1) - Math.max(ax0, bx0), h = Math.min(ay + ah, by + B.height) - by;
+            if (w < Math.min(ax1 - ax0, bx1 - bx0) * 0.5 || w < Math.min(ah, B.height) * 2 || h < Math.min(ah, B.height) * 0.5) continue;
+            over.add(order[i]); over.add(order[j]);
+          }
+        }
+        for (const p of over) hit.set(p.item.fontName, (hit.get(p.item.fontName) || 0) + 1);
+        // The layer, not what it lies on: most of its own items overlap, and
+        // it is the smaller face of the page.
+        const most = Math.max(...all.values());
+        const layer = new Set([...hit].filter(([f, n]) => n >= 4 && n >= all.get(f) * 0.5 && all.get(f) < most).map(([f]) => f));
+        if (layer.size) {
+          const out = new Set(items.filter((p) => layer.has(p.item.fontName)).map((p) => p.div));
+          for (const d of out) { skip.add(d); blockWhy.set(d, "clipped-layer"); if (globalThis.__fxDebug) d.dataset.fxWhy = "clipped-layer"; }
+          items = items.filter((p) => !out.has(p.div));
+        }
+      }
+    }
     const lines = this.#lineGroups(items);
     const leadIn = new Map(); // div -> characters of a run-in lead that opens it (no emphasis there)
     if (!lines.length) return { skip, protect, why: blockWhy, leadIn };
+    // Two pieces of furniture that read as prose wherever they stand, told by
+    // their wording alone (a private paper each, on a later page of the
+    // document: a second title page, the foot of the last column):
+    // - an AUTHOR LINE set a name an item, each after the first opening on
+    //   its comma (the affiliation marks between them are items of their own);
+    // - a journal's HISTORY line, "Received <date>; revised …; accepted …".
+    for (const ln of lines) {
+      const mark = (p, why) => { skip.add(p.div); blockWhy.set(p.div, why); if (globalThis.__fxDebug) p.div.dataset.fxWhy = why; };
+      const NAME = /^[A-ZÀ-Ý][\p{L}'’.-]*(?:\s+[A-ZÀ-Ý][\p{L}'’.-]*){1,3}$/u;
+      const names = ln.items.filter((p) => /^,\s*(?:and\s+)?/.test(p.item.str.trim()) && NAME.test(p.item.str.trim().replace(/^,\s*(?:and\s+)?/, "")));
+      if (names.length >= 3) {
+        for (const p of names) mark(p, "author-line");
+        const first = ln.items.filter((p) => p.item.str.trim()).sort((a, b) => a.item.transform[4] - b.item.transform[4])[0];
+        if (first && NAME.test(first.item.str.trim())) mark(first, "author-line");
+      }
+      // ...and the block's e-mail lines: an item that is addresses and nothing else.
+      for (const p of ln.items) {
+        const t = p.item.str.trim();
+        if (/@/.test(t) && /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/.test(t) && !/[A-Za-zÀ-ɏ]{2}/.test(t.replace(/[{(]?[\w.+,\s|-]*[})]?@[\w-]+(?:\.[\w-]+)+/g, "").replace(/\band\b/g, ""))) mark(p, "author-line");
+      }
+      for (const p of ln.items) {
+        const t = p.item.str.trim();
+        if (/^Received\s+(?:\d{1,2}\s+[A-Z][a-z]+|[A-Z][a-z]+\s+\d{1,2},?)\s+\d{4}\s*[;,.]/.test(t) && /\b(?:revised|accepted)\b/i.test(ln.items.map((q) => q.item.str).join(" "))) {
+          // (its own run: the other column's line shares the baseline)
+          let right = p.item.transform[4];
+          for (const q of ln.items.filter((q) => q.item.transform[4] >= p.item.transform[4]).sort((a, b) => a.item.transform[4] - b.item.transform[4])) {
+            if (q.item.transform[4] - right > (p.item.height || 8) * 2) break;
+            mark(q, "history-line");
+            right = Math.max(right, q.item.transform[4] + (q.item.width ?? 0));
+          }
+          break;
+        }
+      }
+    }
 
     const centerX = vx0 + pageW * 0.5;
     const LOWER_WORD = /^[a-zà-ÿ]{2,}$/;
@@ -3355,7 +3428,9 @@ export class TypographyEngine {
         // The title ends in a period or colon, attached to letters or as a standalone punctuation item.
         const isTerminator =
           (/[.:]$/.test(t) && /[A-Za-zÀ-ɏ]/.test(t)) ||
-          ((t === ":" || t === ".") && j > 0 && /[A-Za-zÀ-ɏ]/.test(band[j - 1].item.str.trim()));
+          ((t === ":" || t === ".") && j > 0 && /[A-Za-zÀ-ɏ]/.test(band[j - 1].item.str.trim())) ||
+          // (...or after the title's last SYMBOL, a math letter, when its lead closed on a colon too: "1) <Title>: <K> & <K>" + ":")
+          (t === ":" && j > 1 && /\p{L}/u.test(band[j - 1].item.str) && /:$/.test(band[0].item.str.trim()));
         // An abbreviation inside the title ends in a period without ending the
         // title — "Comparison with Dr. Smith's protocol." must not be cut at
         // "Dr.". This scan runs BEFORE the anchored one and returns first, so
@@ -3371,7 +3446,12 @@ export class TypographyEngine {
         // ...or the face changes after it: an italic run-in title and its
         // roman body ("c) Remote Attacker without Device Access: Our anal-")
         // need no count of the body's words, which a hyphenated line cuts short.
-        const faceChange = resumesBody(tail[0], band[j]);
+        // (A colon set as an item of its own after the title's symbols is in
+        // the body's face already — "1) <Title>: <symbol> & <symbol>" + ":" +
+        // <two words of the sentence>: the face that changes is the title's last word's.)
+        const titleEnd = t === ":" || t === "." ? band.slice(0, j).reverse().find((p) => /\p{L}/u.test(p.item.str)) ?? band[j] : band[j];
+        const after = titleEnd === band[j] ? tail[0] : tail.filter((p) => p.item.transform[4] > band[j].item.transform[4] && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str)).sort((p, q) => p.item.transform[4] - q.item.transform[4])[0] ?? tail[0];
+        const faceChange = resumesBody(after, titleEnd);
         if (lowerWords(tail) >= 2 || REF_PROSE.test(tailText) || faceChange) return band.slice(0, j + 1);
       }
       return null;
@@ -3828,7 +3908,11 @@ export class TypographyEngine {
           const nx = its.slice(a + 1).find((p) => p.item.str.trim());
           return !!nx && !isBold(nx) && /^[a-zà-ÿ]{3,}\s/.test(nx.item.str.trim()) && lowerWords(band) >= 3;
         })();
-        if (isAlgoLead(leadStr) && !algoSentence) {
+        // (Nor a sentence that OPENS on the reference at a line's start, in the
+        // body's face and one item with its words — "Algorithm N. <Four words of
+        // the sentence>" — under a full line of its paragraph: a private paper's proof.)
+        const algoInText = contAbove && !isBold(lead) && /^Algorithm\s+\d+[.,]?\s+[A-Za-zà-ÿ]+\s+[a-zà-ÿ]+\s+[a-zà-ÿ]+/.test(leadStr);
+        if (isAlgoLead(leadStr) && !algoSentence && !algoInText) {
           // Pseudocode line ("10: while learning not terminate do"): the whole
           // line is a listing, even though its regular-font operands read as
           // prose between bold keywords.
@@ -4065,6 +4149,9 @@ export class TypographyEngine {
                    // "key=N" tag and a bracketed label after it is words, not a
                    // formula — a private paper's list of cases.)
                    (band.map((p) => p.item.str).join(" ").match(/(?:^|[\s(\[])[A-Z][a-z]{3,}(?=[\s,.;:)(\]]|$)/g) || []).length < 2 &&
+                   // (Nor a sentence's list of quantities set an item each,
+                   // "<n><unit>, <n><unit>, …": its only marks are the commas.)
+                   !band.every((p) => /^\d[\d.,]*\s?[A-Za-zµ%]{0,6}[,;.]?$/.test(p.item.str.trim())) &&
                    (() => { const t = band.map((p) => p.item.str).join("").replace(/\s/g, ""); return t.length >= 8 && ((t.match(/[^A-Za-z0-9À-ɏ]/g) || []).length / t.length) >= 0.15; })()) {
           // Displayed formula in a body-sized TEXT face ("(regReq/authReq) ·
           // (¬(deregReq/deregAcpt))* · (authRsp/SMCmd)"): no font/size signal,
@@ -4146,7 +4233,11 @@ export class TypographyEngine {
           // (A lead holds no comma and does not close on a lone letter's
           // period: "<Three words>, i" + "." is the "i." of an abbreviation
           // set a letter an item, three plain words of a paragraph kept.)
-          if (closed && (/,/.test(runDivs.map((p) => p.item.str).join(" ")) || /(?:^|[\s,])[a-z]\s*\.?\s*$/.test(runDivs.map((p) => p.item.str).join(" ").trim().replace(/\s*\.$/, "")))) closed = false;          if (closed && runDivs.length && runDivs.at(-1) !== band.at(-1) && !contAbove) {
+          if (closed && (/,/.test(runDivs.map((p) => p.item.str).join(" ")) || /(?:^|[\s,])[a-z]\s*\.?\s*$/.test(runDivs.map((p) => p.item.str).join(" ").trim().replace(/\s*\.$/, "")))) closed = false;
+          // (More PROSE: a proof's short last sentence before its end mark,
+          // "<Two words> (N). □", is followed by no word.)
+          const proseAfter = runDivs.length > 0 && band.some((p) => p.item.transform[4] > runDivs.at(-1).item.transform[4] && /[A-Za-zÀ-ɏ]{2}/.test(p.item.str));
+          if (closed && runDivs.length && runDivs.at(-1) !== band.at(-1) && proseAfter && !contAbove) {
             for (const p of runDivs) { skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-short"); }
           }          // The same lead in ONE text item with its sentence ("<Short Phrase>.
           // To further …", a single item): the span is processed whole, so
@@ -4415,6 +4506,44 @@ export class TypographyEngine {
         }
         if (!above || !above.every((q) => skip.has(q.div))) continue;
         for (const p of its) { skip.add(p.div); dbg(p.div, "table-region"); }
+      }
+    }
+
+    // A row BETWEEN two rows of a table, one of its cells starting where a
+    // cell of each starts — a column of the table that is not its first: the
+    // table's row, however its cells read. One row of a list of symbols had
+    // words and symbols in both cells ("<name> <word> <symbol>" | "<Three
+    // words> <symbol> and <symbol>"), passed every cell test and was
+    // emphasised between rows kept above and below (a private paper). A
+    // paragraph's line starts at the margin, where a table's first column
+    // does; nothing but a row starts at an inner column on both sides.
+    {
+      const TABLE_WHY = /^(?:table-|line-cells|blk-table)/;
+      const rowOf = (L) => L.items.filter((q) => skip.has(q.div) && TABLE_WHY.test(blockWhy.get(q.div) || "")).sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+      const byY = lines.slice().sort((a, b) => b.y - a.y); // top first
+      for (let i = 1; i + 1 < byY.length; i++) {
+        const ln = byY[i];
+        for (const p of ln.items) {
+          if (skip.has(p.div) || !/[A-Za-zÀ-ɏ]{2}/.test(p.item.str)) continue;
+          const x = p.item.transform[4], h = p.item.height || 8;
+          const near = (step) => {
+            for (let k = i + step, n = 0; k >= 0 && k < byY.length && n < 3; k += step, n++) {
+              if (Math.abs(byY[k].y - ln.y) > h * 1.7) return null;
+              const row = rowOf(byY[k]);
+              if (row.length < 2) continue; // a row of scripts between two rows
+              return row.findIndex((q) => Math.abs(q.item.transform[4] - x) <= 1.5) > 0 ? row : null;
+            }
+            return null;
+          };
+          const A = near(-1), B = A && near(1);
+          if (!A || !B) continue;
+          const x0 = Math.min(A[0].item.transform[4], B[0].item.transform[4]) - h;
+          const x1 = Math.max(...[...A, ...B].map((q) => q.item.transform[4] + (q.item.width ?? 0))) + h;
+          for (const q of ln.items) {
+            // (reaching into the rows' extent: a centred first cell wider than its neighbours' starts left of them)
+            if (!skip.has(q.div) && q.item.transform[4] + (q.item.width ?? 0) > x0 + h && q.item.transform[4] <= x1) { skip.add(q.div); dbg(q.div, "table-region"); }
+          }
+        }
       }
     }
 
@@ -4873,6 +5002,30 @@ export class TypographyEngine {
       // same size is the same note.
       for (const [ln, hh] of noted) {
         for (const p of ln.items) if (p.item?.transform && p.item.str.trim() && !skip.has(p.div) && (p.item.height || 0) <= hh * 1.05) { skip.add(p.div); dbg(p.div, "caption"); }
+      }
+    }
+    // An italic LABEL inside its paragraph — "… <word>. <Two words>: <word> …" —
+    // where a sibling label that happens to open a line was kept as an
+    // italic run-in: the same label, kept the same. Two of three in one
+    // closing paragraph were emphasised beside the third (a private paper).
+    // Only beside such a sibling, after a sentence's end and before upright
+    // text: an italic phrase before a colon is otherwise a sentence's words.
+    {
+      const LABEL = /^[A-ZÀ-Ý][A-Za-zÀ-ɏ-]*(?:\s+[A-Za-zÀ-ɏ-]+){0,3}:$/;
+      const sibling = lines.some((ln) => ln.items.some((p) => blockWhy.get(p.div) === "runin-ital" && LABEL.test(p.item.str.trim())));
+      if (sibling) {
+        for (const ln of lines) {
+          const row = ln.items.filter((p) => p.item.str.trim()).sort((a, b) => a.item.transform[4] - b.item.transform[4]);
+          for (let k = 1; k + 1 < row.length; k++) {
+            const p = row[k];
+            if (skip.has(p.div) || !isItalic(p) || !LABEL.test(p.item.str.trim())) continue;
+            const prev = row[k - 1], next = row[k + 1], h = p.item.height || 8;
+            if (!/[.!?]["”’)]?$/.test(prev.item.str.trim()) || isItalic(next)) continue;
+            if (p.item.transform[4] - (prev.item.transform[4] + (prev.item.width ?? 0)) > h * 1.5) continue;
+            if (next.item.transform[4] - (p.item.transform[4] + (p.item.width ?? 0)) > h * 1.5) continue;
+            skip.add(p.div); protect.add(p.div); dbg(p.div, "runin-ital");
+          }
+        }
       }
     }
     const TAIL_RELEASE = new Set(["row-eqn", "blk-eqn", "blk-figlabel", "table-aligned", "line-formula", "line-cells", "line-cells-wide", "table-region", "blk-heading", "fig-body"]);
@@ -7557,11 +7710,39 @@ export class TypographyEngine {
             .filter((r) => r.right - r.left >= (r.bottom - r.top) * 4 && r.right - r.left > RULE_MIN_WIDTH * zoom)
             .sort((a, b) => a.top - b.top);
           const vRules = canvasRules.filter((r) => r.bottom - r.top >= (r.right - r.left) * 4);
+          // An UNDERLINE is no table rule. It runs through the foot of the
+          // text it underlines — between the baseline and the descenders'
+          // depth of a span's box — and that text covers it end to end; a
+          // table's rule stands clear of the row above it and runs past its
+          // cells. Three underlined terms on neighbouring lines of one
+          // paragraph chained into a "table", and the words between them
+          // were kept (a private paper).
+          let textRects = null;
+          const underlineMemo = new Map();
+          const isUnderline = (R) => {
+            if (underlineMemo.has(R)) return underlineMemo.get(R);
+            textRects ??= allPairs.filter((q) => /\S/.test(q.div.textContent)).map((q) => q.div.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0);
+            const ry = (R.top + R.bottom) / 2;
+            const segs = [];
+            for (const r of textRects) {
+              if (!(ry > r.bottom - r.height * 0.4 && ry < r.bottom + r.height * 0.1)) continue;
+              const l = Math.max(r.left, R.left), rt = Math.min(r.right, R.right);
+              if (rt > l) segs.push([l, rt]);
+            }
+            segs.sort((m, n) => m[0] - n[0]);
+            let cover = 0, at = R.left;
+            for (const [l, rt] of segs) { if (rt > at) { cover += rt - Math.max(l, at); at = rt; } }
+            const yes = cover >= (R.right - R.left) * 0.85;
+            underlineMemo.set(R, yes);
+            return yes;
+          };
           const rulePairs = [];
           for (let a = 0; a < hRules.length; a++) {
+            if (isUnderline(hRules[a])) continue;
             for (let b = a + 1; b < hRules.length; b++) {
               const A = hRules[a];
               const B = hRules[b];
+              if (isUnderline(B)) continue;
               if (B.top - A.bottom <= RULE_SAME_GAP * zoom) continue; // same visual rule
               if (B.top - A.bottom > pageHcss * 0.15) break;
               const lo = Math.max(A.left, B.left);
@@ -7814,12 +7995,43 @@ export class TypographyEngine {
               return v.left - l >= pageW * 0.3 || r - v.right >= pageW * 0.3;
             };
             const cellBorders = borders.filter((v) => !columnRule(v));
+            const proven = new Set(); // borders with a row's text on both sides
+            const open = [], rowsDone = [];
+            let tx0 = Infinity, tx1 = -Infinity; // the rows' extent
             for (const ln of lines) {
               const { group } = ln;
-              const cell = cellBorders.some((v) => sides(v, ln));
-              if (!cell) continue;
+              const by = cellBorders.filter((v) => sides(v, ln));
+              if (!by.length) { open.push(ln); continue; }
+              for (const v of by) proven.add(v);
+              rowsDone.push(ln);
+              for (const g of group) { tx0 = Math.min(tx0, g.r.left); tx1 = Math.max(tx1, g.r.right); }
               for (const g of group) zoneDrops.add(g.pr.div);
               if (globalThis.__fxDebug) for (const g of group) g.pr.div.dataset.fxWhy ||= "cell-border";
+            }
+            // A cell's WRAPPED line has candidate text on one side of the
+            // border only (the next cell's second line is a version number,
+            // or empty): beside a border that IS one — a row elsewhere has
+            // text on both its sides — text tight against either side is a
+            // cell's. The second lines of two wordy cells were emphasised
+            // between their rows (a private paper).
+            for (const ln of proven.size ? open : []) {
+              const { group, gy0, gy1, lineH } = ln;
+              // The borders standing beside this line, none of them through a span.
+              const by = [...proven].filter((v) =>
+                v.top <= gy0 + lineH * 0.2 && v.bottom >= gy1 - lineH * 0.2 &&
+                !group.some((g) => g.r.left < v.left - 1 && g.r.right > v.right + 1));
+              if (!by.length) continue;
+              const bl = Math.min(...by.map((v) => v.left)), br = Math.max(...by.map((v) => v.right));
+              for (const g of group) {
+                if (g.r.left < tx0 - lineH || g.r.right > tx1 + lineH) continue; // the other column's line
+                // ...tight against one, or between two (a cell's short last line).
+                const tight = by.some((v) => (g.r.right <= v.left + 1 && v.left - g.r.right <= lineH) || (g.r.left >= v.right - 1 && g.r.left - v.right <= lineH));
+                // ...or starting where a cell of the row right above or below starts.
+                const wraps = !tight && rowsDone.some((P) => Math.abs(P.gy0 - gy0) <= lineH * 1.7 && P.group.some((q) => Math.abs(q.r.left - g.r.left) <= 1.5 * zoom));
+                if (!tight && !wraps && !(by.length >= 2 && g.r.left >= bl && g.r.right <= br)) continue;
+                zoneDrops.add(g.pr.div);
+                if (globalThis.__fxDebug) g.pr.div.dataset.fxWhy ||= "cell-border";
+              }
             }
           }
         } catch {

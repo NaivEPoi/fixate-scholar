@@ -8816,11 +8816,10 @@ Older behaviour (identical at v1.4.8), fixed on request:
 - a bundled face squeezed to its line keeps a word gap of 0.205 em (the
   one failing combination of the font matrix).
 
-Still as at v1.4.8: a page whose embedded figure carries a hidden text
-layer of its own; one table row whose two cells both mix words and
-symbols; four single spans (a cell fragment after a coloured lead, a line
-of numbers with units, a history line, a name in an author block on a
-later page).
+Left as at v1.4.8 by the first read, and fixed afterwards (below): a page
+whose embedded figure carries a hidden text layer of its own; one table
+row whose two cells both mix words and symbols; a line of numbers with
+units, a history line, a name in an author block on a later page.
 
 The second read. The 117 pages that changed since the first read (74
 private, 43 public) were captured and read again. Six lines were worse
@@ -8843,6 +8842,45 @@ identical at v1.4.8 (a cell's second lines in two tables, italic labels in
 a table, a sentence opening on "Table N" or "Algorithm N"), footnotes kept
 by design, or undecidable from the page (a table note that is a sentence,
 a plain lead before a colon).
+
+The known issues. Everything the two reads had left as "identical at
+v1.4.8" was then fixed, each rule checked on its page by a dump and the
+changed pages (19 private, 7 public) captured and read:
+- **A clipped page's text.** A figure that is a cropped page of another
+  document keeps that page's text in the text layer, clipped away on the
+  canvas, lying across the body's lines and into the margins. A face whose
+  wordy items mostly overlap another face's is that layer: kept
+  (`clipped-layer`) and left out of the geometry. The column beside the
+  figure is body again and the page's footnotes are all kept.
+- **A row between a table's rows** with a cell starting at an inner column
+  of the rows above and below is the table's, however its cells read.
+- **A cell's wrapped line in a ruled table** has candidate text on one
+  side of the border only: beside a border proven by another row, text
+  tight against it, between two borders, or starting where a cell of the
+  neighbouring row starts is a cell's.
+- **Underlines are no table rules.** A rule through the foot of the text
+  that covers it end to end is left out of the rule chains; three
+  underlined terms in one paragraph had made a zone of the words between.
+- **Inline italic labels** ("… <word>. <Two words>: <word> …") are kept where a
+  sibling label opening a line was kept as an italic run-in.
+- **A run-in title that ends on symbols**, its colon an item of its own,
+  is cut there: the sentence after it and its second line are body.
+- A proof's short last sentence before its end mark is no run-in lead; a
+  sentence opening on "Algorithm N." under a full line is no listing line;
+  a sentence's list of quantities set an item each is no formula.
+- Furniture told by its wording: an author line set a name an item
+  (`author-line`, with the block's e-mail lines), and a journal's
+  "Received …; revised …; accepted …" line (`history-line`).
+
+Not changed, and why: a table note that is a full sentence at the body's
+size and a plain-face lead before a period are undecidable from the page
+(two public pages); footnotes stay kept by design.
+
+Seen once and not reproduced: in one plain run a figure's labels on one
+private page were processed instead of kept as `vector-art` (six spans);
+three dumps of the page and a run of the document alone on the same
+engine keep them, as every earlier run did. The art comes from the page's
+baseline render, which a pass waits 15 s for; recorded, nothing changed.
 
 The lanes on the final engine, both corpora, two browsers at a time:
 
@@ -8877,3 +8915,6 @@ canvas on top and leaves points out of view unread (557 points read at
 300%, 1612 at 200%, all clear). Still as at v1.4.8, and not fixed: out of
 view at 300% a bar whose edge falls on a row boundary of the capped canvas
 has its ink one row past the cut, until the detail canvas is drawn there.
+Widening every cut by a row of the capped canvas would show more of the
+canvas's glyphs along each bar in view, to fix what is only seen for the
+moment a scroll outruns the detail canvas.
